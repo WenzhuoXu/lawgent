@@ -1,0 +1,32 @@
+Legal AI Harness — NOTICE
+=========================
+
+NOT LEGAL ADVICE
+----------------
+This software assists with legal workflows. It does not practice law, it is
+not a lawyer, and its output is not legal advice. Every output must be
+reviewed by qualified counsel before being relied on for advice, filings,
+negotiations, or operations. The citation-verification stack reduces — but
+does not eliminate — the risk of fabricated or unsupported authority.
+
+Primary sources
+---------------
+The harness retrieves statutes, regulations, and judgments from third-party
+and government databases (PKULaw, 国家法律法规数据库, eCFR, Federal Register,
+GovInfo, CourtListener, EUR-Lex, EASA, CAAC, ECAA, and others). Those sources
+carry their own terms of use, rate limits, and licensing. Using a connector
+means accepting the terms of the source it calls; check them before
+redistributing retrieved text.
+
+Corpus binaries
+---------------
+No corpus documents are distributed with this repository. The RAG corpus
+manifests under legal_helper/rag/corpus/*/manifest.yaml describe documents
+that are fetched on demand from their publishers. ICAO documents, CAAC
+attachments, and treaty texts remain the copyright of their respective
+publishers.
+
+Attribution
+-----------
+The provenance-tag taxonomy in legal_helper/citations/provenance.py is
+adapted, with attribution, from anthropics/claude-for-legal.
