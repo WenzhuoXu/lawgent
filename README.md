@@ -18,6 +18,14 @@ memo, redline, workbook, or deck.
 
 </div>
 
+> [!NOTE]
+> **A little side project.** I built this for my girlfriend, a practising lawyer, to take
+> the grind out of the research-and-citation part of the job. It is open-sourced in case it
+> is useful to anyone else in the same position — a solo practitioner, an in-house team of
+> one, or anyone who has to be right about the law in more than one country. It is a
+> personal project, not a product: expect rough edges, and read the
+> [known gaps](#status-and-known-gaps) before you rely on it.
+
 > [!IMPORTANT]
 > **Not legal advice.** This harness assists with legal workflows. Every output must be
 > reviewed by qualified counsel before it is relied on for advice, filings, negotiations,
