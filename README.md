@@ -1,8 +1,8 @@
 <div align="center">
 
-# ⚖️ Legal AI Harness
+# ⚖️ Lawgent
 
-**A grounded, multi-jurisdiction agent harness for legal work — not a chat wrapper.**
+**An open-source legal AI agent — grounded, multi-jurisdiction, citation-verified.**
 
 Plans the matter, fans out specialist sub-agents, pulls primary law from official sources,
 round-trips every quotation against the document it came from, and returns a filed-ready
@@ -451,6 +451,9 @@ in `legal_helper/connectors/`, not MCP servers — nothing to install for them.
 
 ## Repository layout
 
+The project is **Lawgent**; the Python package it ships is still `legal_helper` (the name it
+was born with), so every import, CLI invocation, and env var below reads `legal_helper`.
+
 ```
 legal_helper/
 ├── agent.py            # orchestrator + skill sub-agents
@@ -573,7 +576,7 @@ judgement — open an issue and I will add it.
 
 <div align="center">
 
-**Legal AI Harness** · MIT licensed · Built for practitioners who have to be right.
+**Lawgent** · MIT licensed · Built for practitioners who have to be right.
 
 *Not legal advice. Have qualified counsel review every output before relying on it.*
 

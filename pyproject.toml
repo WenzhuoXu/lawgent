@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "legal-helper"
 version = "0.1.0"
-description = "Legal AI Harness — grounded multi-jurisdiction legal agent (Claude + GPT, sub-agent runtime)"
+description = "Lawgent — open-source legal AI agent: grounded, multi-jurisdiction, citation-verified (Claude + GPT)"
 requires-python = ">=3.10"
-authors = [{ name = "Legal AI Harness contributors" }]
+authors = [{ name = "Lawgent contributors" }]
 license = { text = "MIT" }
 dependencies = [
     "anthropic>=0.101",
