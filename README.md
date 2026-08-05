@@ -38,6 +38,7 @@ memo, redline, workbook, or deck.
 ## Table of contents
 
 - [What it is](#what-it-is)
+- [What it looks like](#what-it-looks-like)
 - [Architecture](#architecture)
 - [Quickstart](#quickstart)
 - [Multi-nation: one harness, many legal systems](#multi-nation-one-harness-many-legal-systems)
@@ -81,6 +82,39 @@ Around those commitments sit a planner that sizes the work to the question, a su
 runtime that keeps each specialist's context clean, durable project memory for matters
 that outlive a single chat, a document layer that writes real DOCX tracked changes and
 native PPTX shapes, and a per-turn cost ledger.
+
+---
+
+## What it looks like
+
+Real runs against live sources, captured from the web UI. (In-product branding is
+**法务助手 / Legal Helper** — Lawgent is the project name.)
+
+**The answer.** A comparative CN/US question. The chip above the answer reports the run:
+elapsed time, number of specialist tasks, tool calls, and distinct sources. Note what the
+comparison table does in the CAAC column — it says *pinpoint unavailable* instead of
+inventing an article number, because no official CCAR-121 text made it into the record.
+
+![Answer with run summary and comparison table](docs/screenshots/answer.png)
+
+**Tool use, live.** While the run works, every connector call appears as its own card with
+running / completed / error state — eCFR, GovInfo, PKULaw, the local corpus, hosted web
+search. Nothing about the retrieval is hidden from the reviewer.
+
+![Live tool trajectory](docs/screenshots/tool-use.png)
+
+**Sources with pinpoints.** Each authority carries its pinpoint (`14 CFR §§ 212.2, 212.9(a)`,
+`49 U.S.C. §§ 44709(a)–(c)`) and a note on what it is and is not good for. Entry [10] is the
+one that matters: the harness would rather publish *pinpoint unavailable* than a plausible
+citation it could not verify.
+
+![Sources rail with pinpoint citations](docs/screenshots/sources.png)
+
+**Settings and the cost ledger.** Switch provider, model, and reasoning effort mid-matter;
+the month-to-date token and cost ledger is broken out per model, priced with each provider's
+own cache-billing semantics.
+
+![Settings dialog with usage and cost](docs/screenshots/settings-cost.png)
 
 ---
 
