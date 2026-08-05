@@ -1,0 +1,7 @@
+name: general
+description: Generic legal seed corpus — playbook, sample documents, treaty texts.
+sources:
+  - path: legal_helper/playbook
+    glob: ["*.md"]
+  - path: examples/general
+    glob: ["*.md"]

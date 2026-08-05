@@ -1,0 +1,68 @@
+# Generic commercial contract screen. Column discipline:
+# references/methodology.md §2; pair every column with an X — 依据 cell.
+name: generic_contract
+display_name: "Commercial contract screen / 商事合同批量筛查"
+applies_to: [services, sale, supply, license, distribution, JV, lease, settlement]
+columns:
+  - id: parties
+    header_en: "Parties & roles"
+    header_zh: "当事人及其地位"
+    type: extract
+    question: "Full legal names of all parties and each party's role."
+  - id: effective_term
+    header_en: "Effective date & term"
+    header_zh: "生效日期与期限"
+    type: extract
+    question: "Effective date (YYYY-MM-DD) and initial term in months; note auto-renewal."
+  - id: governing_law
+    header_en: "Governing law"
+    header_zh: "适用法律"
+    type: extract
+    question: "Governing law and, if bilingual, which language version controls."
+  - id: dispute_resolution
+    header_en: "Dispute resolution"
+    header_zh: "争议解决"
+    type: classify
+    question: "Dispute-resolution mechanism and seat/forum."
+    enum: [litigation, arbitration, tiered, silent]
+  - id: payment_terms
+    header_en: "Payment terms"
+    header_zh: "付款条款"
+    type: extract
+    question: "Price/fee basis, currency, and payment deadline in days."
+  - id: liability_cap
+    header_en: "Liability cap"
+    header_zh: "责任限额"
+    type: extract
+    question: "Limitation-of-liability cap (amount or formula) and carve-outs."
+  - id: uncapped_indemnity
+    header_en: "Uncapped indemnity?"
+    header_zh: "是否存在无上限赔偿"
+    type: flag
+    question: "Does any indemnity sit outside the liability cap? If YES, whose and for what."
+  - id: termination
+    header_en: "Termination rights"
+    header_zh: "解除权"
+    type: extract
+    question: "Termination-for-convenience and for-cause rights, with notice periods."
+  - id: assignment_coc
+    header_en: "Assignment / change of control"
+    header_zh: "转让与控制权变更"
+    type: classify
+    question: "Can the counterparty assign or survive a change of control without consent?"
+    enum: [consent_required, free_assignment, coc_trigger, silent]
+  - id: confidentiality_term
+    header_en: "Confidentiality term"
+    header_zh: "保密期限"
+    type: extract
+    question: "Confidentiality term during and after the agreement, in months."
+  - id: ip_ownership
+    header_en: "IP ownership"
+    header_zh: "知识产权归属"
+    type: extract
+    question: "Who owns foreground IP / work product; scope of any license back."
+  - id: data_protection
+    header_en: "Data protection?"
+    header_zh: "数据合规条款"
+    type: flag
+    question: "Does the contract process personal information without a compliance clause (e.g. 个人信息保护法 / GDPR annex)?"

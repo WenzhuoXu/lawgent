@@ -1,0 +1,145 @@
+name: license
+display_name: "License Agreement / 许可合同"
+applies_to: [license, technology license, trademark license, software license, 技术许可, 商标许可, 著作权许可]
+side_default: "licensor (许可方) — flip scope, warranties and audit for a licensee-side draft"
+clauses:
+  - id: license_grant
+    title_zh: "许可授予"
+    title_en: "Grant of License"
+    text_zh: |
+      许可方授予被许可方在【地域】内、【期限】内以【独占/排他/普通】
+      方式使用【许可标的：专利/商标/软件/技术秘密】用于【许可用途】的
+      许可。未明示授予的权利均由许可方保留；被许可方不得再许可或转让，
+      经许可方事先书面同意的除外。
+    text_en: |
+      The Licensor grants the Licensee an [exclusive / sole / non-
+      exclusive] licence to use the [licensed subject: patent / trademark
+      / software / technical secret] within [territory] during [term] for
+      [licensed purpose]. All rights not expressly granted are reserved;
+      no sublicensing or assignment without prior written consent.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第862条（技术许可合同的定义与范围）"
+    notes: "独占/排他/普通 must be stated expressly — the default construction of an unstated scope is 普通许可."
+  - id: royalties_audit
+    title_zh: "许可费与审计"
+    title_en: "Royalties and Audit"
+    text_zh: |
+      被许可方应按【固定费用/销售额【 】%提成】支付许可费，于每【季度】
+      结束后【三十(30)】日内支付并附销售报表。许可方每年可指定独立会计
+      师对与许可费相关的账簿进行一次审计；查实少付超过【5%】的，审计
+      费用由被许可方承担。
+    text_en: |
+      The Licensee shall pay [a fixed fee / a running royalty of [ ]% of
+      net sales] within [thirty (30)] days after each [quarter], with a
+      sales report. The Licensor may audit relevant books once a year
+      through an independent accountant; if underpayment exceeds [5%], the
+      Licensee bears the audit cost.
+    legal_basis: []
+  - id: improvements_ip
+    title_zh: "改进成果归属"
+    title_en: "Improvements"
+    text_zh: |
+      任何一方对许可技术作出的改进及其知识产权归改进方所有。被许可方
+      不得利用许可技术申请损害许可方权利的知识产权。双方不得约定限制
+      被许可方改进技术或使用改进成果的条款。
+    text_en: |
+      Improvements to the licensed technology belong to the party making
+      them. The Licensee shall not use the licensed technology to seek IP
+      rights prejudicing the Licensor. The parties shall not restrict the
+      Licensee from improving the technology or using its improvements.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第875条（改进成果分享约定）"
+      - source: "民法典"
+        pinpoint: "第850条（非法垄断技术、妨碍技术进步的技术合同条款无效）"
+    notes: "Grant-back clauses that appropriate licensee improvements risk invalidity under 第850条."
+  - id: warranties
+    title_zh: "权利保证"
+    title_en: "Warranties"
+    text_zh: |
+      许可方保证其为许可标的的合法权利人或有权授予本许可，许可标的在
+      签署日不存在已知的权利负担或第三方侵权主张。许可标的为专利的，
+      许可方应及时告知专利被宣告无效或终止的情形。
+    text_en: |
+      The Licensor warrants it is the lawful owner of, or entitled to
+      license, the licensed subject, and that as of signing there is no
+      known encumbrance or third-party infringement claim. For patents,
+      the Licensor shall promptly notify invalidation or lapse.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第870条（技术转让许可方的权利保证义务）"
+  - id: infringement_indemnity
+    title_zh: "侵权抗辩与赔偿"
+    title_en: "Third-Party Infringement; Indemnity"
+    text_zh: |
+      因被许可方按照本合同使用许可标的而受到第三方侵权指控的，许可方应
+      负责抗辩并承担由此产生的赔偿及合理费用；但因被许可方超出许可范围
+      使用或与第三方技术组合使用导致的除外。
+    text_en: |
+      The Licensor shall defend third-party infringement claims arising
+      from the Licensee's use of the licensed subject in accordance with
+      this Agreement and bear resulting damages and reasonable costs,
+      except claims caused by use beyond the licensed scope or in
+      combination with third-party technology.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第872条（许可方违反约定造成损失的违约责任）— re-verify pinpoint"
+    notes: "Licensee-side keeps this broad; licensor-side may cap it into limitation_liability."
+  - id: registration_filing
+    title_zh: "登记与备案"
+    title_en: "Registration and Recordal"
+    text_zh: |
+      本合同项下许可依法需要登记或备案的（包括商标使用许可备案、专利
+      实施许可合同备案、涉外技术进出口相关手续），由【许可方/被许可方】
+      负责办理，另一方应予配合；登记或备案不影响本合同在双方之间的效力。
+    text_en: |
+      Where recordal or registration is required by law (trademark licence
+      recordal, patent licence contract filing, cross-border technology
+      import/export formalities), the [Licensor / Licensee] shall handle
+      it with the other party's cooperation; absence of recordal does not
+      affect validity between the parties.
+    legal_basis:
+      - source: "商标法"
+        pinpoint: "第43条（商标使用许可报商标局备案，未经备案不得对抗善意第三人）"
+      - source: "专利法"
+        pinpoint: "第10条（转让专利申请权、专利权应当订立书面合同并登记）"
+      - source: "技术进出口管理条例"
+        pinpoint: "第17条（限制类技术进口许可）— catalogue check; re-verify pinpoint"
+    notes: "Cross-border licences: check the restricted/prohibited technology catalogues before drafting the grant."
+  - id: terms_termination
+    title_zh: "期限与终止"
+    title_en: "Term and Termination"
+    text_zh: |
+      许可期限【 】年，不超过许可标的的法定保护期。被许可方逾期支付
+      许可费经催告后【三十(30)】日内仍未支付，或超出许可范围使用的，
+      许可方可解除本合同。合同终止后被许可方应立即停止使用许可标的，
+      已按约支付的许可费不予退还。
+    text_en: |
+      The licence term is [ ] years, not exceeding the statutory
+      protection period of the licensed subject. The Licensor may
+      terminate if royalties remain unpaid [thirty (30)] days after
+      demand, or on use beyond the licensed scope. On termination the
+      Licensee shall cease use immediately; royalties duly paid are
+      non-refundable.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第563条（法定解除情形）"
+  - id: governing_law_dispute
+    title_zh: "适用法律与争议解决"
+    title_en: "Governing Law and Dispute Resolution"
+    text_zh: |
+      本合同适用中华人民共和国法律。争议协商不成的，提交【仲裁委员会
+      名称】在【仲裁地】仲裁解决。涉及许可标的效力的行政程序（如专利
+      无效宣告）不影响仲裁程序就合同争议的管辖。
+    text_en: |
+      This Agreement is governed by PRC law. Disputes not resolved by
+      consultation shall be arbitrated at [arbitration commission] in
+      [seat]. Administrative proceedings on the validity of the licensed
+      subject (e.g. patent invalidation) do not displace the tribunal's
+      jurisdiction over contract disputes.
+    legal_basis:
+      - source: "仲裁法"
+        pinpoint: "第16条（仲裁协议应载明的事项）"
+      - source: "涉外民事关系法律适用法"
+        pinpoint: "第41条（涉外合同的法律选择）"

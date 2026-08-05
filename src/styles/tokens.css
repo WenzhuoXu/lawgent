@@ -1,0 +1,181 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Legal Helper — "Counsel" design tokens.
+ * Two themes only: paper (light, :root) and ink (dark, .dark).
+ * Warm neutrals, single terracotta accent; semantic green/amber/red reserved
+ * for citation-audit verdicts + run states. Values are shadcn/ui variables so
+ * Vercel AI Elements reads them directly. WCAG 2.2 AA on all text pairs.
+ */
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --radius: 0.75rem;
+
+  /* ---- paper (light) ---- */
+  --background: #faf9f5;
+  --foreground: #141413;
+  --card: #ffffff;
+  --card-foreground: #141413;
+  --popover: #ffffff;
+  --popover-foreground: #141413;
+
+  --primary: #c96442;
+  --primary-foreground: #ffffff;
+  --secondary: #f1ece3;
+  --secondary-foreground: #3d3d3a;
+  --muted: #f1ece3;
+  --muted-foreground: #6c6a64;
+  --accent: #ede5d8;
+  --accent-foreground: #3d3d3a;
+  --destructive: #b13a3a;
+  --destructive-foreground: #ffffff;
+
+  --border: #e6dfd8;
+  --input: #e6dfd8;
+  --ring: #c96442;
+
+  /* app-specific surfaces / semantics (referenced by our components) */
+  --panel: #f5f0e8;
+  --tool-surface: #f1ece3;
+  --code-surface: #ece7dd;
+  --hairline-strong: #d3cabf;
+  --text-secondary: #3d3d3a;
+  --text-faint: #8f8c84;
+  --primary-hover: #b5583a;
+  --accent-tint: #f6e3da;
+  --ok: #3e7d52;
+  --ok-tint: #e4efe6;
+  --review: #9a7410;
+  --review-tint: #f7edd4;
+  --dnf: #b13a3a;
+  --dnf-tint: #f7e1e1;
+
+  --font-sans: Inter, ui-sans-serif, system-ui, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Noto Serif SC", "Songti SC", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, "Noto Sans Mono CJK SC", monospace;
+}
+
+.dark {
+  /* ---- ink (dark) ---- */
+  --background: #181715;
+  --foreground: #faf9f5;
+  --card: #1f1e1b;
+  --card-foreground: #faf9f5;
+  --popover: #252320;
+  --popover-foreground: #faf9f5;
+
+  --primary: #c96442;
+  --primary-foreground: #ffffff;
+  --secondary: #211f1c;
+  --secondary-foreground: #d6d3cc;
+  --muted: #211f1c;
+  --muted-foreground: #a09d96;
+  --accent: #2b2825;
+  --accent-foreground: #d6d3cc;
+  --destructive: #e06c6c;
+  --destructive-foreground: #181715;
+
+  --border: #34322c;
+  --input: #34322c;
+  --ring: #c96442;
+
+  --panel: #1f1e1b;
+  --tool-surface: #211f1c;
+  --code-surface: #141311;
+  --hairline-strong: #4a463e;
+  --text-secondary: #d6d3cc;
+  --text-faint: #7a776f;
+  --primary-hover: #da7756;
+  --accent-tint: #3a2a23;
+  --ok: #5db872;
+  --ok-tint: #22301f;
+  --review: #d4a017;
+  --review-tint: #332a14;
+  --dnf: #e06c6c;
+  --dnf-tint: #361d1d;
+}
+
+/* Persona accent override (F9). 修勾 (xiugou) is an opt-in playful voice; per the
+ * persona rule it may retint the ACCENT ONLY — never layout, semantics, or legal
+ * content. Shifts the terracotta primary/ring to the warmer persona accent
+ * (#d97757) in both themes; semantic ok/review/dnf are untouched. */
+:root[data-persona="xiugou"] {
+  --primary: #d97757;
+  --primary-hover: #c9663f;
+  --ring: #d97757;
+  --accent-tint: #f8e7de;
+}
+.dark[data-persona="xiugou"],
+:root[data-persona="xiugou"].dark {
+  --primary: #d97757;
+  --primary-hover: #e08a6a;
+  --ring: #d97757;
+  --accent-tint: #3d2b23;
+}
+
+/* Map our variables into the Tailwind v4 theme so utilities (bg-background,
+ * text-muted-foreground, border-border, font-serif, etc.) resolve. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-panel: var(--panel);
+  --color-tool-surface: var(--tool-surface);
+  --color-code-surface: var(--code-surface);
+  --color-ok: var(--ok);
+  --color-review: var(--review);
+  --color-dnf: var(--dnf);
+
+  /* Foreground tiers — use text-content-secondary / text-content-faint. These
+   * are TEXT colors; do NOT use `text-secondary` (that resolves to the
+   * secondary SURFACE color and is nearly invisible on panels). */
+  --color-content-secondary: var(--text-secondary);
+  --color-content-faint: var(--text-faint);
+
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--font-mono);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+  }
+  /* Dense CJK legal prose: strict line breaking, no mid-word Latin breaks. */
+  :lang(zh),
+  .prose-cjk {
+    line-break: strict;
+    word-break: normal;
+    overflow-wrap: anywhere;
+    text-autospace: normal;
+  }
+}

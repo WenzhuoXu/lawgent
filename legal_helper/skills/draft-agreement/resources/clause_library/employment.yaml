@@ -1,0 +1,145 @@
+name: employment
+display_name: "Employment Contract / 劳动合同"
+applies_to: [employment, labor contract, 劳动合同, 聘用合同]
+side_default: "employer (用人单位) — statutory mandatory terms bind regardless of side"
+clauses:
+  - id: mandatory_terms
+    title_zh: "必备条款（首部信息）"
+    title_en: "Mandatory Particulars"
+    text_zh: |
+      本合同载明：用人单位名称、住所和法定代表人；劳动者姓名、住址和
+      居民身份证号码；劳动合同期限；工作内容和工作地点；工作时间和休息
+      休假；劳动报酬；社会保险；劳动保护、劳动条件和职业危害防护。
+    text_en: |
+      This contract sets out: the employer's name, address and legal
+      representative; the employee's name, address and ID number; the
+      contract term; job duties and work location; working hours, rest and
+      leave; remuneration; social insurance; and labour protection,
+      conditions and occupational-hazard protection.
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第17条（劳动合同必备条款）"
+    notes: "Mandatory content — a draft missing any 第17条 item is a risk Finding, not a style choice. Written contract required within one month of employment (第10条)."
+  - id: terms_probation
+    title_zh: "合同期限与试用期"
+    title_en: "Term and Probation"
+    text_zh: |
+      本合同为【固定期限/无固定期限/以完成一定工作任务为期限】劳动合同，
+      期限自【 】年【 】月【 】日起至【 】年【 】月【 】日止。试用期
+      【 】个月，不超过法定上限；试用期工资不低于本合同约定工资的
+      百分之八十，且不低于用人单位所在地最低工资标准。
+    text_en: |
+      This is a [fixed-term / open-ended / task-based] contract from
+      [date] to [date]. The probation period is [ ] months, within the
+      statutory caps; probation pay is no less than 80% of the contract
+      wage and no less than the local minimum wage.
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第19条（试用期上限与单次约定）"
+      - source: "劳动合同法"
+        pinpoint: "第20条（试用期工资下限）"
+    notes: "Caps: term <1y→probation ≤1m; 1–3y→≤2m; ≥3y or open-ended→≤6m; task-based or term <3m→none. One probation per employer-employee pair."
+  - id: remuneration
+    title_zh: "劳动报酬"
+    title_en: "Remuneration"
+    text_zh: |
+      劳动者月工资为人民币【 】元（税前），用人单位于每月【 】日以货币
+      形式足额支付。加班工资、奖金及津补贴按依法制定并公示的规章制度
+      执行。
+    text_en: |
+      The monthly wage is RMB [ ] (gross), paid in full in currency on day
+      [ ] of each month. Overtime pay, bonuses and allowances follow the
+      employer's lawfully adopted and published internal rules.
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第30条（按约足额支付劳动报酬）"
+  - id: social_insurance
+    title_zh: "社会保险与住房公积金"
+    title_en: "Social Insurance and Housing Fund"
+    text_zh: |
+      双方依法参加社会保险并缴纳住房公积金，各自承担应由其负担的缴费
+      部分。任何以现金补贴替代缴纳的约定无效。
+    text_en: |
+      The parties shall participate in social insurance and the housing
+      fund as required by law, each bearing its statutory share. Any
+      agreement substituting cash allowances for contributions is invalid.
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第17条第(七)项（社会保险为必备条款）"
+    notes: "Opt-out waivers are void and expose the employer to 第38条 constructive-termination severance."
+  - id: confidentiality_noncompete
+    title_zh: "保密与竞业限制"
+    title_en: "Confidentiality and Non-Compete"
+    text_zh: |
+      劳动者应对用人单位商业秘密及知识产权相关保密事项保密。对负有保密
+      义务的劳动者，双方约定竞业限制期限【 】个月（不超过二年），范围
+      及地域以能够与用人单位形成实际竞争关系为限；竞业限制期内用人单位
+      按月支付经济补偿人民币【 】元，劳动者违反的应支付违约金人民币
+      【 】元。
+    text_en: |
+      The employee shall keep the employer's trade secrets and IP-related
+      confidential matters confidential. For employees under
+      confidentiality obligations, the non-compete period is [ ] months
+      (max two years), limited in scope and territory to actual
+      competition; the employer pays monthly compensation of RMB [ ]
+      during the restriction, and breach incurs liquidated damages of
+      RMB [ ].
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第23条（保密义务与竞业限制经济补偿、违约金）"
+      - source: "劳动合同法"
+        pinpoint: "第24条（竞业限制的人员范围、地域、期限不超过二年）"
+    notes: "违约金 is lawful ONLY here and for training service periods (第25条); monthly compensation omitted → restriction unenforceable in practice."
+  - id: training_service_period
+    title_zh: "培训与服务期"
+    title_en: "Training and Service Period"
+    text_zh: |
+      用人单位为劳动者提供专项培训费用进行专业技术培训的，双方可另行
+      约定服务期；劳动者违反服务期约定的，违约金不得超过培训费用，且
+      不得超过服务期尚未履行部分所应分摊的培训费用。
+    text_en: |
+      Where the employer funds special technical training, the parties may
+      agree a service period; liquidated damages for breach shall not
+      exceed the training cost, nor the portion attributable to the
+      unserved period.
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第22条（服务期与违约金上限）"
+  - id: terms_termination
+    title_zh: "解除与终止"
+    title_en: "Termination"
+    text_zh: |
+      劳动者有本合同附件所列《劳动合同法》第三十九条情形之一的，用人
+      单位可以立即解除本合同且无需支付经济补偿；有第四十条情形的，用人
+      单位提前三十日书面通知或额外支付一个月工资后可以解除。依法应支付
+      经济补偿的，按劳动者在本单位工作年限每满一年支付一个月工资的标准
+      计算。
+    text_en: |
+      The employer may terminate immediately without severance in the
+      Article 39 (fault) situations listed in the annex, and may terminate
+      in Article 40 (no-fault) situations with thirty days' written notice
+      or one month's wage in lieu. Statutory severance is one month's wage
+      per year of service with the employer.
+    legal_basis:
+      - source: "劳动合同法"
+        pinpoint: "第39条（过失性解除）、第40条（无过失性辞退）"
+      - source: "劳动合同法"
+        pinpoint: "第47条（经济补偿的计算标准）"
+    notes: "Do not draft contractual termination grounds beyond the statutory list — they are unenforceable against the employee."
+  - id: governing_law_dispute
+    title_zh: "争议解决"
+    title_en: "Dispute Resolution"
+    text_zh: |
+      本合同适用中华人民共和国法律。因履行本合同发生争议的，可以协商
+      或申请调解；不愿协商、调解或不成的，应先向劳动争议仲裁委员会申请
+      仲裁；对仲裁裁决不服的，除法律规定的终局裁决外，可以依法向人民
+      法院提起诉讼。
+    text_en: |
+      This contract is governed by PRC law. Disputes may be negotiated or
+      mediated; failing that, they must first go to the labour dispute
+      arbitration commission, with court action available thereafter
+      except for awards final by law.
+    legal_basis:
+      - source: "劳动争议调解仲裁法"
+        pinpoint: "第5条（劳动仲裁前置程序）"
+    notes: "Labour arbitration is a mandatory pre-step — never draft a court-first or commercial-arbitration clause here."

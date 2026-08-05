@@ -1,0 +1,39 @@
+# --- Secrets. Never commit. ---
+.env
+.env.*
+!.env.example
+legal_helper/api_key
+*.pem
+*.key
+
+# --- Local runtime state (chat history, sessions, vectors, usage ledger) ---
+logs/
+outputs/
+state/
+*.sqlite3
+
+# --- Build / dependency output ---
+node_modules/
+legal_helper/webui_dist/
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# --- Agent/editor local config ---
+.claude/
+.codex/
+.agents/
+.vscode/
+.idea/
+.DS_Store
+
+# RAG corpus binaries (large, fetched on-demand via scripts/fetch_aviation_corpus.sh).
+# manifest.yaml and README.md are still tracked.
+legal_helper/rag/corpus/*/en/
+legal_helper/rag/corpus/*/zh/
+legal_helper/rag/corpus/*/multi/
+legal_helper/rag/corpus/*/documents/
+legal_helper/rag/corpus/*/attachments/

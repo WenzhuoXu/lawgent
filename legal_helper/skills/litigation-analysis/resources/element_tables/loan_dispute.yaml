@@ -1,0 +1,77 @@
+# 民间借贷之诉 — private-lending element preset.
+# The 司法解释 pinpoints reference 法释〔2020〕17号 (second revision);
+# re-verify every pinpoint via pkulaw_fatiao before use (README rule).
+name: loan_dispute
+display_name: 民间借贷之诉 / Private lending dispute
+cause_of_action: 民间借贷纠纷
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第六百六十七条
+  - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+    pinpoint: 第一条
+elements:
+  - id: loan_agreement
+    element_zh: 双方存在借贷合意（借条、借款合同或往来记录）
+    element_en: A lending agreement existed (IOU, contract, or exchanges)
+    burden: claimant
+    evidence_hints: [借条/借款合同, 微信/短信磋商记录, 证人证言]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百六十八条
+  - id: funds_delivered
+    element_zh: 出借人已实际交付借款本金
+    element_en: The principal was actually delivered
+    burden: claimant
+    evidence_hints: [转账凭证, 银行流水, 现金交付的补强证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百七十九条
+      - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+        pinpoint: 第十六条
+  - id: repayment_due
+    element_zh: 还款期限届满或依法可主张返还，借款人未还
+    element_en: Repayment fell due (or is claimable) and was not made
+    burden: claimant
+    evidence_hints: [约定还款期条款, 催告记录, 部分还款记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百七十五条
+  - id: interest_within_cap
+    element_zh: 主张的利息不超过合同成立时一年期LPR四倍的上限
+    element_en: Claimed interest within 4x one-year LPR at formation
+    burden: claimant
+    evidence_hints: [利率约定条款, 合同成立时点的LPR数据, 利息计算表]
+    authority:
+      - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+        pinpoint: 第二十五条
+defenses:
+  - id: no_delivery
+    element_zh: 仅有借据而无交付事实，借贷关系未实际发生
+    element_en: IOU without actual delivery — no loan arose
+    burden: respondent
+    evidence_hints: [资金流水反证, 出借能力质疑证据]
+    authority:
+      - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+        pinpoint: 第十六条
+  - id: invalid_relending
+    element_zh: 出借人套取金融机构贷款转贷，借贷合同无效
+    element_en: Funds re-lent from institutional credit — contract void
+    burden: respondent
+    evidence_hints: [出借人贷款记录与出借时间的对应关系]
+    authority:
+      - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+        pinpoint: 第十三条
+  - id: repaid
+    element_zh: 借款已经清偿（含以物抵债、抵销）
+    element_en: The loan was already repaid or set off
+    burden: respondent
+    evidence_hints: [还款凭证, 抵债协议, 抵销通知]
+    authority: []
+  - id: limitation
+    element_zh: 诉讼时效已经届满
+    element_en: The limitation period has expired
+    burden: respondent
+    evidence_hints: [还款期届满时点, 无催收/承诺还款的时间线]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条

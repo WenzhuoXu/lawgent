@@ -1,0 +1,348 @@
+event: message_saved
+data: {"id": "e6c687144a96463a", "chat_id": "55d8291547994e84", "role": "user", "content": "一个复杂的合同纠纷：甲乙签订买卖合同后乙方违约，请分析甲方可主张的三种救济方式及优先顺序。", "created_at": "2026-07-21T07:24:54.490757+00:00", "metadata": {"attachments": []}}
+
+event: message_saved
+data: {"id": "8b8b64703773437a", "chat_id": "55d8291547994e84", "role": "assistant", "content": "", "created_at": "2026-07-21T07:24:54.616285+00:00", "metadata": {"run_status": "running", "provider": "openai", "model": "gpt-5.6-luna", "run_id": "03a82497102e4e37"}}
+
+event: workflow_event
+data: {"id": "3d6781167181448e", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:24:55.255060+00:00", "event_type": "provider_turn_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:24:55.254863+00:00", "event_type": "provider_turn_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tools_offered": [], "reasoning_effort": "low"}}}
+
+event: workflow_event
+data: {"id": "cd764fdb6ef54188", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:24:59.951990+00:00", "event_type": "provider_turn_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:24:59.951881+00:00", "event_type": "provider_turn_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "response_chars": 718, "local_tool_call_count": 0, "hosted_tool_call_count": 0, "has_evidence_verification_log": false, "has_claim_level_sanity_check": false, "has_sources": false, "latency_ms": 4575, "iterations": 1}}}
+
+event: workflow_event
+data: {"id": "ab64eb3add2647fd", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:00.103038+00:00", "event_type": "workflow_plan_routed", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:00.101881+00:00", "event_type": "workflow_plan_routed", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"execution_mode": "agent_workflow", "complexity": "simple", "routing_reason": "涉及买卖合同违约的实质性法律分析，需要结合适用法律、违约事实及合同约定进行研究并核实依据。", "agent_count": 1, "provider": "openai", "model": "gpt-5.6-luna", "usage": {"input_tokens": "***REDACTED***", "output_tokens": "***REDACTED***", "total_tokens": "***REDACTED***"}}}}
+
+event: workflow_event
+data: {"id": "d49f7fabf58740de", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:00.252594+00:00", "event_type": "workflow_plan_router_low_quality", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:00.251658+00:00", "event_type": "workflow_plan_router_low_quality", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"agent_count": 1, "low_information_tasks": [{"id": "task_1", "title": "Task 1", "task": "研究适用法律下买卖合同中买方因卖方违约可主张的三种主要救济方式、适用条件、并用规则及通常优先顺序；说明需要根据具体事实调整结论，并提供权威法律依据。"}]}}}
+
+event: workflow_event
+data: {"id": "0d29dd6ca34c494f", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:00.377831+00:00", "event_type": "provider_turn_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:00.376714+00:00", "event_type": "provider_turn_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tools_offered": [], "reasoning_effort": "low"}}}
+
+event: heartbeat
+data: {"status": "working", "run_id": "03a82497102e4e37"}
+
+event: workflow_event
+data: {"id": "03b8c9600d104fdf", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:12.034027+00:00", "event_type": "provider_turn_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:12.033921+00:00", "event_type": "provider_turn_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "response_chars": 1806, "local_tool_call_count": 0, "hosted_tool_call_count": 0, "has_evidence_verification_log": false, "has_claim_level_sanity_check": false, "has_sources": true, "latency_ms": 11531, "iterations": 1}}}
+
+event: workflow_event
+data: {"id": "e46814467afa4c24", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:12.166980+00:00", "event_type": "workflow_plan_decomposed", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:12.165888+00:00", "event_type": "workflow_plan_decomposed", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"agent_count": 1, "complexity": "simple", "decomposition_on_fast_model": true, "provider": "openai", "model": "gpt-5.6-luna", "usage": {"input_tokens": "***REDACTED***", "output_tokens": "***REDACTED***", "total_tokens": "***REDACTED***"}}}}
+
+event: workflow_event
+data: {"id": "11597798c431462b", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:12.292671+00:00", "event_type": "workflow_plan_created", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:12.291951+00:00", "event_type": "workflow_plan_created", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"plan": {"title": "买卖合同违约救济分析", "user_language": "Chinese", "execution_mode": "agent_workflow", "complexity": "simple", "direct_response": "", "routing_reason": "该请求涉及中国法下买卖合同违约责任、救济方式竞合及行使顺序，需要依据合同约定和现行法律规范进行专业分析；虽然包含三种救济方式，但其证据基础相同，适合由一名 specialist 统一研究。", "artifact_format": null, "issue_decomposition": ["中国法下买卖合同违约救济与行使顺序"], "agent_tasks": [{"id": "task_1", "skill_name": "legal-response", "title": "中国法下买卖合同违约救济与行使顺序", "task": "请以中国大陆现行法为基础，研究并形成紧凑的 Findings bundle，不要撰写面向用户的完整答复、总结性叙事或翻译。假设甲乙签订有效买卖合同，乙方构成违约，但目前未提供标的物类型、违约具体表现、合同解除条款、违约金条款、损失金额或甲方是否仍有履行利益；明确列出这些事实缺口及其对结论的影响。重点分析甲方可主张的三类主要救济：1）继续履行、修理更换或采取其他补救措施；2）解除合同并请求返还、恢复原状或价款返还；3）违约损害赔偿、违约金及可否与其他救济并用。说明每类救济的法定条件、不能适用或通常不宜适用的情形、损失可预见性、减损义务、定金或违约金与损害赔偿的关系，以及解除、继续履行和赔偿之间的竞合与限制。基于不同事实假设，给出甲方选择和行使救济的条件化优先顺序；不得把“优先顺序”表述为绝对固定规则。优先查阅并准确引用《中华人民共和国民法典》合同编及相关司法解释、最高人民法院关于买卖合同纠纷的司法解释；必要时补充相关司法裁判规则，但区分法律规范与案例观点。每条关键结论提供中国法原文或准确转述，并给出文章、款项、司法解释条文、具体段落或页码等 pinpoint；无法定位时明确写 `pinpoint unavailable`。输出必须包含三个部分：`Findings`（每条为带内联 pinpoint 的简短一句话）、`Out of scope`、`Sources`。不要代替编排最终用户答案。\ncoverage: continued-performance, contract-rescission, damages, liquidated-damages, remedy-priority, remedy-compatibility, mitigation-duty, evidence-gaps", "depends_on": []}], "integration_instructions": "最终以中文回答，并明确说明结论基于事实不完整的假设。围绕三种主要救济分别说明适用条件、优缺点及能否并用，再给出条件化的优先顺序：通常先判断甲方是否仍需要交易并可要求继续履行；若合同目的无法实现或违约达到解除条件，再考虑解除并同时主张返还及损害赔偿；违约金、定金和实际损失赔偿须说明竞合、选择及调整规则。不得将优先顺序写成绝对规则，应提示合同条款、标的物性质、乙方违约程度、履行可能性和证据情况可能改变方案。列明甲方应保存的合同、付款、催告、交付、损失及沟通证据，并提示必要时进行催告、解除通知或诉讼/仲裁程序。最终答案由编排器完成，不新增最终答案代理。", "citation_requirements": "关键法律结论必须提供中国大陆现行法的 pinpoint citation，至少精确到《中华人民共和国民法典》条文及款项（如适用）、相关司法解释条文、司法裁判的段落或页码；引用案例时注明法院、案号、裁判日期及对应段落。无法获得精确定位时必须明确标注 `pinpoint unavailable`，不得使用无出处的概括性引文。"}, "agent_count": 1}}}
+
+event: workflow_plan
+data: {"title": "买卖合同违约救济分析", "user_language": "Chinese", "execution_mode": "agent_workflow", "complexity": "simple", "direct_response": "", "routing_reason": "该请求涉及中国法下买卖合同违约责任、救济方式竞合及行使顺序，需要依据合同约定和现行法律规范进行专业分析；虽然包含三种救济方式，但其证据基础相同，适合由一名 specialist 统一研究。", "artifact_format": null, "issue_decomposition": ["中国法下买卖合同违约救济与行使顺序"], "agent_tasks": [{"id": "task_1", "skill_name": "legal-response", "title": "中国法下买卖合同违约救济与行使顺序", "task": "请以中国大陆现行法为基础，研究并形成紧凑的 Findings bundle，不要撰写面向用户的完整答复、总结性叙事或翻译。假设甲乙签订有效买卖合同，乙方构成违约，但目前未提供标的物类型、违约具体表现、合同解除条款、违约金条款、损失金额或甲方是否仍有履行利益；明确列出这些事实缺口及其对结论的影响。重点分析甲方可主张的三类主要救济：1）继续履行、修理更换或采取其他补救措施；2）解除合同并请求返还、恢复原状或价款返还；3）违约损害赔偿、违约金及可否与其他救济并用。说明每类救济的法定条件、不能适用或通常不宜适用的情形、损失可预见性、减损义务、定金或违约金与损害赔偿的关系，以及解除、继续履行和赔偿之间的竞合与限制。基于不同事实假设，给出甲方选择和行使救济的条件化优先顺序；不得把“优先顺序”表述为绝对固定规则。优先查阅并准确引用《中华人民共和国民法典》合同编及相关司法解释、最高人民法院关于买卖合同纠纷的司法解释；必要时补充相关司法裁判规则，但区分法律规范与案例观点。每条关键结论提供中国法原文或准确转述，并给出文章、款项、司法解释条文、具体段落或页码等 pinpoint；无法定位时明确写 `pinpoint unavailable`。输出必须包含三个部分：`Findings`（每条为带内联 pinpoint 的简短一句话）、`Out of scope`、`Sources`。不要代替编排最终用户答案。\ncoverage: continued-performance, contract-rescission, damages, liquidated-damages, remedy-priority, remedy-compatibility, mitigation-duty, evidence-gaps", "depends_on": []}], "integration_instructions": "最终以中文回答，并明确说明结论基于事实不完整的假设。围绕三种主要救济分别说明适用条件、优缺点及能否并用，再给出条件化的优先顺序：通常先判断甲方是否仍需要交易并可要求继续履行；若合同目的无法实现或违约达到解除条件，再考虑解除并同时主张返还及损害赔偿；违约金、定金和实际损失赔偿须说明竞合、选择及调整规则。不得将优先顺序写成绝对规则，应提示合同条款、标的物性质、乙方违约程度、履行可能性和证据情况可能改变方案。列明甲方应保存的合同、付款、催告、交付、损失及沟通证据，并提示必要时进行催告、解除通知或诉讼/仲裁程序。最终答案由编排器完成，不新增最终答案代理。", "citation_requirements": "关键法律结论必须提供中国大陆现行法的 pinpoint citation，至少精确到《中华人民共和国民法典》条文及款项（如适用）、相关司法解释条文、司法裁判的段落或页码；引用案例时注明法院、案号、裁判日期及对应段落。无法获得精确定位时必须明确标注 `pinpoint unavailable`，不得使用无出处的概括性引文。"}
+
+event: workflow_event
+data: {"id": "56dd31c36232441c", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:12.576750+00:00", "event_type": "workflow_direct_llm_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:12.575605+00:00", "event_type": "workflow_direct_llm_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"mode": "single_pass_legal", "complexity": "simple", "tool_count": 43, "attachment_count": 0, "user_language": "Chinese"}}}
+
+event: workflow_event
+data: {"id": "d3f6326d32bf4e15", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:12.710686+00:00", "event_type": "provider_turn_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:12.709602+00:00", "event_type": "provider_turn_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tools_offered": ["write_docx", "write_pdf", "inspect_docx", "edit_docx_text", "reshape_docx", "render_docx_pages", "inspect_pdf", "extract_pdf_tables", "render_pdf_pages", "merge_pdfs", "split_pdf", "rotate_pdf_pages", "write_xlsx", "write_pptx", "inspect_xlsx", "inspect_xlsx_range", "edit_xlsx_cells", "edit_xlsx_cells_checked", "reshape_xlsx", "copy_xlsx_sheet", "diff_xlsx", "render_xlsx_pages", "inspect_pptx", "edit_pptx_text", "reshape_pptx", "render_pptx_slides", "read_document", "fetch_url_to_artifact", "list_format_recipes", "read_format_recipe", "ecfr_search", "ecfr_fetch", "federal_register_search", "federal_register_fetch", "govinfo_search", "govinfo_fetch", "courtlistener_search", "courtlistener_fetch", "eurlex_search", "eurlex_fetch", "flk_npc_search", "flk_npc_fetch", "legal_source_search"], "reasoning_effort": "medium", "stream": true}}}
+
+event: reasoning_delta
+data: {"text": "\n\n"}
+
+event: reasoning_delta
+data: {"text": "**Researching CN law**\n\nI"}
+
+event: reasoning_delta
+data: {"text": " need"}
+
+event: reasoning_delta
+data: {"text": " to"}
+
+event: reasoning_delta
+data: {"text": " focus"}
+
+event: reasoning_delta
+data: {"text": " on"}
+
+event: reasoning_delta
+data: {"text": " researching"}
+
+event: reasoning_delta
+data: {"text": " the"}
+
+event: reasoning_delta
+data: {"text": " primary"}
+
+event: reasoning_delta
+data: {"text": " civil"}
+
+event: reasoning_delta
+data: {"text": " law"}
+
+event: reasoning_delta
+data: {"text": " in"}
+
+event: reasoning_delta
+data: {"text": " China"}
+
+event: reasoning_delta
+data: {"text": ","}
+
+event: reasoning_delta
+data: {"text": " specifically"}
+
+event: reasoning_delta
+data: {"text": " the"}
+
+event: reasoning_delta
+data: {"text": " NPC"}
+
+event: reasoning_delta
+data: {"text": "民"}
+
+event: reasoning_delta
+data: {"text": "法"}
+
+event: reasoning_delta
+data: {"text": "典"}
+
+event: reasoning_delta
+data: {"text": ","}
+
+event: reasoning_delta
+data: {"text": " and"}
+
+event: reasoning_delta
+data: {"text": " any"}
+
+event: reasoning_delta
+data: {"text": " relevant"}
+
+event: reasoning_delta
+data: {"text": " judicial"}
+
+event: reasoning_delta
+data: {"text": " interpretations"}
+
+event: reasoning_delta
+data: {"text": "."}
+
+event: reasoning_delta
+data: {"text": " This"}
+
+event: reasoning_delta
+data: {"text": " involves"}
+
+event: reasoning_delta
+data: {"text": " looking"}
+
+event: reasoning_delta
+data: {"text": " for"}
+
+event: reasoning_delta
+data: {"text": " exact"}
+
+event: reasoning_delta
+data: {"text": " articles"}
+
+event: reasoning_delta
+data: {"text": " that"}
+
+event: reasoning_delta
+data: {"text": " pert"}
+
+event: reasoning_delta
+data: {"text": "ain"}
+
+event: reasoning_delta
+data: {"text": " to"}
+
+event: reasoning_delta
+data: {"text": " specific"}
+
+event: reasoning_delta
+data: {"text": " legal"}
+
+event: reasoning_delta
+data: {"text": " matters"}
+
+event: reasoning_delta
+data: {"text": "."}
+
+event: reasoning_delta
+data: {"text": " I"}
+
+event: reasoning_delta
+data: {"text": " might"}
+
+event: reasoning_delta
+data: {"text": " consider"}
+
+event: reasoning_delta
+data: {"text": " using"}
+
+event: reasoning_delta
+data: {"text": " fl"}
+
+event: reasoning_delta
+data: {"text": "k"}
+
+event: reasoning_delta
+data: {"text": " search"}
+
+event: reasoning_delta
+data: {"text": " to"}
+
+event: reasoning_delta
+data: {"text": " help"}
+
+event: reasoning_delta
+data: {"text": " find"}
+
+event: reasoning_delta
+data: {"text": " the"}
+
+event: reasoning_delta
+data: {"text": " civil"}
+
+event: reasoning_delta
+data: {"text": " code"}
+
+event: reasoning_delta
+data: {"text": " more"}
+
+event: reasoning_delta
+data: {"text": " efficiently"}
+
+event: reasoning_delta
+data: {"text": "."}
+
+event: reasoning_delta
+data: {"text": " It"}
+
+event: reasoning_delta
+data: {"text": "’s"}
+
+event: reasoning_delta
+data: {"text": " essential"}
+
+event: reasoning_delta
+data: {"text": " to"}
+
+event: reasoning_delta
+data: {"text": " find"}
+
+event: reasoning_delta
+data: {"text": " accurate"}
+
+event: reasoning_delta
+data: {"text": " sources"}
+
+event: reasoning_delta
+data: {"text": " since"}
+
+event: reasoning_delta
+data: {"text": " legal"}
+
+event: reasoning_delta
+data: {"text": " research"}
+
+event: reasoning_delta
+data: {"text": " needs"}
+
+event: reasoning_delta
+data: {"text": " precision"}
+
+event: reasoning_delta
+data: {"text": " to"}
+
+event: reasoning_delta
+data: {"text": " be"}
+
+event: reasoning_delta
+data: {"text": " reliable"}
+
+event: reasoning_delta
+data: {"text": "."}
+
+event: reasoning_delta
+data: {"text": " Let's"}
+
+event: reasoning_delta
+data: {"text": " clarify"}
+
+event: reasoning_delta
+data: {"text": " this"}
+
+event: reasoning_delta
+data: {"text": " to"}
+
+event: reasoning_delta
+data: {"text": " ensure"}
+
+event: reasoning_delta
+data: {"text": " I"}
+
+event: reasoning_delta
+data: {"text": " gather"}
+
+event: reasoning_delta
+data: {"text": " the"}
+
+event: reasoning_delta
+data: {"text": " right"}
+
+event: reasoning_delta
+data: {"text": " information"}
+
+event: reasoning_delta
+data: {"text": "!"}
+
+event: tool_call
+data: {"name": "legal_source_search", "arguments": {"source": "flk_npc", "query": "中华人民共和国民法典 合同编 买卖合同 违约责任 继续履行 解除 违约金 定金", "title": 0, "agency": "", "collections": null, "court": null, "level": "law", "document_type": null, "per_page": 5}, "agent": "orchestrator"}
+
+event: workflow_event
+data: {"id": "af93f316b7d449a3", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:17.376222+00:00", "event_type": "local_tool_call_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:17.375113+00:00", "event_type": "local_tool_call_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "legal_source_search", "arguments": {"source": "flk_npc", "query": "中华人民共和国民法典 合同编 买卖合同 违约责任 继续履行 解除 违约金 定金", "title": 0, "agency": "", "collections": null, "court": null, "level": "law", "document_type": null, "per_page": 5}, "iteration": 1}}}
+
+event: workflow_event
+data: {"id": "cb53f1c719de4074", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:23.324351+00:00", "event_type": "local_tool_call_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:23.324095+00:00", "event_type": "local_tool_call_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "legal_source_search", "output_preview": "{\"source\": \"flk.npc.gov.cn\", \"query\": \"中华人民共和国民法典 合同编 买卖合同 违约责任 继续履行 解除 违约金 定金\", \"level_filter\": \"law\", \"level_filter_applied\": true, \"count\": 0, \"results\": []}", "output_chars": 160, "iteration": 1}}}
+
+event: tool_call
+data: {"name": "legal_source_search", "arguments": {"source": "flk_npc", "query": "最高人民法院 关于适用 中华人民共和国民法典 合同编 通则 若干问题的解释", "title": 0, "agency": "", "collections": null, "court": null, "level": "judicial_interpretation", "document_type": null, "per_page": 5}, "agent": "orchestrator"}
+
+event: workflow_event
+data: {"id": "e0c433151479445c", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:23.608515+00:00", "event_type": "local_tool_call_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:23.607677+00:00", "event_type": "local_tool_call_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "legal_source_search", "arguments": {"source": "flk_npc", "query": "最高人民法院 关于适用 中华人民共和国民法典 合同编 通则 若干问题的解释", "title": 0, "agency": "", "collections": null, "court": null, "level": "judicial_interpretation", "document_type": null, "per_page": 5}, "iteration": 1}}}
+
+event: workflow_event
+data: {"id": "24cce74338ce43c6", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:27.940189+00:00", "event_type": "local_tool_call_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:27.939951+00:00", "event_type": "local_tool_call_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "legal_source_search", "output_preview": "{\"source\": \"flk.npc.gov.cn\", \"query\": \"最高人民法院 关于适用 中华人民共和国民法典 合同编 通则 若干问题的解释\", \"level_filter\": \"judicial_interpretation\", \"level_filter_applied\": true, \"count\": 1, \"results\": [{\"title\": \"最高人民法院关于适用《中华人民共和国民法典》合同编通则若干问题的解释\", \"type\": \"司法解释\", \"office\": \"最高人民法院\", \"publish_date\": \"2023-12-04\", \"effective_date\": \"2023-12-05\", \"status\": \"有效\", \"doc_id\": \"ff8081818c24e05b018c814e6de45ab5\", \"url\": \"https://flk.npc.gov.cn/detail?bbbs=ff8081818c24e05b018c814e6de45ab5\", \"snippet\": \"最高人民法院关于适用《中华人民共和国民法典》合同编通则若干问题的解释\"}]}", "output_chars": 512, "iteration": 1}}}
+
+event: tool_call
+data: {"name": "legal_source_search", "arguments": {"source": "courtlistener", "query": "中国 民法典 买卖合同 违约 继续履行 解除", "title": 0, "agency": "", "collections": null, "court": null, "level": null, "document_type": null, "per_page": 5}, "agent": "orchestrator"}
+
+event: workflow_event
+data: {"id": "eaa133b2aa774019", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:28.234912+00:00", "event_type": "local_tool_call_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:28.233787+00:00", "event_type": "local_tool_call_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "legal_source_search", "arguments": {"source": "courtlistener", "query": "中国 民法典 买卖合同 违约 继续履行 解除", "title": 0, "agency": "", "collections": null, "court": null, "level": null, "document_type": null, "per_page": 5}, "iteration": 1}}}
+
+event: workflow_event
+data: {"id": "0b1e013d06f14b91", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:28.721853+00:00", "event_type": "local_tool_call_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:28.721620+00:00", "event_type": "local_tool_call_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "legal_source_search", "output_preview": "{\"source\": \"CourtListener\", \"query\": \"中国 民法典 买卖合同 违约 继续履行 解除\", \"court_filter\": \"all\", \"result_type\": \"o\", \"count\": 0, \"results\": [], \"authenticated\": true}", "output_chars": 155, "iteration": 1}}}
+
+event: tool_call
+data: {"name": "flk_npc_search", "arguments": {"query": "民法典", "level": "law", "per_page": 10}, "agent": "orchestrator"}
+
+event: workflow_event
+data: {"id": "a56e8a5c008f4f04", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:33.334814+00:00", "event_type": "local_tool_call_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:33.333309+00:00", "event_type": "local_tool_call_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "flk_npc_search", "arguments": {"query": "民法典", "level": "law", "per_page": 10}, "iteration": 2}}}
+
+event: workflow_event
+data: {"id": "b8475a0ac1404de5", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:34.475482+00:00", "event_type": "local_tool_call_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:34.475190+00:00", "event_type": "local_tool_call_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "flk_npc_search", "output_preview": "{\"source\": \"flk.npc.gov.cn\", \"query\": \"民法典\", \"level_filter\": \"law\", \"level_filter_applied\": true, \"count\": 1, \"results\": [{\"title\": \"中华人民共和国民法典\", \"type\": \"法律\", \"office\": \"全国人民代表大会\", \"publish_date\": \"2020-05-28\", \"effective_date\": \"2021-01-01\", \"status\": \"有效\", \"doc_id\": \"ff808081729d1efe01729d50b5c500bf\", \"url\": \"https://flk.npc.gov.cn/detail?bbbs=ff808081729d1efe01729d50b5c500bf\", \"snippet\": \"中华人民共和国民法典\"}]}", "output_chars": 410, "iteration": 2}}}
+
+event: tool_call
+data: {"name": "flk_npc_fetch", "arguments": {"doc_id": "ff8081818c24e05b018c814e6de45ab5"}, "agent": "orchestrator"}
+
+event: workflow_event
+data: {"id": "1f99cd790d214bbb", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:34.743688+00:00", "event_type": "local_tool_call_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:34.742657+00:00", "event_type": "local_tool_call_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "flk_npc_fetch", "arguments": {"doc_id": "ff8081818c24e05b018c814e6de45ab5"}, "iteration": 2}}}
+
+event: workflow_event
+data: {"id": "53e2423038814e57", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:35.785315+00:00", "event_type": "local_tool_call_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:35.785050+00:00", "event_type": "local_tool_call_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "flk_npc_fetch", "output_preview": "{\"source\": \"flk.npc.gov.cn\", \"doc_id\": \"ff8081818c24e05b018c814e6de45ab5\", \"title\": \"最高人民法院关于适用《中华人民共和国民法典》合同编通则若干问题的解释\", \"type\": \"司法解释\", \"office\": \"最高人民法院\", \"publish_date\": \"2023-12-04\", \"effective_date\": \"2023-12-05\", \"status\": \"有效\", \"history\": [], \"related_instruments\": [{\"title\": \"法释2023-13公告\", \"type\": \"公告\"}], \"url\": \"https://flk.npc.gov.cn/detail?bbbs=ff8081818c24e05b018c814e6de45ab5\", \"body_text\": \"\", \"note\": \"flk.npc.gov.cn does not serve body text publicly; use pkulaw_fatiao__get_law_item_content for 条文 content.\"}", "output_chars": 527, "iteration": 2}}}
+
+event: tool_call
+data: {"name": "govinfo_search", "arguments": {"query": "中华人民共和国民法典 2020 合同 违约责任", "collections": ["USCODE"], "page_size": 5}, "agent": "orchestrator"}
+
+event: workflow_event
+data: {"id": "e2cb9943c7664734", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:36.036347+00:00", "event_type": "local_tool_call_started", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:36.035401+00:00", "event_type": "local_tool_call_started", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "govinfo_search", "arguments": {"query": "中华人民共和国民法典 2020 合同 违约责任", "collections": ["USCODE"], "page_size": 5}, "iteration": 2}}}
+
+event: workflow_event
+data: {"id": "e7476c3f9b3443cc", "chat_id": "55d8291547994e84", "created_at": "2026-07-21T07:25:36.777371+00:00", "event_type": "local_tool_call_finished", "agent_name": "orchestrator", "run_id": "463d280451f9466b", "parent_run_id": null, "data": {"ts": "2026-07-21T07:25:36.777071+00:00", "event_type": "local_tool_call_finished", "run_id": "463d280451f9466b", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tool_name": "govinfo_search", "output_preview": "{\"source\": \"GovInfo (GPO)\", \"query\": \"中华人民共和国民法典 2020 合同 违约责任\", \"collections_filter\": [\"USCODE\"], \"total_count\": 0, \"count\": 0, \"results\": [], \"authenticated\": true}", "output_chars": 165, "iteration": 2}}}
+

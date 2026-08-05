@@ -1,0 +1,11 @@
+name: caac_ccar
+description: >
+  CAAC public aviation laws/regulations and CCAR department rules fetched
+  from caac.gov.cn. Includes 法律法规 and 民航规章 source pages plus official
+  PDF attachments where CAAC publishes the operative text as an attachment.
+  Per-file metadata flows from corpus/caac_ccar/manifest.yaml.
+sources:
+  - path: legal_helper/rag/corpus/caac_ccar
+    glob:
+      - "documents/**/*.md"
+      - "attachments/**/*.pdf"

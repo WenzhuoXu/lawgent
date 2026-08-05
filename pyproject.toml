@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "legal-helper"
+version = "0.1.0"
+description = "Legal AI Harness — grounded multi-jurisdiction legal agent (Claude + GPT, sub-agent runtime)"
+requires-python = ">=3.10"
+authors = [{ name = "Legal AI Harness contributors" }]
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.101",
+    "openai>=2.36",
+    "pydantic>=2",
+    "python-docx>=1.2",
+    "python-pptx>=1.0.2",
+    "openpyxl>=3.1.5",
+    "XlsxWriter>=3.2.9",
+    "mammoth>=1.11",
+    "markitdown[all]>=0.1.5",
+    "Pillow>=12",
+    "weasyprint>=68",
+    "markdown>=3.10",
+    "loguru>=0.7",
+    "fastapi>=0.136",
+    "uvicorn[standard]>=0.46",
+    "python-multipart>=0.0.28",
+    "python-dotenv>=1.2",
+    "pdfminer.six",
+    "pdfplumber>=0.11.9",
+    "pypdf>=6.11",
+    "pikepdf>=10.6",
+    "reportlab>=4.5",
+    "pdf2image>=1.17",
+    "pytesseract>=0.3.13",
+    "jinja2",
+    "rich",
+    "pyyaml",
+    "httpx",
+]
+
+[project.scripts]
+legal-helper = "legal_helper.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["legal_helper*"]
+
+[tool.setuptools.package-data]
+legal_helper = [
+    "skills/**/*.md",
+    "documents/scripts/**/*.js",
+    "playbook/*.md",
+    "webui/*.html",
+    "webui/*.js",
+    "webui/*.css",
+]
+
+[tool.pytest.ini_options]
+markers = [
+    "live: hits real provider APIs; opt-in via env var",
+]
+asyncio_mode = "auto"

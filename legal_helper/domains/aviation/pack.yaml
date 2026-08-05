@@ -1,0 +1,124 @@
+name: aviation
+display_name: "Aviation Law"
+description: >
+  Consolidated aviation-law overlay. Covers CAAC / MOT / FAA / EASA / ICAO,
+  Cape Town Convention / IDERA, aircraft sales & leasing, charter / wet-lease,
+  MRO / Part-145, hull & liability insurance, accident/incident investigation,
+  ITAR / EAR export controls, and CORSIA.
+jurisdictions: [CN, US, EU, ET, ICAO]
+default_language: en           # internal reasoning language inside aviation contexts
+mcp_servers: []
+# ccar_aviation disabled — wraps ccar_search/ccar_fetch which hit a moved
+# CAAC search endpoint. Re-enable once the connector is rewired against
+# api.so-gov.cn or replaced with PKULaw search_article.
+#  - ccar_aviation
+# Connectors surfaced to legal-search skills when this pack is active.
+# Jurisdiction filtering still applies — e.g. EASA tools only when EU is
+# in the active jurisdictions. See connectors/__init__.py REGISTRY.
+allowed_connectors:
+  - faa_title14_search
+  - caac_local_search
+  - caac_local_fetch
+  # ccar_search / ccar_fetch disabled — see connectors/__init__.py
+  # - ccar_search
+  # - ccar_fetch
+  - drs_search
+  # drs_fetch disabled — drs.faa.gov is SPA-only; follow html_url from
+  # drs_search results (federalregister.gov) via fetch_url_to_artifact.
+  # - drs_fetch
+  - easa_ad_search
+  - easa_ad_fetch
+  - easa_ear_index
+  # Ethiopia (ET) — civil-aviation framework for ET route / operator work.
+  # ecaa_* are pack+ET/ICAO gated; ethiopia_law_* are general ET connectors.
+  - ecaa_index
+  - ecaa_fetch
+  - ethiopia_law_search
+  - ethiopia_law_fetch
+# RAG collections this pack should pull from. Each name must match a
+# rag/collections/<name>.yaml config AND have been ingested into the
+# local Qdrant (`python -m legal_helper.rag.ingest --collection <name>
+# --seed`). Add new collections only after they ship.
+#   - aviation          → playbook + overlays + examples (md only)
+#   - aviation_treaties → Chicago, Tokyo, Hague, MC71/88, Beijing+Protocol,
+#                         MC99, Warsaw, Cape Town, Aircraft Protocol
+#   - icao_doc          → Doc 7300, Doc 9082 (charges), Doc 9957 (facilitation)
+#   - caac_ccar         → CAAC 法律法规 + 民航规章 / CCAR source pages and PDFs
+# Deferred (NOT enabled — no config, no ingest):
+#   - easa_ear          → populated by easa_ear connector once it caches XML
+rag_collections:
+  - aviation
+  - aviation_treaties
+  - icao_doc
+  - caac_ccar
+# Markers that trigger auto-activation of this pack when they appear in the
+# user's prompt. Word-boundary aware for ASCII; substring match for CJK.
+markers:
+  english:
+    - aviation
+    - aircraft
+    - airline
+    - airport
+    - airworthiness
+    - airworthy
+    - dry lease
+    - wet lease
+    - acmi
+    - charter flight
+    - hull insurance
+    - cape town
+    - idera
+    - faa
+    - easa
+    - icao
+    - iata
+    - ntsb
+    - caac
+    - ccar
+    - 14 cfr
+    - 49 cfr
+    - part-145
+    - part 145
+    - mro
+    - safo
+    - cockpit
+    - flightcrew
+    - empennage
+    - fuselage
+    - turbojet
+    - turboprop
+  chinese:
+    - 航空
+    - 飞机
+    - 航班
+    - 机上
+    - 机组
+    - 机长
+    - 机场
+    - 航空公司
+    - 适航
+    - 民航
+    - 民用航空
+    - 包机
+    - 通用航空
+    - 航材
+    - 维修单位
+    - 干租
+    - 湿租
+skill_overlays:
+  review-contract: overlays/review-contract.md
+  signature-request: overlays/signature-request.md
+  compliance-check: overlays/compliance-check.md
+  meeting-briefing: overlays/meeting-briefing.md
+  triage-nda: overlays/triage-nda.md
+  legal-response: overlays/legal-response.md
+  legal-risk-assessment: overlays/legal-risk-assessment.md
+  vendor-check: overlays/vendor-check.md
+  brief: overlays/brief.md
+  cite-check: overlays/cite-check.md
+  tabular-review: overlays/tabular-review.md
+  draft-agreement: overlays/draft-agreement.md
+  litigation-analysis: overlays/litigation-analysis.md
+playbook_path: playbook.md
+references_dir: references
+overlay_dir: overlays

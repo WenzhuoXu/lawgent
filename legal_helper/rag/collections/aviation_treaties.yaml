@@ -1,0 +1,10 @@
+name: aviation_treaties
+description: >
+  Authoritative aviation-law treaty corpus. Chicago Convention, Tokyo,
+  Hague, Montreal 1971+1988, Beijing 2010+Protocol, MC99, Warsaw,
+  Cape Town + Aircraft Protocol. Each treaty staged as EN + ZH where
+  authentic / available. Per-file metadata (treaty_name, language,
+  cite_prefix, authentic_text) flows from corpus/.../manifest.yaml.
+sources:
+  - path: legal_helper/rag/corpus/aviation_treaties
+    glob: ["en/*.pdf", "en/*.html", "zh/*.pdf", "zh/*.html", "multi/*.pdf", "multi/*.html"]

@@ -1,0 +1,120 @@
+# Aviation treaty corpus — per-file metadata + source URLs.
+#
+# fetch_aviation_corpus.sh reads source_url and downloads into `file`.
+# rag/ingest.py reads every other key and tags each chunk with it so
+# retrieve_legal can filter by treaty_name / language / etc.
+#
+# URLs verified May 2026. The fetch script rejects non-PDF responses
+# (magic-byte check), so dead URLs surface as BADPDF in the log. Update
+# this manifest when a source moves, then re-run the fetch.
+treaty_corpus_version: "2026-05-13"
+
+files:
+  # ── Chicago Convention 1944 — ICAO Doc 7300 (9th ed) ─────────────
+  - file: en/chicago_1944_doc7300_9ed.pdf
+    treaty_name: "Chicago Convention"
+    short_id: "chicago_1944"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "Chicago Convention"
+    authentic_text: true
+    source_url: "https://www.icao.int/sites/default/files/2024-12/7300_9ed.pdf"
+
+  # ── Tokyo Convention 1963 — UN db/terrorism collection ────────────
+  - file: en/tokyo_1963.pdf
+    treaty_name: "Tokyo Convention"
+    short_id: "tokyo_1963"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "Tokyo Convention"
+    authentic_text: true
+    source_url: "https://www.mcgill.ca/iasl/files/iasl/TokyoConvention.pdf"
+
+  # ── Hague Convention 1970 — UN db/terrorism collection ────────────
+  - file: en/hague_1970.pdf
+    treaty_name: "Hague Convention 1970"
+    short_id: "hague_1970"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "Hague Convention 1970"
+    authentic_text: true
+    source_url: "https://www.mcgill.ca/iasl/files/iasl/hague1970.pdf"
+
+  # ── Montreal Convention 1971 — UN Treaty Series Vol 974 ──────────
+  - file: en/montreal_1971.pdf
+    treaty_name: "Montreal Convention 1971"
+    short_id: "montreal_1971"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "Montreal Convention 1971"
+    authentic_text: true
+    source_url: "https://treaties.un.org/untc/Pages/doc/Publication/UNTS/Volume%20974/volume-974-I-14118-English.pdf"
+
+  # ── Montreal Protocol 1988 — UN db/terrorism collection ───────────
+  - file: en/montreal_protocol_1988.pdf
+    treaty_name: "Montreal Protocol 1988"
+    short_id: "montreal_protocol_1988"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "Montreal Protocol 1988"
+    authentic_text: true
+    source_url: "https://www.mcgill.ca/iasl/files/iasl/montreal1988.pdf"
+
+  # ── Beijing Convention 2010 — ICAO multilingual PDF (EN/FR/ES/RU/ZH/AR) ─
+  - file: multi/beijing_2010.pdf
+    treaty_name: "Beijing Convention 2010"
+    short_id: "beijing_2010"
+    language: "multi"
+    jurisdiction: "ICAO"
+    cite_prefix: "Beijing Convention 2010"
+    authentic_text: true
+    source_url: "https://www.icao.int/sites/default/files/secretariat/legal/Docs/beijing_convention_multi.pdf"
+
+  - file: multi/beijing_protocol_2010.pdf
+    treaty_name: "Beijing Protocol 2010"
+    short_id: "beijing_protocol_2010"
+    language: "multi"
+    jurisdiction: "ICAO"
+    cite_prefix: "Beijing Protocol 2010"
+    authentic_text: true
+    source_url: "https://www.icao.int/sites/default/files/secretariat/legal/Docs/beijing_protocol_multi.pdf"
+
+  # ── Montreal Convention 1999 (MC99) — IATA-hosted authentic text ──
+  - file: en/mc99.pdf
+    treaty_name: "MC99"
+    short_id: "mc99"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "MC99"
+    authentic_text: true
+    source_url: "https://www.iata.org/contentassets/fb1137ff561a4819a2d38f3db7308758/mc99-full-text.pdf"
+
+  # ── Warsaw Convention 1929 — UN Treaty Series LON Vol 137 ─────────
+  - file: en/warsaw_1929.pdf
+    treaty_name: "Warsaw Convention"
+    short_id: "warsaw_1929"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "Warsaw Convention"
+    authentic_text: true
+    source_url: "https://treaties.un.org/doc/Publication/UNTS/LON/Volume%20137/v137.pdf"
+
+  # ── Cape Town Convention 2001 — UNIDROIT consolidated text ────────
+  - file: en/cape_town_2001.pdf
+    treaty_name: "Cape Town Convention"
+    short_id: "cape_town_2001"
+    language: "en"
+    jurisdiction: "UNIDROIT"
+    cite_prefix: "Cape Town Convention"
+    authentic_text: true
+    source_url: "https://www.unidroit.org/wp-content/uploads/2021/07/Cape-Town-Convention_English.pdf"
+
+  # ── Aircraft Equipment Protocol 2001 — UNIDROIT (analogous URL pattern) ─
+  - file: en/aircraft_protocol_2001.pdf
+    treaty_name: "Aircraft Protocol"
+    short_id: "aircraft_protocol_2001"
+    language: "en"
+    jurisdiction: "UNIDROIT"
+    cite_prefix: "Aircraft Protocol"
+    authentic_text: true
+    source_url: "https://www.unidroit.org/wp-content/uploads/2021/07/Aircraft-Protocol_English.pdf"

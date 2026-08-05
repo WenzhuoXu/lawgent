@@ -1,0 +1,7 @@
+name: aviation
+description: Aviation domain pack — playbook, overlays, references.
+sources:
+  - path: legal_helper/domains/aviation
+    glob: ["*.md", "overlays/*.md", "references/*.md"]
+  - path: examples/aviation
+    glob: ["*.md"]

@@ -1,0 +1,181 @@
+name: services
+display_name: "Services Agreement / 服务合同"
+applies_to: [services, consulting, SOW, outsourcing, 技术服务, 委托服务]
+side_default: "customer (委托方) — flip acceptance, cap and IP positions for a provider-side draft"
+clauses:
+  - id: scope_sow
+    title_zh: "服务范围与工作说明书"
+    title_en: "Scope of Services; Statements of Work"
+    text_zh: |
+      服务方应按照本合同及经双方签署的各期工作说明书（SOW）向委托方提供
+      【服务描述】服务。SOW 应载明服务内容、交付物、里程碑、验收标准及
+      费用；SOW 与正文不一致的，除 SOW 明确排除正文条款外，以正文为准。
+    text_en: |
+      The Provider shall perform [description of services] under this
+      Agreement and Statements of Work (SOWs) executed by both parties.
+      Each SOW states the services, deliverables, milestones, acceptance
+      criteria and fees; in case of conflict, this Agreement prevails
+      unless the SOW expressly derogates.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第470条（合同内容的一般条款）"
+  - id: fees_invoicing
+    title_zh: "费用、发票与支付"
+    title_en: "Fees, Invoicing and Payment"
+    text_zh: |
+      服务费用及支付节点以相应 SOW 为准。服务方应在收款前向委托方开具
+      合法有效的增值税【专用/普通】发票；委托方应于收到合规发票及验收
+      通过后【三十(30)】日内付款。逾期付款的，按每日万分之【 】支付
+      违约金。
+    text_en: |
+      Fees and payment milestones are as set out in the applicable SOW.
+      The Provider shall issue a valid VAT [special/general] invoice
+      before payment; the Customer shall pay within [thirty (30)] days of
+      receipt of a compliant invoice and acceptance. Late payment bears
+      liquidated damages of [ ]/10,000 per day.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第509条（全面履行与诚信义务）"
+    notes: "Provider-side: decouple payment from acceptance for undisputed portions."
+  - id: acceptance
+    title_zh: "验收"
+    title_en: "Acceptance"
+    text_zh: |
+      委托方应于收到交付物后【十(10)】个工作日内按 SOW 约定的验收标准
+      验收并书面反馈；逾期未反馈的视为验收通过。验收不通过的，服务方应
+      在【 】日内免费修改并重新提交验收；连续【两(2)】次验收不通过的，
+      委托方有权解除相应 SOW 并要求退还已付费用。
+    text_en: |
+      The Customer shall test deliverables against the SOW acceptance
+      criteria within [ten (10)] business days and respond in writing;
+      absence of response is deemed acceptance. On rejection the Provider
+      shall remedy and resubmit within [ ] days at no charge; after [two
+      (2)] consecutive failures the Customer may terminate the affected
+      SOW and recover fees paid for it.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第563条（法定解除情形，迟延履行经催告）"
+    notes: "Deemed-acceptance default favours the provider; customer-side may delete it."
+  - id: ip_ownership
+    title_zh: "知识产权归属"
+    title_en: "Intellectual Property in Deliverables"
+    text_zh: |
+      除双方另有书面约定外，交付物的知识产权（包括申请专利的权利）自
+      委托方付清相应费用之日起归委托方所有；服务方在其既有技术成果范围
+      内授予委托方为使用交付物所必需的、不可撤销的免费许可。委托开发中
+      完成的发明创造的权利归属，双方在 SOW 中明确约定。
+    text_en: |
+      Unless otherwise agreed in writing, intellectual property in the
+      deliverables (including the right to apply for patents) vests in the
+      Customer upon payment of the corresponding fees; the Provider grants
+      an irrevocable, royalty-free licence to its background technology as
+      needed to use the deliverables. Ownership of inventions made in
+      commissioned development shall be expressly allocated in each SOW.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第859条（委托开发完成的发明创造，无约定时申请专利的权利属于研究开发人）"
+    notes: "The statutory default favours the developer — customer-side drafts MUST allocate expressly in the SOW."
+  - id: warranties
+    title_zh: "陈述与保证"
+    title_en: "Warranties"
+    text_zh: |
+      服务方保证：以符合行业通行标准的专业技能与谨慎提供服务；交付物
+      符合 SOW 约定标准且不侵犯任何第三方合法权益；已取得履行本合同
+      所需的全部资质与授权。
+    text_en: |
+      The Provider warrants that services will be performed with the skill
+      and care of a competent professional to prevailing industry
+      standards; that deliverables will conform to the SOW and not
+      infringe third-party rights; and that it holds all qualifications
+      and authorisations required to perform.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第577条（违约责任的承担方式）"
+  - id: limitation_liability
+    title_zh: "责任限制"
+    title_en: "Limitation of Liability"
+    text_zh: |
+      任何一方对另一方的累计赔偿责任不超过相应 SOW 项下已付及应付费用
+      总额的【100%】；任何一方均不对间接损失、利润损失承担责任。但因
+      故意或重大过失、侵犯知识产权、违反保密义务或造成人身损害产生的
+      责任不受上述限制。
+    text_en: |
+      Each party's aggregate liability shall not exceed [100%] of the fees
+      paid and payable under the affected SOW, and neither party is liable
+      for indirect loss or loss of profit — except liability arising from
+      wilful misconduct or gross negligence, IP infringement,
+      confidentiality breach, or personal injury, which is unlimited.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第506条（造成对方人身损害的、因故意或者重大过失造成财产损失的免责条款无效）"
+      - source: "民法典"
+        pinpoint: "第584条（损失赔偿的可预见性规则）"
+    notes: "The 第506条 carve-outs are mandatory-content: a cap purporting to cover them is void."
+  - id: confidentiality_nda
+    title_zh: "保密"
+    title_en: "Confidentiality"
+    text_zh: |
+      双方对因本合同知悉的对方保密信息承担保密义务，适用范围、例外与
+      存续期参照本库 nda 预设的相应条款；保密期限自合同终止后不少于
+      【五(5)】年。
+    text_en: |
+      Each party shall keep the other's confidential information
+      confidential; scope, exceptions and survival follow the nda preset
+      clauses of this library, with survival of no less than [five (5)]
+      years after termination.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第501条（缔约过程中知悉的商业秘密保密义务）"
+  - id: terms_termination
+    title_zh: "期限与解除"
+    title_en: "Term and Termination"
+    text_zh: |
+      本合同有效期【 】年。一方实质性违约且经书面催告后【三十(30)】日内
+      未纠正的，守约方可解除本合同；任一方可提前【六十(60)】日书面通知
+      解除尚未开始履行的 SOW。合同解除不影响已产生的付款义务及存续条款
+      的效力。
+    text_en: |
+      This Agreement runs for [ ] years. Either party may terminate for
+      material breach uncured [thirty (30)] days after written notice, and
+      may terminate any not-yet-commenced SOW on [sixty (60)] days'
+      written notice. Termination does not affect accrued payment
+      obligations or surviving clauses.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第562条、第563条（约定解除与法定解除）"
+  - id: force_majeure
+    title_zh: "不可抗力"
+    title_en: "Force Majeure"
+    text_zh: |
+      因不能预见、不能避免且不能克服的客观情况致使合同不能履行的，受
+      影响方按影响程度部分或全部免责，但应及时通知对方并在合理期限内
+      提供证明；不可抗力持续超过【九十(90)】日的，任一方可解除本合同。
+    text_en: |
+      Neither party is liable for failure caused by objective
+      circumstances that are unforeseeable, unavoidable and insurmountable
+      (force majeure), to the extent of the impact, provided prompt notice
+      and evidence within a reasonable period. Either party may terminate
+      if the event continues beyond [ninety (90)] days.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第180条（不可抗力的定义）"
+      - source: "民法典"
+        pinpoint: "第590条（不可抗力的免责与通知义务）"
+  - id: governing_law_dispute
+    title_zh: "适用法律与争议解决"
+    title_en: "Governing Law and Dispute Resolution"
+    text_zh: |
+      本合同适用中华人民共和国法律。因本合同引起的争议协商不成的，
+      【提交〔仲裁委员会名称〕在〔仲裁地〕仲裁 / 向〔与争议有实际联系
+      的地点〕人民法院提起诉讼】。
+    text_en: |
+      This Agreement is governed by PRC law. Disputes not resolved by
+      consultation shall be [submitted to (arbitration commission) for
+      arbitration in (seat) / brought before the People's Court of (a
+      place with actual connection to the dispute)].
+    legal_basis:
+      - source: "仲裁法"
+        pinpoint: "第16条（仲裁协议应载明的事项）"
+      - source: "民事诉讼法"
+        pinpoint: "第35条（协议管辖限于与争议有实际联系的地点，不得违反级别管辖和专属管辖）"
+    notes: "Choose ONE path; keep the bracketed alternative that fits the deal and delete the other."

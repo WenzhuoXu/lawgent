@@ -1,0 +1,79 @@
+{
+  "_comment": "MCP server registry consumed by legal_helper/mcp/registry.py. US sources (CourtListener, eCFR, Federal Register, GovInfo) are served by direct-API connectors in legal_helper/connectors/, not MCP. All PKULaw sub-services share PKULAW_API_TOKEN via the WSO2 apikey header. Activation is gated by active_domain_packs and jurisdictions.",
+  "mcpServers": {
+    "eurlex": {
+      "command": "npx",
+      "args": ["-y", "eurlex-mcp-server"],
+      "jurisdictions": ["EU"]
+    },
+    "pkulaw_law_search": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/mcp-law-search-service",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Semantic search + retrieval of PRC law articles (get_article, search_article)."
+    },
+    "pkulaw_fatiao": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/mcp-fatiao",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Precise 法条 by title + 条号 (get_law_item_content)."
+    },
+    "pkulaw_case_search": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/mcp-case-search-service",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Semantic search over PRC 司法案例 (search_case)."
+    },
+    "pkulaw_case_list": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/mcp-case",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Keyword case-judgment list by 标题 / 正文 (get_case_list)."
+    },
+    "pkulaw_anhao": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/case_number_recognition",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "案号 extraction + normalization against the PKULaw 案例库 (anhao_recognition)."
+    },
+    "pkulaw_law_recognition": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/law_recognition",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Statute / 法条 reference extraction + traceability (law_recognition)."
+    },
+    "pkulaw_citation_validator": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/pku_citation_validator",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Anti-hallucination citation corrector (adjust_provisions)."
+    },
+    "pkulaw_doc_link": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/add-doc-link",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "Auto-link 法规 references in prose to pkulaw.com (get_linked_content)."
+    },
+    "pkulaw_nl_search": {
+      "transport": "http",
+      "url": "https://apim-gateway.pkulaw.com/assistant/mcp-pkulaw-search",
+      "headers": {"apikey": "${PKULAW_API_TOKEN}"},
+      "jurisdictions": ["CN"],
+      "_description": "NL-SQL semantic search across statutes, cases, articles, 检察文书, 律所文章 (ai_pkulaw_search)."
+    },
+    "ccar_aviation": {
+      "command": "python",
+      "args": ["-m", "legal_helper.mcp.servers.ccar_aviation"],
+      "jurisdictions": ["CN", "ICAO"],
+      "domain_packs": ["aviation"]
+    }
+  }
+}

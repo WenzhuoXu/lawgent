@@ -1,0 +1,54 @@
+{
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5174",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4174",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ai-sdk/react": "^4.0.0",
+    "@radix-ui/react-use-controllable-state": "^1.2.4",
+    "@streamdown/cjk": "^1.0.3",
+    "@streamdown/code": "^1.1.1",
+    "@streamdown/math": "^1.0.2",
+    "@streamdown/mermaid": "^1.0.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "ai": "^7.0.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "embla-carousel-react": "^8.6.0",
+    "lucide-react": "^0.562.0",
+    "motion": "^12.42.2",
+    "nanoid": "^5.1.16",
+    "radix-ui": "^1.6.4",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "shiki": "^4.3.1",
+    "streamdown": "^2.5.0",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3",
+    "tokenlens": "^1.3.1",
+    "tw-animate-css": "^1.4.0",
+    "typescript": "^5.9.3",
+    "use-stick-to-bottom": "^1.1.6",
+    "vite": "^7.3.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^11.15.0",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "mcp-mermaid": "^0.4.1",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "ai": "$ai"
+  }
+}

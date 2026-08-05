@@ -1,0 +1,40 @@
+# Legal AI Helper — runtime configuration.
+# Env vars in .env override these values.
+
+provider: openai                       # anthropic | openai
+
+# Jurisdiction & domain layer
+default_jurisdiction: CN               # CN | US | EU | UK | HK | ET | ICAO
+secondary_jurisdictions: [US, EU]      # comparative jurisdictions surfaced when relevant
+default_language: zh                   # zh | en — user-facing language default
+citation_style: gb_t_7714              # gb_t_7714 | bluebook | oscola
+active_domain_packs: []                # e.g. [aviation]; empty = generic legal mode
+
+anthropic_model: claude-opus-4-8       # high-effort primary: claude-opus-4-8 | claude-opus-4-7 | claude-sonnet-5
+anthropic_fast_model: claude-haiku-4-5 # internal low-effort routing / summarization
+
+openai_model: gpt-5.6-terra            # high-effort primary: gpt-5.6-terra | gpt-5.6-sol | gpt-5.5 (never bare "gpt-5.6" — that alias routes to Sol)
+openai_fast_model: gpt-5.6-luna        # lower-latency routing / classification
+openai_reasoning_effort: medium        # none | low | medium | high | xhigh | max
+openai_enable_file_search: false
+openai_file_search_vector_store_ids: []
+
+# Sub-agent runtime
+max_iterations: 12                     # tool-loop ceiling for each agent
+parent_max_iterations: 8
+sub_agent_max_iterations: 8            # research tool-loop ceiling per specialist (was 12; trimmed for latency+cost, room for mandated primary-source fetches)
+max_concurrent_agents: auto            # Anthropic=2, OpenAI=4; override with an integer
+max_tokens: 32000                      # per-turn output ceiling; 8192 truncated long legal memos. Opus 4.x allows up to 128000 (streaming).
+chat_context_token_budget: 16000       # token budget for the within-chat context digest (rolling summary + recent transcript)
+chat_compaction_threshold: 0.6         # fold older turns into the summary once the transcript hits this fraction of the model window
+
+# Paths (relative to project root)
+outputs_dir: outputs
+state_dir: state
+logs_dir: logs
+playbook_path: legal_helper/playbook/general_playbook.md
+
+# Hosted-tool toggles
+enable_web_search: true
+enable_web_fetch: true
+enable_cite_check: false                # skip post-synthesis citation audit (faster iteration)

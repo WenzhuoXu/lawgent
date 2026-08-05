@@ -1,0 +1,76 @@
+# 合同违约之诉 — breach-of-contract element preset.
+# Re-verify every pinpoint via pkulaw_fatiao before use (README rule).
+name: contract_breach
+display_name: 合同违约之诉 / Breach of contract
+cause_of_action: 合同纠纷（违约责任）
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第五百七十七条
+elements:
+  - id: valid_contract
+    element_zh: 合同依法成立并生效
+    element_en: A contract was validly formed and took effect
+    burden: claimant
+    evidence_hints: [签署文本, 电子签约记录, 磋商往来, 履行行为佐证成立]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第四百六十五条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百零二条
+  - id: claimant_performance
+    element_zh: 原告已履行自身义务或依约无需先履行
+    element_en: Claimant performed, or was not required to perform first
+    burden: claimant
+    evidence_hints: [付款凭证, 交付/验收记录, 发票, 对账单]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百二十六条
+  - id: breach
+    element_zh: 被告不履行或履行不符合约定
+    element_en: Respondent failed to perform or performed non-conformingly
+    burden: claimant
+    evidence_hints: [催告函, 验收异议记录, 违约事实的往来函件]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百七十七条
+  - id: loss_and_causation
+    element_zh: 损失存在且与违约行为有因果关系，未超过可预见范围
+    element_en: Loss exists, caused by the breach, within foreseeability
+    burden: claimant
+    evidence_hints: [损失计算表, 替代交易凭证, 利润记录, 鉴定意见]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百八十四条
+defenses:
+  - id: force_majeure
+    element_zh: 不可抗力致不能履行，且已及时通知并提供证明
+    element_en: Force majeure prevented performance; timely notice + proof
+    burden: respondent
+    evidence_hints: [不可抗力证明, 通知记录, 影响范围证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百九十条
+  - id: mitigation_failure
+    element_zh: 原告未采取适当措施防止损失扩大
+    element_en: Claimant failed to mitigate the expanded loss
+    burden: respondent
+    evidence_hints: [扩大损失时间线, 可行减损措施证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百九十一条
+  - id: penalty_adjustment
+    element_zh: 约定违约金过分高于实际损失，请求调减
+    element_en: Agreed liquidated damages far exceed actual loss — adjust
+    burden: respondent
+    evidence_hints: [实际损失证据, 违约金与损失对比计算]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百八十五条
+  - id: limitation
+    element_zh: 诉讼时效已经届满
+    element_en: The limitation period has expired
+    burden: respondent
+    evidence_hints: [权利人知情时点证据, 无中断/中止事由的时间线]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条

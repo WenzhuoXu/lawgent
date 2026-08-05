@@ -1,0 +1,74 @@
+# 一般侵权之诉 — fault-based tort element preset (过错责任).
+# Strict / presumed-fault regimes (产品责任, 高度危险, 环境污染 etc.)
+# change the burden rows — decompose those from their own 条文.
+# Re-verify every pinpoint via pkulaw_fatiao before use (README rule).
+name: tort_liability
+display_name: 一般侵权之诉 / Tort (fault liability)
+cause_of_action: 侵权责任纠纷
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第一千一百六十五条
+elements:
+  - id: wrongful_act
+    element_zh: 行为人实施了侵害民事权益的行为
+    element_en: Respondent committed an act infringing civil rights/interests
+    burden: claimant
+    evidence_hints: [现场记录, 视听资料, 证人证言, 行政处理决定]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一千一百六十四条
+  - id: fault
+    element_zh: 行为人主观上存在过错（故意或过失）
+    element_en: Respondent acted with fault (intent or negligence)
+    burden: claimant
+    evidence_hints: [注意义务来源（法规/标准/惯例）, 违规记录, 事故认定]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一千一百六十五条
+  - id: harm
+    element_zh: 受害人受有损害（人身、财产或精神损害）
+    element_en: Claimant suffered harm (personal, property, or moral)
+    burden: claimant
+    evidence_hints: [医疗记录与票据, 伤残鉴定, 财产损失评估, 误工证明]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一千一百七十九条
+  - id: causation
+    element_zh: 侵权行为与损害后果之间存在因果关系
+    element_en: Causal link between the act and the harm
+    burden: claimant
+    evidence_hints: [鉴定意见, 事故调查结论, 时间线证据]
+    authority: []
+defenses:
+  - id: comparative_fault
+    element_zh: 被侵权人对损害的发生或扩大也有过错，应减轻责任
+    element_en: Claimant's own fault contributed — reduce liability
+    burden: respondent
+    evidence_hints: [受害人违规证据, 事故责任划分认定]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一千一百七十三条
+  - id: victim_intent
+    element_zh: 损害系受害人故意造成，行为人不承担责任
+    element_en: Harm was caused intentionally by the claimant
+    burden: respondent
+    evidence_hints: [受害人行为记录, 目击证言]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一千一百七十四条
+  - id: assumption_of_risk
+    element_zh: 受害人自甘风险参加具有一定风险的文体活动
+    element_en: Voluntary assumption of risk in the activity
+    burden: respondent
+    evidence_hints: [活动性质证据, 报名/知情记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一千一百七十六条
+  - id: limitation
+    element_zh: 诉讼时效已经届满
+    element_en: The limitation period has expired
+    burden: respondent
+    evidence_hints: [知道或应当知道损害及义务人的时点证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条

@@ -1,0 +1,167 @@
+name: nda
+display_name: "Non-Disclosure Agreement / 保密协议"
+applies_to: [nda, confidentiality agreement, 保密协议, 商业秘密保护]
+side_default: "discloser (披露方) — flip remedies and scope for a recipient-side draft"
+clauses:
+  - id: definitions
+    title_zh: "保密信息的定义"
+    title_en: "Definition of Confidential Information"
+    text_zh: |
+      "保密信息"指披露方以书面、口头、电子或其他形式向接收方披露的与
+      【交易目的】有关的一切非公开信息，包括但不限于技术资料、经营信息、
+      客户名单、财务数据及本协议的存在和内容。口头披露的信息应在披露后
+      【三十(30)】日内以书面形式确认为保密信息。
+    text_en: |
+      "Confidential Information" means all non-public information relating
+      to [the Purpose] disclosed by the Disclosing Party to the Receiving
+      Party in written, oral, electronic or other form, including without
+      limitation technical data, business information, customer lists,
+      financial data, and the existence and terms of this Agreement. Orally
+      disclosed information shall be confirmed as confidential in writing
+      within [thirty (30)] days of disclosure.
+    legal_basis:
+      - source: "反不正当竞争法"
+        pinpoint: "第9条（商业秘密的界定与侵权行为）"
+    notes: "Recipient-side: narrow to marked-confidential materials; drop the oral catch-all."
+  - id: confidentiality_nda
+    title_zh: "保密义务"
+    title_en: "Confidentiality Obligations"
+    text_zh: |
+      接收方应对保密信息严格保密，采取不低于保护自身同类信息的合理保密
+      措施；未经披露方事先书面同意，不得向任何第三方披露，亦不得为本协议
+      约定目的之外的任何目的使用保密信息。接收方仅可向因【交易目的】确有
+      必要知悉且受不低于本协议约定保密义务约束的员工及专业顾问披露。
+    text_en: |
+      The Receiving Party shall keep the Confidential Information strictly
+      confidential, applying no less than the reasonable measures it uses
+      for its own information of like kind, and shall not disclose it to
+      any third party or use it for any purpose other than the Purpose
+      without the Disclosing Party's prior written consent. Disclosure is
+      permitted only to employees and professional advisers with a need to
+      know who are bound by obligations no less protective than this
+      Agreement.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第501条（缔约过程中知悉的商业秘密保密义务）"
+  - id: nda_exceptions
+    title_zh: "保密义务的例外"
+    title_en: "Exceptions"
+    text_zh: |
+      保密义务不适用于接收方能以书面记录证明的下列信息：(一)披露时已经
+      公开或此后非因接收方违约而公开的；(二)接收方在披露前已合法持有的；
+      (三)接收方从无保密义务的第三方合法获得的；(四)接收方未使用保密信息
+      而独立开发的。
+    text_en: |
+      The obligations do not apply to information the Receiving Party can
+      show by written records: (a) is or becomes public other than through
+      its breach; (b) was lawfully in its possession before disclosure;
+      (c) was lawfully received from a third party free of confidentiality
+      obligations; or (d) was independently developed without use of the
+      Confidential Information.
+    legal_basis: []
+    notes: "Market-standard four exceptions; burden of written proof sits on the recipient (discloser-side default)."
+  - id: regulator_carveout
+    title_zh: "依法强制披露"
+    title_en: "Compelled Disclosure"
+    text_zh: |
+      接收方因法律、法规、有管辖权的法院、仲裁机构或监管机关的强制性要求
+      须披露保密信息的，可在必需范围内披露，但应在法律允许的范围内及时
+      通知披露方，并配合披露方寻求保密处理或其他保护措施。
+    text_en: |
+      The Receiving Party may disclose Confidential Information to the
+      extent required by law, regulation, or a court, arbitral body or
+      regulator of competent jurisdiction, provided that, where legally
+      permitted, it promptly notifies the Disclosing Party and cooperates
+      in seeking protective treatment.
+    legal_basis: []
+    notes: "Mandatory content per the library default — never drop; see general playbook §6 regulator-disclosure escalation."
+  - id: term_survival
+    title_zh: "期限与存续"
+    title_en: "Term and Survival"
+    text_zh: |
+      本协议自签署之日起生效，有效期【二(2)】年。协议期满或终止后，保密
+      义务就届时仍构成商业秘密的信息持续有效【五(5)】年；就依法构成商业
+      秘密的信息，存续期不因上述约定而短于法律保护期。
+    text_en: |
+      This Agreement takes effect on signature and continues for [two (2)]
+      years. Confidentiality obligations survive expiry or termination for
+      [five (5)] years, and for information constituting a trade secret at
+      law, no shorter than the statutory protection period.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第502条（合同生效时间）"
+  - id: return_destruction
+    title_zh: "资料返还与销毁"
+    title_en: "Return and Destruction"
+    text_zh: |
+      经披露方书面要求或本协议终止时，接收方应立即返还或销毁全部保密信息
+      及其复制件，并经要求出具书面确认；法律要求留存或按常规备份政策存档
+      的除外，留存部分仍受本协议约束。
+    text_en: |
+      Upon the Disclosing Party's written request or termination, the
+      Receiving Party shall promptly return or destroy all Confidential
+      Information and copies and, on request, certify in writing, except
+      copies retained by legal requirement or routine backup policy, which
+      remain subject to this Agreement.
+    legal_basis: []
+  - id: remedies_liability
+    title_zh: "违约责任与救济"
+    title_en: "Remedies"
+    text_zh: |
+      接收方违反本协议的，应向披露方支付违约金人民币【 】元；违约金不足以
+      弥补披露方实际损失的，接收方还应就差额部分予以赔偿。双方确认金钱
+      赔偿不足以弥补泄密损害，披露方有权依法申请行为保全等措施。
+    text_en: |
+      In case of breach, the Receiving Party shall pay liquidated damages
+      of RMB [ ], and shall compensate any shortfall between such amount
+      and the Disclosing Party's actual losses. The parties acknowledge
+      damages may be inadequate, and the Disclosing Party may seek
+      injunctive-style relief (行为保全) as permitted by law.
+    legal_basis:
+      - source: "民法典"
+        pinpoint: "第585条（违约金及其司法调整）"
+      - source: "民事诉讼法"
+        pinpoint: "第103条（行为保全）— re-verify numbering against current text"
+    notes: "Recipient-side: cap or delete the liquidated-damages figure; courts adjust excessive 违约金 under 第585条."
+  - id: no_license_ip
+    title_zh: "权利保留"
+    title_en: "No License"
+    text_zh: |
+      保密信息的一切权利归披露方所有。本协议不构成对任何知识产权的转让或
+      许可，亦不构成任何交易承诺。
+    text_en: |
+      All rights in the Confidential Information remain with the
+      Disclosing Party. Nothing in this Agreement transfers or licenses
+      any intellectual property right or commits either party to any
+      transaction.
+    legal_basis: []
+  - id: governing_law_dispute
+    title_zh: "适用法律与争议解决"
+    title_en: "Governing Law and Dispute Resolution"
+    text_zh: |
+      本协议适用中华人民共和国法律。因本协议引起的或与本协议有关的任何
+      争议，双方应友好协商解决；协商不成的，提交【仲裁委员会名称】按其
+      届时有效的仲裁规则在【仲裁地】仲裁解决，仲裁裁决为终局裁决。
+    text_en: |
+      This Agreement is governed by the laws of the People's Republic of
+      China. Disputes shall first be resolved through friendly
+      consultation, failing which they shall be submitted to [name of
+      arbitration commission] for arbitration in [seat] under its rules
+      then in effect; the award is final and binding.
+    legal_basis:
+      - source: "仲裁法"
+        pinpoint: "第16条（仲裁协议应载明的事项）"
+      - source: "涉外民事关系法律适用法"
+        pinpoint: "第41条（合同当事人协议选择适用法律，仅限涉外合同）"
+    notes: "Purely domestic deals cannot choose foreign law; name ONE commission — litigation/arbitration alternatives are pathological."
+  - id: language_controlling
+    title_zh: "文本与语言"
+    title_en: "Language and Controlling Version"
+    text_zh: |
+      本协议以中文和英文签署，两种文本具有同等效力；两种文本不一致的，
+      以中文文本为准。
+    text_en: |
+      This Agreement is executed in Chinese and English. Both versions are
+      equally valid; in case of discrepancy, the Chinese version prevails.
+    legal_basis: []
+    notes: "PRC-law default: Chinese controls (methodology §3). Flip only on instruction; drop for single-language drafts."

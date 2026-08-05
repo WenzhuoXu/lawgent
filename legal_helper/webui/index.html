@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Aviation Legal Helper</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+<header class="banner">
+  <strong>Aviation Legal Helper</strong>
+  &nbsp;—&nbsp;
+  <span>Not legal advice. All output must be reviewed by qualified aviation counsel.</span>
+</header>
+
+<main class="layout">
+  <aside class="sidebar">
+    <h3>Skills</h3>
+    <ul id="skill-list"></ul>
+    <h3>Attachments</h3>
+    <div id="dropzone" class="dropzone">Drop files here or click to upload</div>
+    <input id="file-input" type="file" hidden multiple />
+    <ul id="upload-list"></ul>
+  </aside>
+
+  <section class="chat">
+    <div id="messages" class="messages"></div>
+    <form id="composer" class="composer">
+      <textarea
+        id="input"
+        placeholder="Describe the aviation legal task (e.g., 'Review this aircraft lease' or 'Triage this NDA')…"
+        rows="3"></textarea>
+      <button type="submit">Send</button>
+    </form>
+  </section>
+
+  <aside class="inspector">
+    <h3>Workflow activity</h3>
+    <ol id="activity-list" class="activity-list"></ol>
+    <h3>Generated documents</h3>
+    <ul id="artifact-list"></ul>
+  </aside>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

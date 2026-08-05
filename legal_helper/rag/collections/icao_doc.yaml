@@ -1,0 +1,10 @@
+name: icao_doc
+description: >
+  Freely-available ICAO Doc corpus. Doc 7300 (Chicago Convention, mirrored
+  from aviation_treaties for retrieval ergonomics), Doc 9082 (Charges),
+  Doc 9303 (MRTD), Doc 9957 (Facilitation Manual). The 19 ICAO Annexes
+  and Doc 9284 (DG TI) are paid-only and are NOT staged here. Per-file
+  metadata flows from corpus/icao_doc/manifest.yaml.
+sources:
+  - path: legal_helper/rag/corpus/icao_doc
+    glob: ["en/*.pdf", "zh/*.pdf"]

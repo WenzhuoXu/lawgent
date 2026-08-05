@@ -1,0 +1,41 @@
+# ICAO public Doc corpus. The 19 Annexes and Doc 9284 (DG TI) are paid
+# and NOT staged here. If your organisation has licensed copies, drop the
+# PDFs into corpus/icao_doc/{en,zh}/ and append entries below; ingest
+# picks them up.
+#
+# URLs verified May 2026.
+icao_doc_corpus_version: "2026-05-13"
+
+files:
+  # Doc 7300 — Convention on International Civil Aviation. Also lives in
+  # aviation_treaties; mirrored here for icao_doc retrieval ergonomics.
+  - file: en/doc7300_9ed.pdf
+    doc_id: "Doc 7300"
+    short_id: "doc7300"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "ICAO Doc 7300"
+    source_url: "https://www.icao.int/sites/default/files/2024-12/7300_9ed.pdf"
+
+  # Doc 9082 — ICAO's Policies on Charges for Airports and ANS (10th ed)
+  - file: en/doc9082_charges.pdf
+    doc_id: "Doc 9082"
+    short_id: "doc9082"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "ICAO Doc 9082"
+    source_url: "https://www.icao.int/sites/default/files/2025-02/9082_10ed_en.pdf"
+
+  # Doc 9957 — Facilitation Manual (1st ed, mirrored under CAPSCA path)
+  - file: en/doc9957_facilitation.pdf
+    doc_id: "Doc 9957"
+    short_id: "doc9957"
+    language: "en"
+    jurisdiction: "ICAO"
+    cite_prefix: "ICAO Doc 9957"
+    source_url: "https://www.icao.int/sites/default/files/safety/CAPSCA/PublishingImages/Pages/ICAO-Manuals/9957_cons_en.pdf"
+
+  # Doc 9303 (MRTD) Part 1 — public PDF not directly linked from
+  # icao.int/publications; landing page at
+  # https://www.icao.int/publications/doc-series/doc-9303 . When a
+  # direct URL is confirmed, add an entry here.

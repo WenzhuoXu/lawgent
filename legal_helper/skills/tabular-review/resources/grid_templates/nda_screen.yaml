@@ -1,0 +1,54 @@
+# NDA batch screen. Column discipline: references/methodology.md §2;
+# pair every column with an X — 依据 cell.
+name: nda_screen
+display_name: "NDA screen / 保密协议批量筛查"
+applies_to: [NDA, confidentiality agreement, 保密协议]
+columns:
+  - id: direction
+    header_en: "Direction"
+    header_zh: "保密义务方向"
+    type: classify
+    question: "Which party owes confidentiality obligations?"
+    enum: [mutual, one_way_us_disclosing, one_way_us_receiving]
+  - id: ci_definition
+    header_en: "Confidential Information scope"
+    header_zh: "保密信息范围"
+    type: classify
+    question: "How is Confidential Information defined?"
+    enum: [marked_only, defined_categories, all_disclosed, silent]
+  - id: term_survival
+    header_en: "Term & survival"
+    header_zh: "期限与存续"
+    type: extract
+    question: "Agreement term and post-termination survival of confidentiality, in months; note if perpetual for trade secrets."
+  - id: residuals
+    header_en: "Residuals clause?"
+    header_zh: "是否有残留信息条款"
+    type: flag
+    question: "Does a residuals clause let the receiver use retained memory of Confidential Information?"
+  - id: non_solicit
+    header_en: "Non-solicit / non-compete?"
+    header_zh: "是否含禁止招揽或竞业条款"
+    type: flag
+    question: "Does the NDA smuggle in non-solicitation or non-compete obligations?"
+  - id: regulator_carveout
+    header_en: "Regulator disclosure carve-out"
+    header_zh: "监管披露例外"
+    type: classify
+    question: "Is disclosure compelled by law/regulator permitted, and with what notice duty?"
+    enum: [permitted_with_notice, permitted_no_notice, absent]
+  - id: remedies
+    header_en: "Remedies"
+    header_zh: "救济方式"
+    type: extract
+    question: "Stated remedies for breach (injunctive relief, liquidated damages 违约金 amount, indemnity)."
+  - id: return_destruction
+    header_en: "Return / destruction"
+    header_zh: "返还或销毁义务"
+    type: extract
+    question: "Return/destruction obligations on request or termination, and archival carve-outs."
+  - id: governing_law_forum
+    header_en: "Governing law & forum"
+    header_zh: "适用法律与管辖"
+    type: extract
+    question: "Governing law and dispute forum/seat."

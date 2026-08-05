@@ -1,0 +1,39 @@
+event: message_saved
+data: {"id": "535679df399c494f", "chat_id": "dc325529acdf48fb", "role": "user", "content": "用一句话说明合同成立的三个要件。", "created_at": "2026-07-21T06:34:40.656428+00:00", "metadata": {"attachments": []}}
+
+event: message_saved
+data: {"id": "b11d22181b6a4b3f", "chat_id": "dc325529acdf48fb", "role": "assistant", "content": "", "created_at": "2026-07-21T06:34:40.781828+00:00", "metadata": {"run_status": "running", "provider": "openai", "model": "gpt-5.6-terra", "run_id": "a820701f3c5f4d34"}}
+
+event: workflow_event
+data: {"id": "c91ceb29a6674734", "chat_id": "dc325529acdf48fb", "created_at": "2026-07-21T06:34:41.172616+00:00", "event_type": "provider_turn_started", "agent_name": "orchestrator", "run_id": "36b36585af15420f", "parent_run_id": null, "data": {"ts": "2026-07-21T06:34:41.172454+00:00", "event_type": "provider_turn_started", "run_id": "36b36585af15420f", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "tools_offered": [], "reasoning_effort": "low"}}}
+
+event: workflow_event
+data: {"id": "290c519db2464bc8", "chat_id": "dc325529acdf48fb", "created_at": "2026-07-21T06:34:43.229587+00:00", "event_type": "provider_turn_finished", "agent_name": "orchestrator", "run_id": "36b36585af15420f", "parent_run_id": null, "data": {"ts": "2026-07-21T06:34:43.229483+00:00", "event_type": "provider_turn_finished", "run_id": "36b36585af15420f", "parent_run_id": null, "agent": "orchestrator", "data": {"provider": "openai", "model": "gpt-5.6-luna", "response_chars": 331, "local_tool_call_count": 0, "hosted_tool_call_count": 0, "has_evidence_verification_log": false, "has_claim_level_sanity_check": false, "has_sources": false, "latency_ms": 1936, "iterations": 1}}}
+
+event: workflow_event
+data: {"id": "e1f85af747924244", "chat_id": "dc325529acdf48fb", "created_at": "2026-07-21T06:34:43.369035+00:00", "event_type": "workflow_plan_routed", "agent_name": "orchestrator", "run_id": "36b36585af15420f", "parent_run_id": null, "data": {"ts": "2026-07-21T06:34:43.367820+00:00", "event_type": "workflow_plan_routed", "run_id": "36b36585af15420f", "parent_run_id": null, "agent": "orchestrator", "data": {"execution_mode": "direct_answer", "complexity": "simple", "routing_reason": "这是一个可直接回答的简短法律基础问题，无需检索或工具。", "agent_count": 0, "provider": "openai", "model": "gpt-5.6-luna", "usage": {"input_tokens": "***REDACTED***", "output_tokens": "***REDACTED***", "total_tokens": "***REDACTED***"}}}}
+
+event: workflow_event
+data: {"id": "c040a8b0e3b24f94", "chat_id": "dc325529acdf48fb", "created_at": "2026-07-21T06:34:43.503144+00:00", "event_type": "workflow_plan_created", "agent_name": "orchestrator", "run_id": "36b36585af15420f", "parent_run_id": null, "data": {"ts": "2026-07-21T06:34:43.501457+00:00", "event_type": "workflow_plan_created", "run_id": "36b36585af15420f", "parent_run_id": null, "agent": "orchestrator", "data": {"plan": {"title": "合同成立的三个要件", "user_language": "Chinese", "execution_mode": "direct_answer", "complexity": "simple", "direct_response": "合同成立通常需具备当事人意思表示一致、合同内容确定且双方就主要条款达成合意，以及具备相应民事行为能力（法律另有规定的除外）。", "routing_reason": "这是一个可直接回答的简短法律基础问题，无需检索或工具。", "artifact_format": null, "issue_decomposition": [], "agent_tasks": [], "integration_instructions": "", "citation_requirements": "Cite document/instrument plus pinpoint where available: article, annex, standard/recommended practice, section, paragraph, page, clause, or state `pinpoint unavailable`."}, "agent_count": 0}}}
+
+event: workflow_plan
+data: {"title": "合同成立的三个要件", "user_language": "Chinese", "execution_mode": "direct_answer", "complexity": "simple", "direct_response": "合同成立通常需具备当事人意思表示一致、合同内容确定且双方就主要条款达成合意，以及具备相应民事行为能力（法律另有规定的除外）。", "routing_reason": "这是一个可直接回答的简短法律基础问题，无需检索或工具。", "artifact_format": null, "issue_decomposition": [], "agent_tasks": [], "integration_instructions": "", "citation_requirements": "Cite document/instrument plus pinpoint where available: article, annex, standard/recommended practice, section, paragraph, page, clause, or state `pinpoint unavailable`."}
+
+event: workflow_event
+data: {"id": "d1832932d0594278", "chat_id": "dc325529acdf48fb", "created_at": "2026-07-21T06:34:43.820182+00:00", "event_type": "workflow_direct_output", "agent_name": "orchestrator", "run_id": "36b36585af15420f", "parent_run_id": null, "data": {"ts": "2026-07-21T06:34:43.819619+00:00", "event_type": "workflow_direct_output", "run_id": "36b36585af15420f", "parent_run_id": null, "agent": "orchestrator", "data": {"execution_mode": "direct_answer", "routing_reason": "这是一个可直接回答的简短法律基础问题，无需检索或工具。", "response_chars": 62, "citation_audit_considered": true}}}
+
+event: delta
+data: {"text": "合同成立通常需具备当事人意思表示一致、合同内容确定且双方就主要条款达成合意，以及具备相应民事行为能力（法律另有规定的除外）。"}
+
+event: workflow_event
+data: {"id": "d69b2d11b66f4ac9", "chat_id": "dc325529acdf48fb", "created_at": "2026-07-21T06:34:44.079167+00:00", "event_type": "citation_audit_skipped", "agent_name": "orchestrator", "run_id": "36b36585af15420f", "parent_run_id": null, "data": {"ts": "2026-07-21T06:34:44.078045+00:00", "event_type": "citation_audit_skipped", "run_id": "36b36585af15420f", "parent_run_id": null, "agent": "orchestrator", "data": {"reason": "cite-check disabled (enable_cite_check=false)"}}}
+
+event: citation_audit
+data: {"ok": true, "warnings": [], "report_markdown": "", "coverage_line": "", "do_not_file": false, "skill": "cite-check", "skipped": true, "skip_reason": "cite-check disabled (enable_cite_check=false)"}
+
+event: done
+data: {"text": "合同成立通常需具备当事人意思表示一致、合同内容确定且双方就主要条款达成合意，以及具备相应民事行为能力（法律另有规定的除外）。", "message_id": "b11d22181b6a4b3f"}
+
+event: memory_updated
+data: {"summary": "用户要求用一句话说明合同成立的三个要件；已答复：合同成立通常需具备当事人意思表示一致、合同内容确定且双方就主要条款达成合意，以及具备相应民事行为能力（法律另有规定的除外）。"}
+
