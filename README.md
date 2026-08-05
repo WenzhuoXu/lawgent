@@ -77,43 +77,23 @@ native PPTX shapes, and a per-turn cost ledger.
 
 ```mermaid
 flowchart TB
-    U["User · CLI · Web UI · HTTP API"] --> P
-
-    subgraph Plan["Planning"]
-        P["Planner<br/>routes + sizes the matter"] --> C{"Complexity dial"}
-        C -->|simple| D["Direct answer<br/>1 agent"]
-        C -->|standard / complex| W["Workflow plan<br/>N specialist tasks + dependencies"]
-    end
-
-    W --> O["Orchestrator<br/>run_skill(name, task)"]
-    D --> O
-
-    subgraph Agents["Specialist sub-agents (forked context)"]
-        S1["review-contract"]
-        S2["compliance-check"]
-        S3["litigation-analysis"]
-        S4["cite-check"]
-        S5["… 15 skills"]
-    end
-
-    O --> S1 & S2 & S3 & S4 & S5
-
-    subgraph Grounding["Grounded retrieval"]
-        CN["PRC<br/>PKULaw · flk.npc.gov.cn"]
-        US["US<br/>eCFR · FR · GovInfo · CourtListener"]
-        EU["EU<br/>EUR-Lex · EASA"]
-        ET["ET / ICAO<br/>ECAA · CAAC · FAA"]
-        RAG["Local RAG<br/>bge-m3 + Qdrant + rerank"]
-        WEB["Hosted web_search / web_fetch"]
-    end
-
-    S1 & S2 & S3 & S4 & S5 --> CN & US & EU & ET & RAG & WEB
-
-    Agents --> QC["Citation QC<br/>extract → validate → round-trip quotes → provenance tags"]
-    QC --> OUT["Deliverable<br/>memo · redline DOCX · XLSX grid · PPTX · PDF"]
-
+    U["User · CLI · Web UI · HTTP API"] --> P["Planner<br/>routes and sizes the matter"]
+    P --> C{"Complexity<br/>dial"}
+    C -->|simple| O["Orchestrator<br/>run_skill(name, task)"]
+    C -->|standard / complex| W["Workflow plan<br/>N specialist tasks + dependencies"]
+    W --> O
     PM[("Project memory<br/>brief · typed memory · rolling summary")] -.-> O
-    LED[("Usage ledger<br/>tokens + cost per turn")] -.-> OUT
+    O --> A["Specialist sub-agents · forked context<br/>15 skills — review-contract · compliance-check · litigation-analysis · cite-check · …"]
+    A --> G
+
+    subgraph G["Grounded retrieval — tools filtered by jurisdiction + active packs"]
+        direction LR
+        CN["CN<br/>PKULaw<br/>flk.npc.gov.cn"] ~~~ US["US<br/>eCFR · FR<br/>GovInfo · CourtListener"] ~~~ EU["EU<br/>EUR-Lex<br/>EASA"] ~~~ ET["ET / ICAO<br/>ECAA · CAAC · FAA"] ~~~ RAG["Local RAG<br/>bge-m3 + Qdrant<br/>+ rerank"] ~~~ WEB["Hosted<br/>web_search<br/>web_fetch"]
+    end
+
+    G --> QC["Citation QC<br/>extract → validate → round-trip quotes → provenance tags"]
+    QC --> OUT["Deliverable<br/>memo · redline DOCX · XLSX grid · PPTX · PDF"]
+    OUT -.-> LED[("Usage ledger<br/>tokens + cost per turn")]
 ```
 
 Both providers see **the same tool surface**: connectors, MCP-discovered tools, RAG,
