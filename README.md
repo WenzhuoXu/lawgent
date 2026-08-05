@@ -22,9 +22,11 @@ memo, redline, workbook, or deck.
 > **A little side project.** I built this for my girlfriend, a practising lawyer, to take
 > the grind out of the research-and-citation part of the job. It is open-sourced in case it
 > is useful to anyone else in the same position — a solo practitioner, an in-house team of
-> one, or anyone who has to be right about the law in more than one country. It is a
-> personal project, not a product: expect rough edges, and read the
-> [known gaps](#status-and-known-gaps) before you rely on it.
+> one, or anyone who has to be right about the law in more than one country. It stands on a
+> lot of other people's work — Anthropic's legal skills, their Chinese-law adaptation, and
+> plenty more in [acknowledgements](#acknowledgements). It is a personal project, not a
+> product: expect rough edges, and read the [known gaps](#status-and-known-gaps) before you
+> rely on it.
 
 > [!IMPORTANT]
 > **Not legal advice.** This harness assists with legal workflows. Every output must be
@@ -48,6 +50,7 @@ memo, redline, workbook, or deck.
 - [Repository layout](#repository-layout)
 - [Testing](#testing)
 - [Status and known gaps](#status-and-known-gaps)
+- [Acknowledgements](#acknowledgements)
 
 ---
 
@@ -513,6 +516,58 @@ Honest notes, so nobody discovers these the hard way:
 - **Corpus binaries are not committed.** `legal_helper/rag/corpus/*/manifest.yaml` and the
   fetch scripts are; the PDFs are pulled on demand via `scripts/fetch_aviation_corpus.sh`.
 - **Flowchart rendering needs Chrome** for `@mermaid-js/mermaid-cli`.
+
+---
+
+## Acknowledgements
+
+Almost nothing here is a new idea. The legal-skill structure, the citation-verification
+discipline, the retrieval stack, and the chat UI all came from other people's work; what
+this repo contributes is the assembly, the PRC-first framing, and the connector layer.
+
+### Directly adapted
+
+| Project | License | What this repo took from it |
+|---|---|---|
+| [anthropics/claude-for-legal](https://github.com/anthropics/claude-for-legal) | Apache-2.0 | The backbone. Provenance-tag taxonomy (`citations/provenance.py`), the groundedness framing (`citations/groundedness.py`), the verification-log format (`citations/log.py`), and the "say so when the source is unavailable" discipline |
+| [CSlawyer1985/claude-for-legal-ZH](https://github.com/CSlawyer1985/claude-for-legal-ZH) | Apache-2.0 | 《Claude for Legal — 中国法版本》. The reference for carrying those skills into 中国法 practice — PRC source hierarchy, 法条 pinpointing, and what a Chinese-practice skill actually needs to say |
+| [sboghossian/master-claude-for-legal](https://github.com/sboghossian/master-claude-for-legal) | see repo | The citation-verifier skill — the two-mode (exists / supports) verification procedure and the verification-report format, extended here with PRC equivalents |
+| [anthropics/skills](https://github.com/anthropics/skills) | see repo | The Agent Skills `SKILL.md` format itself, and the document-skill script pattern behind `documents/writers/scripts/` |
+| [anthropics/claude-cookbooks](https://github.com/anthropics/claude-cookbooks) | MIT | Prompting patterns distilled into `skills/flowchart/references/cookbook_patterns.md` |
+| [vercel/ai-elements](https://github.com/vercel/ai-elements) + [shadcn/ui](https://github.com/shadcn-ui/ui) | see repos | The entire chat UI component layer — conversation, message, reasoning, plan, task, tool, sources, inline-citation |
+
+### Shaped the design
+
+Surveyed rather than copied, but each changed a decision here:
+
+- [harveyai/harvey-labs](https://github.com/harveyai/harvey-labs) — the Legal Agent Benchmark; the reason grounding is an automated pass rather than a prompt instruction
+- [lawve-ai/awesome-legal-skills](https://github.com/lawve-ai/awesome-legal-skills) — the curated map of the legal Agent Skills ecosystem
+- [anylegal-ai/anylegal-oss](https://github.com/anylegal-ai/anylegal-oss) — a multi-LLM harness that loads `SKILL.md` unmodified; a useful check on the provider-parity contract
+- [Open-Source-Legal/OpenContracts](https://github.com/Open-Source-Legal/OpenContracts) — documents as a programmable citation graph
+- [iflow-mcp/lawmotion-ai-vibe-lawyering](https://github.com/iflow-mcp/lawmotion-ai-vibe-lawyering) — 法律人的 AI 工具箱; its 北大法宝 MCP notes helped wire the PKULaw path
+- [blevinstein/aviation-mcp](https://github.com/blevinstein/aviation-mcp) — prior art for MCP servers over aviation APIs
+- [legislation/legislation-mcp-ts](https://github.com/legislation/legislation-mcp-ts) — The National Archives' official legislation.gov.uk MCP; where a real UK connector should start
+- Evaluation work that set the bar for "is this actually right": [CSHaitao/LegalAgentBench](https://github.com/CSHaitao/LegalAgentBench), [SKYLENAGE-AI/PLawBench](https://github.com/SKYLENAGE-AI/PLawBench),
+  [XMUDeepLIT/LegalGraphRAG](https://github.com/XMUDeepLIT/LegalGraphRAG), and
+  [lexpath-project/LexPath](https://github.com/lexpath-project/LexPath)
+
+### Built on
+
+**Citations & case law** — [eyecite](https://github.com/freelawproject/eyecite),
+[reporters-db](https://github.com/freelawproject/reporters-db), and
+[CourtListener](https://www.courtlistener.com/) from the Free Law Project.
+**Retrieval** — [Qdrant](https://github.com/qdrant/qdrant), [BAAI bge-m3](https://huggingface.co/BAAI/bge-m3),
+[sentence-transformers](https://github.com/huggingface/sentence-transformers).
+**Tool boundary** — the [Model Context Protocol](https://modelcontextprotocol.io/).
+**Documents** — python-docx, python-pptx, openpyxl, XlsxWriter, pptxgenjs, markitdown,
+WeasyPrint, PyMuPDF, pypdf, [mermaid-cli](https://github.com/mermaid-js/mermaid-cli).
+**App** — FastAPI, React, Vite, Tailwind, streamdown, lucide.
+**Legal data** — PKULaw / 北大法宝, 国家法律法规数据库, eCFR, the Federal Register, GovInfo,
+CourtListener, EUR-Lex, EASA, CAAC, ECAA and the Federal Negarit Gazeta. Their terms apply
+to anything retrieved through them; see [NOTICE](NOTICE).
+
+If your project belongs on this list and is missing, that is an oversight rather than a
+judgement — open an issue and I will add it.
 
 ---
 

@@ -28,5 +28,22 @@ publishers.
 
 Attribution
 -----------
-The provenance-tag taxonomy in legal_helper/citations/provenance.py is
-adapted, with attribution, from anthropics/claude-for-legal.
+Material in this repository is adapted, with attribution, from:
+
+* anthropics/claude-for-legal (Apache-2.0) — provenance-tag taxonomy
+  (legal_helper/citations/provenance.py), groundedness framing
+  (citations/groundedness.py), verification-log format (citations/log.py).
+* CSlawyer1985/claude-for-legal-ZH (Apache-2.0) — PRC-law adaptation of the
+  above; reference for the 中国法 framing of the skills and playbook.
+* sboghossian/master-claude-for-legal — citation-verifier procedure and
+  verification-report format (legal_helper/citations/report.py,
+  skills/cite-check/references/).
+* anthropics/skills — the Agent Skills SKILL.md format and the document-skill
+  script pattern (legal_helper/documents/writers/scripts/).
+* anthropics/claude-cookbooks (MIT) — prompting patterns in
+  skills/flowchart/references/cookbook_patterns.md.
+* vercel/ai-elements and shadcn/ui — web UI components under
+  src/components/ai-elements/ and src/components/ui/.
+
+See the Acknowledgements section of README.md for the fuller list, including
+projects that shaped the design without contributing code.
