@@ -80,10 +80,14 @@ class Settings(BaseModel):
     parent_max_iterations: int = 8
     sub_agent_max_iterations: int = 8
     max_concurrent_agents: int | Literal["auto"] = "auto"
-    # Token budget for the per-turn within-chat context digest (rolling summary +
-    # recent transcript) fed to the planner/answer. Token-budgeted rather than a
-    # fixed message count so long pasted documents are not silently gutted.
+    # Per-turn within-chat context digest (rolling summary + recent transcript)
+    # fed to the planner/answer. The effective budget is
+    # ``chat_context_window_fraction × model window``, floored at
+    # ``chat_context_token_budget`` — so the digest scales with the model
+    # actually serving the turn instead of handing a 1M-window model the same
+    # 16K digest as a 200K one.
     chat_context_token_budget: int = 16_000
+    chat_context_window_fraction: float = 0.25
     # Compact the chat (fold older turns into the rolling summary) once the
     # transcript reaches this fraction of the model's context window — early,
     # per the Claude Code "compact at ~0.6, not 0.95" guidance.
@@ -202,6 +206,7 @@ def load_settings(*, refresh: bool = False) -> Settings:
         ),
         max_tokens=int(cfg.get("max_tokens", 32000)),
         chat_context_token_budget=int(cfg.get("chat_context_token_budget", 16000)),
+        chat_context_window_fraction=float(cfg.get("chat_context_window_fraction", 0.25)),
         chat_compaction_threshold=float(cfg.get("chat_compaction_threshold", 0.6)),
         api_key_path=api_key_path,
         outputs_dir=_PROJECT_ROOT / os.getenv("LEGAL_HELPER_OUTPUTS_DIR", cfg.get("outputs_dir", "outputs")),

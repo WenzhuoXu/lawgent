@@ -22,8 +22,10 @@ from .projects import ProjectStore, active_project
 from .workflow import WorkflowExecutor
 
 # Mirrors the server chat path's recent-message lookback
-# (server.py passes store.list_messages(chat_id, limit=12)).
-_RECENT_WINDOW = 12
+# (server.py: `_RECENT_MESSAGE_LOOKBACK`). This is a pathological-load backstop,
+# not the context bound — the digest is bounded by the token budget in
+# `workflow._build_context_block`, which scales with the serving model's window.
+_RECENT_WINDOW = 400
 
 
 def _apply_overrides(settings: Settings, args: argparse.Namespace) -> Settings:

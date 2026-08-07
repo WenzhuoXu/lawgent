@@ -243,3 +243,44 @@ def test_openai_stream_passes_max_output_tokens():
         list(provider.stream("sys", [{"role": "user", "content": "hi"}], []))
 
     assert captured[0]["max_output_tokens"] == settings.max_tokens
+
+
+def test_build_user_content_marks_digest_as_anthropic_cache_breakpoint():
+    """The chat digest must carry an explicit Anthropic cache breakpoint.
+
+    The provider only marks `system` + `tools`; anything in `messages` sits
+    past the last breakpoint. Without this, the whole context digest is
+    re-billed at full input rate on every turn.
+    """
+    from legal_helper.attachments import build_user_content
+
+    content = build_user_content(
+        "Current user request:\nnew question",
+        [],
+        "anthropic",
+        cache_prefix="Recent visible chat transcript:\nUSER: ...\nASSISTANT: ...",
+    )
+    assert isinstance(content, list) and len(content) == 2
+    prefix, volatile = content
+    assert prefix["cache_control"] == {"type": "ephemeral"}
+    assert "chat transcript" in prefix["text"]
+    # The volatile current request must sit AFTER the breakpoint, unmarked.
+    assert "cache_control" not in volatile
+    assert "new question" in volatile["text"]
+
+
+def test_build_user_content_openai_splits_without_cache_control():
+    """OpenAI caches prefixes automatically; a cache_control key would be an
+    unknown field on an `input_text` block."""
+    from legal_helper.attachments import build_user_content
+
+    content = build_user_content("req", [], "openai", cache_prefix="digest")
+    assert [b["type"] for b in content] == ["input_text", "input_text"]
+    assert all("cache_control" not in b for b in content)
+
+
+def test_build_user_content_back_compat_plain_string():
+    from legal_helper.attachments import build_user_content
+
+    assert build_user_content("just text", [], "anthropic") == "just text"
+    assert build_user_content("just text", [], "openai", cache_prefix="") == "just text"

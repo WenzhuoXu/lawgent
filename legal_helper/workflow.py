@@ -142,13 +142,17 @@ numbers.
 
 
 _SINGLE_PASS_LEGAL_SYSTEM = """You are a legal AI helper answering a focused legal
-question in a SINGLE pass. **Not legal advice** — remind the user that qualified
-counsel must approve before reliance.
+question. **Not legal advice** — remind the user that qualified counsel must
+approve before reliance.
 
 You have hosted web search / fetch and document tools directly. There are NO
 sub-agents this turn: research the question YOURSELF with your tools, then author
 the final user-facing answer. Do not emit `run_skill`, `<tool_call>`, or any
 pseudo function-call envelope as text.
+
+This turn may sit anywhere in an ongoing conversation. The conversation context
+supplied with the request is what you have already established with this user;
+build on it rather than re-deriving it.
 
 # Research, then commit
 - Identify the governing instruments and FETCH the primary sources. For any
@@ -1404,11 +1408,17 @@ def _build_context_block(
     summary). Token-budgeted rather than a fixed message count so long pasted
     documents are kept intact instead of being chopped to a fixed char cap.
     """
-    from .context import estimate_tokens, render_recent, select_recent_within_budget
+    from .context import (
+        context_budget_for,
+        estimate_tokens,
+        per_message_cap_for,
+        render_recent,
+        select_recent_within_budget,
+    )
 
     if budget_tokens is None:
         try:
-            budget_tokens = current_settings().chat_context_token_budget
+            budget_tokens = context_budget_for(current_settings())
         except Exception:  # noqa: BLE001
             budget_tokens = 16_000
 
@@ -1423,12 +1433,15 @@ def _build_context_block(
     except Exception:  # noqa: BLE001 — context injection must never break a run
         project_block = ""
 
+    # Ordering is cache-aware. The project block and the transcript are a stable
+    # growing prefix (older turns now rarely drop), so they cache across turns.
+    # The rolling summary is REGENERATED every turn by the fast model, so placing
+    # it first invalidated the prompt-cache prefix for everything after it. It
+    # goes last: volatile content after stable content.
     lines: list[str] = []
     if project_block:
         lines.append(project_block)
     summary = memory_summary.strip()
-    if summary:
-        lines.append(f"Current chat memory summary:\n{summary}")
     remaining = max(
         1_000,
         budget_tokens - estimate_tokens(summary) - estimate_tokens(project_block),
@@ -1440,10 +1453,12 @@ def _build_context_block(
             header += (
                 f" (showing the {len(windowed.kept)} most recent of "
                 f"{len(windowed.kept) + len(windowed.dropped)} turns; "
-                "earlier turns are captured in the memory summary above)"
+                "earlier turns are captured in the memory summary)"
             )
         lines.append(header)
-        lines.append(render_recent(windowed.kept))
+        lines.append(render_recent(windowed.kept, per_message_cap_for(budget_tokens)))
+    if summary:
+        lines.append(f"Current chat memory summary:\n{summary}")
     return "\n\n".join(lines)
 
 
@@ -2358,9 +2373,12 @@ class WorkflowExecutor:
                         )
                     )
                     direct_tools.append(legal_source_search)
+                # The chat digest is the stable, growing prefix of every turn in
+                # this chat; the directives + current request are the volatile
+                # tail. Split them so the prefix is cacheable (see
+                # `build_user_content(cache_prefix=...)`) instead of re-billing
+                # the whole digest at full input rate on each turn.
                 directive_parts: list[str] = []
-                if context_block:
-                    directive_parts.append(context_block)
                 if not is_general_single:
                     if (plan.integration_instructions or "").strip():
                         directive_parts.append(
@@ -2372,7 +2390,10 @@ class WorkflowExecutor:
                 directive_parts.append(f"Current user request:\n{user_message}")
                 direct_user_text = "\n\n".join(directive_parts)
                 direct_user_content = build_user_content(
-                    direct_user_text, attachment_paths, self.provider.name
+                    direct_user_text,
+                    attachment_paths,
+                    self.provider.name,
+                    cache_prefix=context_block,
                 )
                 direct_system = (
                     _GENERAL_SYSTEM_PROMPT

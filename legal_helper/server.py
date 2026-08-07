@@ -81,6 +81,11 @@ _RUN_SUBSCRIBERS: dict[str, set[queue.Queue[Optional[tuple[str, Any]]]]] = {}
 _RUN_CANCEL_EVENTS: dict[str, threading.Event] = {}
 _RUN_LOCK = threading.Lock()
 
+# Backstop against loading a pathologically long chat, NOT the context bound.
+# The context bound is the token budget in `workflow._build_context_block`,
+# which scales with the serving model's window.
+_RECENT_MESSAGE_LOOKBACK = 400
+
 
 class ChatRequest(BaseModel):
     message: str
@@ -992,7 +997,15 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     return
 
                 executor = WorkflowExecutor(settings=run_settings)
-                recent = [m for m in store.list_messages(chat_id, limit=12) if m.id != assistant_msg.id]
+                # Lookback is a pathological-load backstop only; the real bound is
+                # the token budget in `_build_context_block`, which scales with the
+                # serving model's window. A hard 12-message cap on top of that
+                # budget was dropping turns from chats that used 3% of the window.
+                recent = [
+                    m
+                    for m in store.list_messages(chat_id, limit=_RECENT_MESSAGE_LOOKBACK)
+                    if m.id != assistant_msg.id
+                ]
                 attachments = _chat_context_attachment_paths(
                     store,
                     chat_id,

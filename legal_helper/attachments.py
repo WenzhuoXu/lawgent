@@ -426,6 +426,8 @@ def build_user_content(
     text: str,
     attachments: Iterable[Union[Path, str, AttachmentInfo]],
     provider: str,
+    *,
+    cache_prefix: str = "",
 ) -> Any:
     """Return either a plain string (no attachments) or a list of provider blocks.
 
@@ -435,9 +437,19 @@ def build_user_content(
     block (selectable text + speaker notes via python-pptx). This mirrors
     Anthropic's official PPTX skill split (`markitdown` for text +
     thumbnails for visual analysis).
+
+    ``cache_prefix`` is the STABLE part of the turn (the chat context digest):
+    it is emitted as its own leading block so the growing conversation prefix
+    can be cached, with ``text`` — the volatile current request — after it.
+    Anthropic prompt caching is an explicit prefix breakpoint, and the provider
+    only marks ``system`` + ``tools``; without this, everything in ``messages``
+    (i.e. the entire context digest) is re-billed at full input rate every
+    turn. OpenAI caches prefixes automatically and needs no marker, but gets
+    the same ordering so the two providers stay byte-comparable.
     """
     items = [a for a in attachments if a is not None]
-    if not items:
+    prefix = cache_prefix if cache_prefix and cache_prefix.strip() else ""
+    if not items and not prefix:
         return text
     infos = [_to_info(a) for a in items]
     blocks: list[dict[str, Any]] = []
@@ -446,6 +458,11 @@ def build_user_content(
             blocks.append(build_anthropic_block(info))
             if _is_pptx(info):
                 blocks.append(_pptx_text_companion_anthropic(info))
+        if prefix:
+            # Breakpoint on the last stable block: caches attachments + digest.
+            blocks.append(
+                {"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}
+            )
         if text and text.strip():
             blocks.append({"type": "text", "text": text})
     else:
@@ -453,6 +470,8 @@ def build_user_content(
             blocks.append(build_openai_block(info))
             if _is_pptx(info):
                 blocks.append(_pptx_text_companion_openai(info))
+        if prefix:
+            blocks.append({"type": "input_text", "text": prefix})
         if text and text.strip():
             blocks.append({"type": "input_text", "text": text})
     return blocks

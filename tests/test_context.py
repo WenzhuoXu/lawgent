@@ -3,8 +3,11 @@ from __future__ import annotations
 from legal_helper.chat_models import ChatMessage
 from legal_helper.config import load_settings
 from legal_helper.context import (
+    compact_verification_appendix,
+    context_budget_for,
     context_window_for,
     estimate_tokens,
+    per_message_cap_for,
     render_recent,
     select_recent_within_budget,
     should_compact,
@@ -79,3 +82,71 @@ def test_build_context_block_small_chat_no_drop_note():
     block = _build_context_block("", msgs, budget_tokens=16000)
     assert "captured in the memory summary" not in block
     assert "hello" in block and "hi there" in block
+
+
+def test_context_budget_scales_with_model_window():
+    s = load_settings(refresh=True)
+    window = context_window_for(s)
+    budget = context_budget_for(s)
+    # A share of the window, never below the configured floor.
+    assert budget >= s.chat_context_token_budget
+    assert budget <= window
+    # A 1M-window model must not get the same digest as a 200K one.
+    big = s.model_copy(update={"chat_context_window_fraction": 0.25})
+    assert context_budget_for(big) >= int(0.25 * window)
+
+
+def test_per_message_cap_derives_from_budget():
+    # Small budget keeps the old floor; a large budget lets a full prior answer
+    # through instead of truncating it mid-table.
+    assert per_message_cap_for(16_000) == 4_000
+    assert per_message_cap_for(250_000) > 50_000
+
+
+def test_compact_verification_appendix_collapses_table():
+    answer = (
+        "## 结论\n\n正文引用 [中华人民共和国民法典](https://example.com/a) 第 465 条。\n\n"
+        "## 资料来源与核验\n\n"
+        "| # | 主张/Claim | 依据/Pinpoint | 在线核验 | 备注/Note |\n"
+        "|---|---|---|:---:|---|\n"
+        "| 1 | 合同依法成立即生效 | [民法典, 第 465 条](https://example.com/b) | ✔ | 无 |\n"
+        "| 2 | 格式条款提示说明义务 | [民法典, 第 496 条](https://example.com/c) | ✔ | 无 |\n"
+    )
+    out = compact_verification_appendix(answer)
+    # Claim + pinpoint survive; table syntax, status and note columns do not.
+    assert "合同依法成立即生效" in out and "第 465 条" in out
+    assert "格式条款提示说明义务" in out and "第 496 条" in out
+    assert "|---" not in out
+    assert "在线核验" not in out
+    assert estimate_tokens(out) < estimate_tokens(answer)
+    # The body above the appendix is untouched, inline links included.
+    assert "[中华人民共和国民法典](https://example.com/a)" in out
+
+
+def test_compact_verification_appendix_leaves_body_tables_alone():
+    answer = (
+        "## 对比\n\n"
+        "| 类别 | 处理 |\n|---|---|\n| A | B |\n\n"
+        "没有资料来源章节。\n"
+    )
+    assert compact_verification_appendix(answer) == answer
+
+
+def test_render_recent_compacts_only_assistant_appendix():
+    appendix = (
+        "答复正文。\n\n## 资料来源与核验\n\n"
+        "| # | 主张/Claim | 依据/Pinpoint |\n|---|---|---|\n| 1 | 主张甲 | 来源甲 |\n"
+    )
+    out = render_recent([_m("assistant", appendix), _m("user", appendix)], 8000)
+    assistant_part, user_part = out.split("USER: ")
+    # assistant copy compacted, user copy replayed verbatim
+    assert "|---" not in assistant_part and "- 主张甲 — 来源甲" in assistant_part
+    assert "|---" in user_part
+
+
+def test_build_context_block_puts_volatile_summary_after_stable_transcript():
+    msgs = [_m("user", "hello"), _m("assistant", "hi there")]
+    block = _build_context_block("rolling summary text", msgs, budget_tokens=16000)
+    assert block.index("Recent visible chat transcript:") < block.index(
+        "Current chat memory summary:"
+    )
