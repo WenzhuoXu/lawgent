@@ -15,6 +15,7 @@ from anthropic.lib.tools._beta_functions import (
 from ..attachments import needs_anthropic_files_beta
 from ..config import Settings
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
+from ..tools.multimodal import split_inline_images, to_anthropic_tool_content
 from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
 
@@ -128,7 +129,11 @@ def _instrument_local_tools(tools: list[Any], *, provider: str, model: str) -> l
                         },
                     )
                     raise
-                output_str = result if isinstance(result, str) else str(result)
+                # Tools that render pages return their images inline via the
+                # __inline_images__ protocol; expand them into tool_result
+                # content blocks so the model actually SEES what it produced.
+                # Log the text half only — base64 must never hit the log.
+                output_str, images = split_inline_images(result)
                 log_workflow_event(
                     "local_tool_call_finished",
                     {
@@ -137,9 +142,10 @@ def _instrument_local_tools(tools: list[Any], *, provider: str, model: str) -> l
                         "tool_name": _name,
                         "output_preview": output_str[:1200],
                         "output_chars": len(output_str),
+                        **({"inline_images": len(images)} if images else {}),
                     },
                 )
-                return result
+                return to_anthropic_tool_content(result) if images else result
 
             return instrumented_call
 

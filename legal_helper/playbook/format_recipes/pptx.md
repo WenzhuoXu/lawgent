@@ -10,10 +10,13 @@ Read this before any non-trivial deck edit. PPTX has three distinct surfaces
 | Vision (multimodal) | **Read uploaded decks here.** The runtime converts attached `.pptx`/`.ppt` to PDF and sends pages as a multimodal block alongside a text companion with selectable text + speaker notes. Use the slide images for layout, shapes, arrows, colors, swimlanes. |
 | `inspect_pptx` | Slide count, layouts, shape counts, tables/images, text runs, speaker notes. Text-only — a fallback, not the primary surface. |
 | `read_document` | Plain text + notes extraction. |
-| `write_pptx` | New decks with varied layouts, charts, images, master slides. |
+| `write_pptx_from_html` | **Preferred for new decks.** Lay slides out in HTML/CSS; Chromium measures them and the geometry maps onto native PowerPoint shapes, text, and tables. Use whenever the deck needs real visual structure. |
+| `read_deck_stylesheet` | The CSS design system to author against. Read before writing HTML slides. |
+| `write_pptx` | New decks constrained to the ten fixed layouts. Use when the content genuinely is a title + bullets + one chart. |
 | `edit_pptx_text` | Exact text find/replace, keyed by 1-based slide number. |
 | `reshape_pptx` | **Any structural reshape** — duplicate / delete / reorder slides, rewrite a specific shape's text by index/name/placeholder idx, update speaker notes. |
-| `render_pptx_slides` | Visual QA via soffice → PDF → JPGs. Catches overlapping elements, clipped text, low contrast, alignment drift. |
+| `render_pptx_slides` | Visual QA. Returns the slides **as images** — a labeled contact sheet you must actually look at. |
+| `view_image` | Full-resolution look at one slide after the contact sheet flags a problem. |
 
 ## The cardinal rule
 
@@ -34,9 +37,39 @@ the carry-over text.
    - duplicate / delete / reorder a slide, retarget one shape, update
      speaker notes → `reshape_pptx`
    - new deck from scratch → `write_pptx`
-4. `render_pptx_slides(output)` after non-trivial edits and look for
-   overlapping elements, clipped text, leftover placeholders, speaker
-   notes that no longer match the slide.
+4. `render_pptx_slides(output)` after **every** deck write or non-trivial
+   edit. It returns the slides as images — look at them. You are checking
+   for: blank or near-empty slides, text overflowing its box, overlapping
+   elements, clipped tables, leftover placeholders, inconsistent margins,
+   speaker notes that no longer match the slide. Fix what you see and
+   re-render. Do not report a deck as finished on a render you did not read.
+
+## Authoring with `write_pptx_from_html` (preferred)
+
+The ten fixed layouts cannot express a card grid, a sidebar, a KPI band, or
+a numbered process strip — anything they do not cover degrades to a bullet
+list. Author those in HTML instead:
+
+1. `read_deck_stylesheet()` and inline the CSS in a `<style>` block.
+2. Write one `<section class="slide">` per slide — exactly 1280x720 px
+   (13.333in x 7.5in at 96 px/in). Keep content inside the ~52px margin.
+3. Compose from the supplied components: `.slide--cover`, `.slide--section`,
+   `.card` (+`--accent`/`--risk`/`--ok`), `.grid--2|3|4`, `.kpi`, `.steps`,
+   `<table>`, `.footer`. Override the `:root` custom properties for a client
+   palette.
+4. Put speaker notes in `data-notes` on the slide element.
+5. Mark SVG, gradients, and charts with `data-raster` so they are captured as
+   pictures rather than rebuilt as shapes.
+6. `write_pptx_from_html(...)` then `render_pptx_slides(...)` and look.
+
+Text stays editable text, boxes stay shapes, `<table>` stays a real table —
+the client can restyle the deck in PowerPoint afterwards.
+
+**A note on renderer failures.** If `write_pptx` returns
+`"status": "DEGRADED"`, the pptxgenjs renderer was unavailable and the deck
+was written by a fallback that drops tables, charts, flowcharts, stats,
+images, and masters. Fix the environment and write it again — never hand a
+degraded deck to the user.
 
 ## `reshape_pptx` operations
 

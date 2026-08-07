@@ -107,15 +107,15 @@ def _format_comments(comments: list[dict[str, str]]) -> list[str]:
 
 
 def extract_docx_text(path: Path, *, include_comments: bool = True) -> str:
-    """Markdown-style text via MarkItDown (preferred) or python-docx (fallback).
+    """Markdown-style text via the tiered converter or python-docx (fallback).
 
-    Word comments are not surfaced by MarkItDown; we always overlay them from
-    ``_docx_comments`` when ``include_comments`` is True.
+    Word comments are not surfaced by either converter; we always overlay them
+    from ``_docx_comments`` when ``include_comments`` is True.
     """
-    from ._markitdown import markitdown_convert
+    from ._convert import convert_to_markdown
 
     try:
-        body = markitdown_convert(path).strip()
+        body = convert_to_markdown(path).strip()
     except Exception:
         body = _docx_text_via_python_docx(path)
     if include_comments:
@@ -312,11 +312,11 @@ def _pptx_text_via_python_pptx(path: Path) -> str:
 
 
 def extract_pptx_text(path: Path) -> str:
-    """Markdown via MarkItDown, falling back to python-pptx + raw XML."""
-    from ._markitdown import markitdown_convert
+    """Markdown via the tiered converter, falling back to python-pptx + raw XML."""
+    from ._convert import convert_to_markdown
 
     try:
-        return markitdown_convert(path).strip()
+        return convert_to_markdown(path).strip()
     except Exception:
         return _pptx_text_via_python_pptx(path)
 
@@ -531,11 +531,11 @@ def _xlsx_text_via_openpyxl(path: Path) -> str:
 
 
 def extract_xlsx_text(path: Path) -> str:
-    """Markdown via MarkItDown, falling back to openpyxl pipe-delimited text."""
-    from ._markitdown import markitdown_convert
+    """Markdown via the tiered converter, falling back to openpyxl pipe-delimited text."""
+    from ._convert import convert_to_markdown
 
     try:
-        return markitdown_convert(path).strip()
+        return convert_to_markdown(path).strip()
     except Exception:
         return _xlsx_text_via_openpyxl(path)
 

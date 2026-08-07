@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from ..config import Settings
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
+from ..tools.multimodal import split_inline_images, to_openai_tool_content
 from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
 
@@ -297,7 +298,8 @@ class OpenAIProvider:
                             "iteration": iterations,
                         },
                     )
-                    output_str = _call_local_tool(tools_by_name, name, args)
+                    raw_output = _call_local_tool(tools_by_name, name, args)
+                    output_str, images = split_inline_images(raw_output)
                     log_workflow_event(
                         "local_tool_call_finished",
                         {
@@ -307,13 +309,14 @@ class OpenAIProvider:
                             "output_preview": output_str[:1200],
                             "output_chars": len(output_str),
                             "iteration": iterations,
+                            **({"inline_images": len(images)} if images else {}),
                         },
                     )
                     input_items.append(
                         {
                             "type": "function_call_output",
                             "call_id": call_id,
-                            "output": output_str,
+                            "output": to_openai_tool_content(raw_output) if images else output_str,
                         }
                     )
                 previous_response_id = last_response_id
@@ -507,7 +510,8 @@ class OpenAIProvider:
                             "iteration": iterations,
                         },
                     )
-                    output_str = _call_local_tool(tools_by_name, name, args)
+                    raw_output = _call_local_tool(tools_by_name, name, args)
+                    output_str, images = split_inline_images(raw_output)
                     log_workflow_event(
                         "local_tool_call_finished",
                         {
@@ -517,10 +521,15 @@ class OpenAIProvider:
                             "output_preview": output_str[:1200],
                             "output_chars": len(output_str),
                             "iteration": iterations,
+                            **({"inline_images": len(images)} if images else {}),
                         },
                     )
                     input_items.append(
-                        {"type": "function_call_output", "call_id": call_id, "output": output_str}
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": to_openai_tool_content(raw_output) if images else output_str,
+                        }
                     )
                 previous_response_id = last_response_id
 

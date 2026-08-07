@@ -60,7 +60,7 @@ def test_pptx_writer_reports_renderer(tmp_path):
 def test_pptx_fallback_reports_dropped_features(tmp_path, monkeypatch):
     import legal_helper.documents.writers.pptx as pptx_mod
 
-    monkeypatch.setattr(pptx_mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(pptx_mod, "find_node", lambda: None)
     out = tmp_path / "deck.pptx"
     result = write_pptx_deck(
         out,
@@ -100,7 +100,7 @@ def test_pptx_fallback_reports_dropped_features(tmp_path, monkeypatch):
 def test_pptx_lang_auto_detection_and_override(tmp_path, monkeypatch):
     import legal_helper.documents.writers.pptx as pptx_mod
 
-    monkeypatch.setattr(pptx_mod.shutil, "which", lambda name: None)
+    monkeypatch.setattr(pptx_mod, "find_node", lambda: None)
     latin = write_pptx_deck(tmp_path / "en.pptx", [{"title": "Overview", "bullets": []}])
     assert latin["lang"] == "en-US"
     forced = write_pptx_deck(

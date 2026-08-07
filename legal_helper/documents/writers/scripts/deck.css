@@ -1,0 +1,147 @@
+/* Deck stylesheet for the html2pptx path — 13.333in x 7.5in at 96px/in.
+ *
+ * A starting design system, not a straitjacket: override the custom
+ * properties for a client palette and add layouts freely. What matters is the
+ * geometry contract — every slide is a .slide element of exactly 1280x720 px,
+ * because that is what the converter maps onto the PowerPoint canvas.
+ *
+ * CJK: the font stacks name Simplified-Chinese families first for zh decks so
+ * Han glyphs resolve to zh-CN forms rather than the Japanese variants a bare
+ * sans-serif fallback picks.
+ */
+
+:root {
+  --ink: #17202A;
+  --muted: #5D6D7E;
+  --paper: #FFFFFF;
+  --soft: #F4F6F7;
+  --line: #D6DBDF;
+  --accent: #1F4E79;
+  --accent-soft: #E8EFF6;
+  --ok: #2E7D5B;
+  --warn: #B7791F;
+  --risk: #B23B3B;
+
+  --font-head: "Aptos Display", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --font-body: "Aptos", "Segoe UI", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+
+  --margin: 52px;   /* ≈0.55in — keep all content inside this */
+  --gap: 28px;      /* ≈0.3in minimum between blocks */
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: #8A8F94;
+}
+
+/* The geometry contract. Do not change the dimensions. */
+.slide {
+  position: relative;
+  width: 1280px;
+  height: 720px;
+  background: var(--paper);
+  overflow: hidden;
+  margin: 0 auto 24px;
+  padding: var(--margin);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+/* ---- Title & section covers ------------------------------------------- */
+
+.slide--cover { background: var(--accent); color: #fff; justify-content: center; }
+.slide--cover h1 { font-family: var(--font-head); font-size: 54px; font-weight: 700; line-height: 1.15; }
+.slide--cover .sub { font-size: 22px; opacity: 0.88; margin-top: 18px; }
+.slide--cover .meta { font-size: 15px; opacity: 0.72; margin-top: 44px; }
+
+.slide--section { background: var(--accent-soft); justify-content: center; }
+.slide--section h2 { font-family: var(--font-head); font-size: 42px; color: var(--accent); }
+.slide--section .sub { font-size: 19px; color: var(--muted); margin-top: 14px; }
+
+/* ---- Standard content slide ------------------------------------------- */
+
+.slide h2.title {
+  font-family: var(--font-head);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1.25;
+  flex: 0 0 auto;
+}
+.slide .kicker { font-size: 14px; color: var(--accent); font-weight: 600; letter-spacing: 0.5px; }
+.slide .lede { font-size: 18px; color: var(--muted); line-height: 1.45; }
+.body { flex: 1 1 auto; display: flex; gap: var(--gap); min-height: 0; }
+.col { flex: 1 1 0; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+
+/* ---- Cards, the workhorse --------------------------------------------- */
+
+.card {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.card--accent { background: var(--accent-soft); border-color: #BBD0E4; }
+.card--risk   { background: #FBEDED; border-color: #E7C3C3; }
+.card--ok     { background: #EDF6F1; border-color: #C2DED0; }
+.card h3 { font-family: var(--font-head); font-size: 19px; color: var(--accent); }
+.card p  { font-size: 16px; line-height: 1.5; }
+.card .note { font-size: 13px; color: var(--muted); }
+
+.grid { display: grid; gap: 18px; flex: 1 1 auto; min-height: 0; }
+.grid--2 { grid-template-columns: repeat(2, 1fr); }
+.grid--3 { grid-template-columns: repeat(3, 1fr); }
+.grid--4 { grid-template-columns: repeat(4, 1fr); }
+
+/* ---- KPI band ---------------------------------------------------------- */
+
+.kpis { display: flex; gap: 18px; flex: 0 0 auto; }
+.kpi { flex: 1 1 0; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+.kpi .value { font-family: var(--font-head); font-size: 40px; font-weight: 700; color: var(--accent); line-height: 1.1; }
+.kpi .label { font-size: 14px; color: var(--muted); margin-top: 6px; }
+
+/* ---- Numbered process strip -------------------------------------------- */
+
+/* flex:1 claims the leftover height so the strip is not stranded at the top of
+   the slide. Keep align-items:stretch — centring sizes each card to its own
+   text, so cards with different copy lengths end up on different baselines,
+   which reads as sloppy even though the CSS is correct. */
+.steps { display: flex; gap: 14px; align-items: stretch; flex: 1 1 auto; }
+.step { flex: 1 1 0; background: var(--soft); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+.step .n {
+  width: 34px; height: 34px; border-radius: 17px; background: var(--accent); color: #fff;
+  display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px;
+}
+.step h4 { font-size: 16px; margin: 12px 0 6px; }
+.step p  { font-size: 13px; color: var(--muted); line-height: 1.45; }
+
+/* ---- Tables ------------------------------------------------------------ */
+
+table { width: 100%; border-collapse: collapse; font-size: 15px; }
+th, td { border: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }
+th { background: var(--accent); color: #fff; font-weight: 600; }
+tbody tr:nth-child(even) td { background: var(--soft); }
+
+/* ---- Lists ------------------------------------------------------------- */
+
+ul, ol { padding-left: 22px; }
+li { font-size: 17px; line-height: 1.55; margin-bottom: 8px; }
+
+/* ---- Footer ------------------------------------------------------------ */
+
+.footer {
+  position: absolute; left: var(--margin); right: var(--margin); bottom: 22px;
+  display: flex; justify-content: space-between;
+  font-size: 11px; color: var(--muted);
+  border-top: 1px solid var(--line); padding-top: 8px;
+}
+
+/* Mark anything the converter should rasterise rather than rebuild:
+   <div data-raster> ... svg / gradient / chart ... </div> */
+[data-raster] { background: transparent; }

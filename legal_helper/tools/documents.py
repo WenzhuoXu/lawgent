@@ -455,7 +455,10 @@ def edit_docx_text(source_path: str, filename: str, replacements: list[DocxTextR
 
 @beta_tool
 def render_docx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150) -> str:
-    """Render a .docx document to PDF and per-page JPEG images for visual QA.
+    """Render a .docx document to page images and return them for visual QA.
+
+    The rendered pages come back inline as images — look at them, do not just
+    read the paths. Call this after any non-trivial write or edit.
 
     Args:
         path: Absolute or project-relative path to the .docx file.
@@ -493,7 +496,14 @@ def render_docx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150)
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
-    return json.dumps({"pdf": str(pdf.resolve()), **rendered}, ensure_ascii=False, indent=2)
+    return _visual_result(
+        {"pdf": str(pdf.resolve()), **{k: v for k, v in rendered.items() if k != "images"},
+         "images": rendered.get("images", [])},
+        rendered.get("images", []),
+        out_dir,
+        safe_prefix,
+        label="Page",
+    )
 
 
 @beta_tool
@@ -529,6 +539,43 @@ def write_xlsx(filename: str, sheets: list[Sheet]) -> str:
             indent=2,
         )
     return str(out.resolve())
+
+
+def _visual_result(
+    payload: dict[str, Any],
+    images: list[str],
+    out_dir: Path,
+    prefix: str,
+    *,
+    label: str = "Page",
+) -> str:
+    """Attach a labeled contact sheet to a render result so the model SEES it.
+
+    Tool results reach the model as content blocks, so the rendered pages come
+    back inline rather than as a path list the model cannot open. Full-size
+    per-page JPEGs stay on disk; ``view_image`` reads one when fine detail
+    matters.
+    """
+    from ..documents.contact_sheet import build_contact_sheets
+    from .multimodal import image_result
+
+    paths = [Path(p) for p in images]
+    try:
+        sheets = build_contact_sheets(paths, out_dir, prefix, label=label)
+    except Exception as exc:
+        payload = {**payload, "contact_sheet_error": f"{type(exc).__name__}: {exc}"}
+        sheets = []
+    body = {
+        **payload,
+        "contact_sheets": [str(p.resolve()) for p in sheets],
+        "visual_qa": (
+            f"The images below are the rendered {label.lower()}s. Check each for "
+            "text overflowing its box, blank or near-empty pages, overlapping "
+            "elements, clipped tables, and inconsistent margins. Fix and re-render "
+            "before reporting the file as done."
+        ),
+    }
+    return image_result(body, sheets or paths)
 
 
 def _resolve_read_path(path: str) -> Path:
@@ -723,13 +770,98 @@ def write_pptx(
     out = _output_path(filename, "pptx")
     payload = [s.model_dump() for s in slides]
     prepare_flowchart_slides(payload)
-    write_pptx_deck(
+    result = write_pptx_deck(
         out,
         payload,
         title=title,
         masters=[m.model_dump() for m in (masters or [])],
     )
+    # The minimal OOXML fallback silently drops tables, charts, flowcharts,
+    # stats, images, and masters, and flattens every layout to bullets. Never
+    # report that as a plain success — the caller must know the deck it just
+    # "wrote" is not the deck it specified.
+    # Stay on this module's string contract: a successful write returns the
+    # path, a failure returns an "ERROR:"-prefixed string. Returning a JSON
+    # object here instead would break every caller that chains the result
+    # straight into render_pptx_slides / inspect_pptx as a path.
+    if result.get("renderer") != "pptxgenjs":
+        dropped = ", ".join(result.get("dropped_features", [])) or "none recorded"
+        return (
+            f"ERROR: deck written to {out.resolve()} but DEGRADED — the pptxgenjs "
+            f"renderer was unavailable, so the minimal OOXML fallback wrote it and "
+            f"these features were dropped: {dropped}. "
+            f"Renderer error: {result.get('renderer_error', '')}. "
+            "Install it with `npm i pptxgenjs` in the repo root and write the deck "
+            "again. Do not present this file to the user as finished."
+        )
     return str(out.resolve())
+
+
+@beta_tool
+def read_deck_stylesheet() -> str:
+    """Read the built-in deck stylesheet for ``write_pptx_from_html``.
+
+    Returns the CSS design system (palette variables, .slide geometry, card /
+    grid / kpi / step / table components) to inline into the ``<style>`` block.
+    Read this before authoring HTML slides, then override the custom
+    properties for the client's palette.
+    """
+    from ..documents.writers.html_pptx import deck_stylesheet
+
+    css = deck_stylesheet()
+    return css or "ERROR: deck.css not found"
+
+
+@beta_tool
+def write_pptx_from_html(
+    filename: str,
+    html: str,
+    title: str = "Presentation",
+    raster_selectors: list[str] | None = None,
+) -> str:
+    """Write a .pptx by laying slides out in HTML/CSS. Returns a JSON report.
+
+    Use this instead of ``write_pptx`` whenever the deck needs a layout the
+    fixed enum does not cover — card grids, sidebars, KPI bands, numbered
+    process strips, overlapping heroes, anything with real visual structure.
+    Chromium renders the HTML and the computed geometry is mapped onto native
+    PowerPoint objects, so text stays editable text, boxes stay shapes, and
+    ``<table>`` stays a real table.
+
+    Contract: every slide is one element with ``class="slide"``, exactly
+    1280x720 px (13.333in x 7.5in at 96px/in). Call ``read_deck_stylesheet``
+    first and inline it in a ``<style>`` block. Keep content inside a ~52px
+    margin. Mark SVG/gradient/chart blocks with ``data-raster`` so they are
+    captured as pictures instead of being rebuilt as shapes.
+
+    Always call ``render_pptx_slides`` afterwards and look at the result.
+
+    Args:
+        filename: Desired filename (with or without .pptx extension).
+        html: Full HTML document containing one or more .slide elements.
+        title: Deck title metadata.
+        raster_selectors: Extra CSS selectors to rasterise, e.g. [".chart", ".logo"].
+    """
+    from ..documents.writers.html_pptx import write_pptx_from_html as _render
+
+    out = _output_path(filename, "pptx")
+    try:
+        report = _render(
+            out,
+            html,
+            title=title,
+            lang="zh-CN" if re.search(r"[一-鿿]", html) else "en-US",
+            raster_selectors=raster_selectors or [],
+        )
+    except Exception as e:
+        return (
+            f"ERROR: html2pptx failed: {e}\n\n"
+            "Fall back to write_pptx with the fixed layouts, or fix the HTML "
+            "and retry. Every slide must be an element with class=\"slide\"."
+        )
+    report["path"] = str(out.resolve())
+    report["next_step"] = "Call render_pptx_slides on this path and inspect the slides before reporting done."
+    return json.dumps(report, ensure_ascii=False, indent=2)
 
 
 @beta_tool
@@ -776,7 +908,11 @@ def edit_pptx_text(source_path: str, filename: str, replacements: list[SlideText
 
 @beta_tool
 def render_pptx_slides(path: str, filename_prefix: str = "slides", dpi: int = 150) -> str:
-    """Render a .pptx deck to PDF and per-slide JPEG images for visual QA.
+    """Render a .pptx deck to slide images and return them for visual QA.
+
+    The slides come back inline as a labeled contact sheet — look at them, do
+    not just read the paths. Call this after every write_pptx / edit and fix
+    what you see before reporting the deck as done.
 
     Args:
         path: Absolute or project-relative path to the .pptx file.
@@ -815,10 +951,12 @@ def render_pptx_slides(path: str, filename_prefix: str = "slides", dpi: int = 15
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
     images = sorted(str(p.resolve()) for p in out_dir.glob(f"{safe_prefix}-*.jpg"))
-    return json.dumps(
+    return _visual_result(
         {"pdf": str(pdf.resolve()), "images": images, "count": len(images)},
-        ensure_ascii=False,
-        indent=2,
+        images,
+        out_dir,
+        safe_prefix,
+        label="Slide",
     )
 
 
@@ -864,7 +1002,10 @@ def extract_pdf_tables(path: str, max_pages: int = 20) -> str:
 
 @beta_tool
 def render_pdf_pages(path: str, filename_prefix: str = "pages", dpi: int = 150, first_page: int | None = None, last_page: int | None = None) -> str:
-    """Render a PDF to per-page JPEG images for visual QA.
+    """Render a PDF to page images and return them for visual QA.
+
+    The pages come back inline as a labeled contact sheet — look at them, do
+    not just read the paths.
 
     Args:
         path: Absolute or project-relative path to the PDF.
@@ -895,7 +1036,13 @@ def render_pdf_pages(path: str, filename_prefix: str = "pages", dpi: int = 150, 
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
-    return json.dumps({"pdf": str(source.resolve()), **rendered}, ensure_ascii=False, indent=2)
+    return _visual_result(
+        {"pdf": str(source.resolve()), **rendered},
+        rendered.get("images", []),
+        out_dir,
+        safe_prefix,
+        label="Page",
+    )
 
 
 @beta_tool
@@ -1082,7 +1229,41 @@ def render_xlsx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150)
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
-    return json.dumps(rendered, ensure_ascii=False, indent=2)
+    return _visual_result(rendered, rendered.get("images", []), out_dir, safe_prefix, label="Page")
+
+
+@beta_tool
+def view_image(path: str, max_edge: int = 1400) -> str:
+    """Look at an image file. Returns the image itself, not a description.
+
+    Use for full-resolution inspection of one page or slide after a
+    ``render_*`` contact sheet flags a problem, and for any chart PNG, scan,
+    stamp (盖章), signature block, or evidence photo on disk.
+
+    Args:
+        path: Absolute or project-relative path to a .jpg/.jpeg/.png/.webp/.gif/.bmp file.
+        max_edge: Longest edge in pixels after downscaling, clamped to 400-1600.
+    """
+    from .multimodal import image_result
+
+    p = _resolve_read_path(path)
+    if not p.is_file():
+        return f"ERROR: File not found: {p}"
+    if p.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}:
+        return f"ERROR: view_image only supports raster image files: {p}"
+    try:
+        from PIL import Image
+
+        with Image.open(p) as im:
+            size = {"width": im.width, "height": im.height}
+    except Exception as e:
+        return f"ERROR reading {p}: {e}"
+    return image_result(
+        {"path": str(p.resolve()), **size},
+        [p],
+        max_images=1,
+        max_edge=max(400, min(int(max_edge), 1600)),
+    )
 
 
 @beta_tool

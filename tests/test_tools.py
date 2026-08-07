@@ -395,6 +395,10 @@ def test_xlsx_range_diff_and_checked_edit(tmp_path, monkeypatch):
 
 
 def test_write_inspect_and_edit_pptx(tmp_path, monkeypatch):
+    from legal_helper.documents.writers.pptx import pptxgenjs_available
+
+    if not pptxgenjs_available():
+        pytest.skip("pptxgenjs renderer unavailable; run `npm i` in the repo root")
     monkeypatch.setenv("LEGAL_HELPER_OUTPUTS_DIR", str(tmp_path / "out"))
     from legal_helper import config as cfg
 
@@ -432,8 +436,12 @@ def test_write_inspect_and_edit_pptx(tmp_path, monkeypatch):
 def test_render_pptx_slides(tmp_path, monkeypatch):
     import shutil
 
+    from legal_helper.documents.writers.pptx import pptxgenjs_available
+
     if not shutil.which("soffice") or not shutil.which("pdftoppm"):
         pytest.skip("soffice and pdftoppm are required for slide rendering")
+    if not pptxgenjs_available():
+        pytest.skip("pptxgenjs renderer unavailable; run `npm i` in the repo root")
 
     monkeypatch.setenv("LEGAL_HELPER_OUTPUTS_DIR", str(tmp_path / "out"))
     from legal_helper import config as cfg

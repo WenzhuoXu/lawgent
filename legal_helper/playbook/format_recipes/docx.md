@@ -32,9 +32,12 @@ the same text in the same place.
      `edit_docx_text`
    - paragraph / table row inserts, deletes, restyles → `reshape_docx`
    - whole new document → `write_docx`
-4. When layout matters, `render_docx_pages(output)` and check for clipped
-   tables, overlapping text, missing headers/footers.
-5. Re-inspect the output before declaring done.
+4. When layout matters, `render_docx_pages(output)`. It returns the pages
+   **as images** — look at them and check for clipped tables, overlapping
+   text, missing headers/footers, orphaned headings, and page breaks in the
+   wrong place. Use `view_image` on a single page for fine detail.
+5. Re-inspect the output before declaring done. A render you did not read is
+   not visual QA.
 
 ## `reshape_docx` operations
 

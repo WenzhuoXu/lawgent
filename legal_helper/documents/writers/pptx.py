@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 import zipfile
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
+
+from ._node import find_node, node_diagnostic
 
 
 _A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -102,6 +103,31 @@ def _fallback_dropped_features(
     return dropped
 
 
+def pptxgenjs_available() -> bool:
+    """True when the polished pptxgenjs renderer can actually run.
+
+    Callers and tests use this to tell "the deck is degraded because the
+    renderer is missing" apart from a real authoring bug. Without it a bare
+    clone silently exercises the minimal OOXML fallback and reports failures
+    that are really just an un-run ``npm install``.
+    """
+    node = find_node()
+    script = Path(__file__).resolve().parent / "scripts" / "pptxgen.js"
+    if not node or not script.is_file():
+        return False
+    try:
+        subprocess.run(
+            [node, "-e", "require.resolve('pptxgenjs')"],
+            cwd=str(script.parent),
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:
+        return False
+    return True
+
+
 def write_pptx_deck(
     path: Path,
     slides: list[dict[str, Any]],
@@ -136,7 +162,7 @@ def write_pptx_deck(
     if east_asia_font is None and lang.lower().startswith("zh"):
         east_asia_font = _DEFAULT_EAST_ASIA_FONT
     script = Path(__file__).resolve().parent / "scripts" / "pptxgen.js"
-    node = shutil.which("node")
+    node = find_node()
     renderer_error = ""
     if node and script.is_file():
         payload = {
@@ -167,8 +193,10 @@ def write_pptx_deck(
             # still get a valid deck even when Node/PptxGenJS is unavailable.
             stderr = getattr(exc, "stderr", "") or ""
             renderer_error = f"{type(exc).__name__}: {exc}" + (f" — {stderr.strip()}" if stderr else "")
+    elif not node:
+        renderer_error = node_diagnostic()
     else:
-        renderer_error = "node executable or pptxgen.js script unavailable"
+        renderer_error = f"pptxgen.js script missing at {script}"
     slide_overrides = "\n".join(
         f'<Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
         for i in range(1, len(safe_slides) + 1)

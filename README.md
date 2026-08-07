@@ -333,9 +333,9 @@ and packs — never all at once, so provider tool schemas stay small.
 | Family | Tools |
 |---|---|
 | Read / inspect | `read_document`, `inspect_docx`, `inspect_pdf`, `inspect_xlsx`, `inspect_xlsx_range`, `inspect_pptx`, `extract_pdf_tables`, `extract_clauses` |
-| Write | `write_docx`, `write_pdf`, `write_xlsx`, `write_pptx` |
+| Write | `write_docx`, `write_pdf`, `write_xlsx`, `write_pptx`, `write_pptx_from_html` (lay slides out in HTML/CSS, measured in headless Chromium and mapped onto native PowerPoint shapes/text/tables), `read_deck_stylesheet` |
 | Edit in place | `edit_docx_text`, `edit_xlsx_cells`, `edit_xlsx_cells_checked` (guarded, with protected ranges), `edit_pptx_text`, `copy_xlsx_sheet`, `reshape_docx/xlsx/pptx` |
-| Prove the edit | `diff_xlsx`, `render_docx_pages`, `render_xlsx_pages`, `render_pptx_slides`, `render_pdf_pages` |
+| Prove the edit | `diff_xlsx`, `render_docx_pages`, `render_xlsx_pages`, `render_pptx_slides`, `render_pdf_pages`, `view_image` — the `render_*` tools return the rendered pages **as images**, so the model inspects its own output instead of trusting a path |
 | PDF surgery | `merge_pdfs`, `split_pdf`, `rotate_pdf_pages` |
 | Diagrams | `render_flowchart_image`, native PPTX flowchart shapes |
 | Redlining | Real `w:ins` / `w:del` revision marks plus `w:commentRangeStart`-anchored comments — the file a partner can accept or reject in Word |
@@ -596,8 +596,9 @@ Surveyed rather than copied, but each changed a decision here:
 **Retrieval** — [Qdrant](https://github.com/qdrant/qdrant), [BAAI bge-m3](https://huggingface.co/BAAI/bge-m3),
 [sentence-transformers](https://github.com/huggingface/sentence-transformers).
 **Tool boundary** — the [Model Context Protocol](https://modelcontextprotocol.io/).
-**Documents** — python-docx, python-pptx, openpyxl, XlsxWriter, pptxgenjs, markitdown,
-WeasyPrint, PyMuPDF, pypdf, [mermaid-cli](https://github.com/mermaid-js/mermaid-cli).
+**Documents** — python-docx, python-pptx, openpyxl, XlsxWriter, pptxgenjs,
+[anydoc](https://github.com/firecrawl/anydoc), markitdown, WeasyPrint, PyMuPDF, pypdf,
+[Playwright](https://github.com/microsoft/playwright), [mermaid-cli](https://github.com/mermaid-js/mermaid-cli).
 **App** — FastAPI, React, Vite, Tailwind, streamdown, lucide.
 **Legal data** — PKULaw / 北大法宝, 国家法律法规数据库, eCFR, the Federal Register, GovInfo,
 CourtListener, EUR-Lex, EASA, CAAC, ECAA and the Federal Negarit Gazeta. Their terms apply

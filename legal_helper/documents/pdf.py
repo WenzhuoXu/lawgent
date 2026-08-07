@@ -7,11 +7,11 @@ from typing import Any
 
 
 def read_pdf_text(path: Path) -> str:
-    """Markdown via MarkItDown (preferred), pdfminer.six fallback."""
-    from ._markitdown import markitdown_convert
+    """Markdown via the tiered converter (anydoc → markitdown), pdfminer.six fallback."""
+    from ._convert import convert_to_markdown
 
     try:
-        text = markitdown_convert(path).strip()
+        text = convert_to_markdown(path).strip()
         if text:
             return text
     except Exception:
