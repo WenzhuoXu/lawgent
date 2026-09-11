@@ -16,10 +16,18 @@ from pydantic import BaseModel, Field
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _API_KEY_FILENAME = Path("legal_helper") / "api_key"
-ANTHROPIC_HIGH_EFFORT_MODELS = ("claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-5")
+ANTHROPIC_HIGH_EFFORT_MODELS = (
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-sonnet-5",
+)
 # gpt-5.6 ships only as named variants; the bare "gpt-5.6" alias routes to Sol,
 # so always spell out "-terra" / "-sol" / "-luna".
-OPENAI_HIGH_EFFORT_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.5")
+# gpt-5.5 is deliberately absent: it is a legacy tier at 5.00/30.00 against
+# terra's 2.00/12.00 for the same work, and it dominated the 2026-09 bill at
+# 5.7% of requests and 55% of spend. Kept priced in usage.py for ledger replay.
+OPENAI_HIGH_EFFORT_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol")
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -91,7 +99,9 @@ class Settings(BaseModel):
     # Compact the chat (fold older turns into the rolling summary) once the
     # transcript reaches this fraction of the model's context window — early,
     # per the Claude Code "compact at ~0.6, not 0.95" guidance.
-    chat_compaction_threshold: float = 0.6
+    # 0.0 (the default) means: derive from the model tier — see
+    # context.compaction_threshold_for. Any positive value pins it.
+    chat_compaction_threshold: float = 0.0
     # Output ceiling per turn. 8192 truncated long legal memos mid-analysis
     # (stop_reason="max_tokens" → the "incomplete chunk" symptom). 32000 gives
     # comprehensive multi-jurisdiction analyses room to finish; Opus 4.x allows
@@ -207,7 +217,7 @@ def load_settings(*, refresh: bool = False) -> Settings:
         max_tokens=int(cfg.get("max_tokens", 32000)),
         chat_context_token_budget=int(cfg.get("chat_context_token_budget", 16000)),
         chat_context_window_fraction=float(cfg.get("chat_context_window_fraction", 0.25)),
-        chat_compaction_threshold=float(cfg.get("chat_compaction_threshold", 0.6)),
+        chat_compaction_threshold=float(cfg.get("chat_compaction_threshold", 0.0)),
         api_key_path=api_key_path,
         outputs_dir=_PROJECT_ROOT / os.getenv("LEGAL_HELPER_OUTPUTS_DIR", cfg.get("outputs_dir", "outputs")),
         state_dir=_PROJECT_ROOT / os.getenv("LEGAL_HELPER_STATE_DIR", cfg.get("state_dir", "state")),

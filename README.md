@@ -390,17 +390,39 @@ and pulls depth on demand. Only its final block returns to the orchestrator; its
 turns stay in the JSONL log under the same parent `run_id`. The orchestrator, not the
 specialist, authors the user-facing answer.
 
-**Provider parity.** One `Provider` protocol over Anthropic (`claude-opus-4-8`, fast tier
-`claude-haiku-4-5`) and OpenAI (`gpt-5.6-terra`, fast tier `gpt-5.6-luna`). Streaming, tool
-calls, reasoning traces, prompt caching, and hosted web search all reach parity, and
-`tests/test_provider_parity.py` asserts the tool surfaces match.
+**Provider parity.** One `Provider` protocol over Anthropic (`claude-opus-5`, also
+`claude-opus-4-8` / `4-7`; fast tier `claude-haiku-4-5`) and OpenAI (`gpt-5.6-terra` or
+`-sol`, fast tier `gpt-5.6-luna`). Streaming, tool calls, reasoning traces, prompt caching,
+and hosted web search all reach parity, and `tests/test_provider_parity.py` asserts the tool
+surfaces match.
 
 **Two kinds of memory.** `context.py` keeps a *single long chat* inside the window with a
-CJK-aware token estimator, budgeted recent-message selection, and compaction at 60 % of the
-window — so a 40-page pasted contract is not truncated to 3 000 characters. `projects.py`
-keeps *many chats* on one matter coherent: a hand-authored brief re-injected every turn,
-append-only typed memory (fact / decision / task / open_question / glossary / artifact /
-risk / source) ranked by salience, a rolling summary, and compaction.
+CJK-aware token estimator and budgeted recent-message selection — so a 40-page pasted
+contract is not truncated to 3 000 characters. `projects.py` keeps *many chats* on one matter
+coherent: a hand-authored brief re-injected every turn, append-only typed memory (fact /
+decision / task / open_question / glossary / artifact / risk / source) ranked by salience, a
+rolling summary, and compaction.
+
+Both rolling summaries are maintained by **delta, not rewrite**. Re-summarizing a summary
+erodes a little detail every pass — a failure mode named *context collapse* — so instead the
+fast model is asked only for what changed, as `+ Section | …` / `- Section | …` lines against
+a sectioned playbook (Goals / Facts / Conclusions / Artifacts / Open), and a deterministic
+merge applies them. Bullets accumulate and disappear only when the model says so or a section
+hits its cap, so loss is bounded and visible rather than emergent. A delta that will not parse
+leaves the prior playbook untouched.
+
+**Compaction is tier-aware.** When to fold older turns into the summary depends on the model,
+not on a universal constant: strong models do better carrying the raw transcript further and
+isolating side quests in sub-agents, while cheaper models degrade sooner and benefit from
+summarizing early. Frontier models compact at 75 % of the window, the fast tier at 55 %.
+Setting `chat_compaction_threshold` to any positive value pins it for every model instead.
+
+**Documents: inject one, navigate many.** A single attached document is pasted into the
+prompt — that is where full context genuinely wins. A *corpus* of them is not: past a total
+size threshold each text attachment is replaced by a navigable outline (its headings and
+第X条 / Article N labels, drawn from the same patterns the RAG chunker uses) plus the
+`read_document` call that opens it, so the model reads the parts it needs instead of
+everything. `LEGAL_HELPER_INLINE_CORPUS_BYTES=0` turns this off.
 
 **Local RAG.** bge-m3 embeddings and an embedded Qdrant under `state/qdrant/`, with a
 legal-aware hierarchical chunker that respects 第X条 / Article X / § X / clause-numbering
@@ -415,9 +437,18 @@ python -m legal_helper.rag.ingest --collection user --path ~/my_legal_docs/
 
 **Cost ledger.** Every provider turn — both providers, both the run and streaming paths —
 appends normalized token usage to `state/usage/usage-YYYY-MM.jsonl`, priced with
-per-provider billing semantics (Anthropic bills cache reads and writes as separate buckets;
-OpenAI's cached tokens are a discounted subset of input). `GET /api/usage` serves the month
-summary and the UI renders it. Recording never breaks a turn.
+per-provider billing semantics: Anthropic bills cache reads and writes as separate buckets;
+OpenAI's cached tokens are a discounted subset of input, and a prompt over 272 K input tokens
+is billed at 2× input / 1.5× output for the whole request. That long-context surcharge is
+easy to overlook and expensive to ignore — it is modelled, and `long_context_requests` in the
+month summary says how often it fired. `GET /api/usage` serves the summary and the UI renders
+it. Recording never breaks a turn.
+
+**Trajectory failure profile.** Outcome-level checks cannot see a correct answer reached
+through a broken chain. Every workflow failure or degradation event is tagged with a subclass
+across two layers — *substantive* (the law is wrong) and *procedural* (the agent misbehaved)
+— and `citations/trajectory.py` aggregates a per-run profile, including a
+right-answer-wrong-reason flag for runs that produced clean output on a chain that broke.
 
 **Observability.** JSONL event and turn records under `logs/` capture provider, model,
 messages, tool calls, usage, latency, and the parent/sub `run_id` tree — enough to replay
@@ -464,22 +495,42 @@ default_language: zh              # user-facing default; follows the user at run
 citation_style: gb_t_7714         # gb_t_7714 | bluebook | oscola
 active_domain_packs: []           # e.g. [aviation]
 
-anthropic_model: claude-opus-4-8
-openai_model: gpt-5.6-terra
+anthropic_model: claude-opus-5
+openai_model: gpt-5.6-terra       # never the bare "gpt-5.6" alias — it routes to Sol
 max_iterations: 12                # tool-loop ceiling per agent
 max_concurrent_agents: auto
 max_tokens: 32000                 # per-turn output ceiling
 chat_context_token_budget: 16000
-chat_compaction_threshold: 0.6
+chat_compaction_threshold: 0.0    # 0 = derive from the model tier; any value pins it
 
 enable_web_search: true
 enable_web_fetch: true
 ```
 
+Three environment switches have no `config.yaml` equivalent:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `LEGAL_HELPER_MCP_ENV` | `llm` | conda env that bare stdio MCP commands resolve against |
+| `LEGAL_HELPER_INLINE_CORPUS_BYTES` | `400000` | total attachment text above which documents are outlined instead of inlined; `0` disables |
+| `LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS` | unset | opt in to Anthropic server-side tool-result clearing (`1`, or a token count to set the trigger) |
+
+`LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS` is off by default on purpose. Clearing old tool results
+roughly halves peak tokens on long runs, but it invalidates the cached prompt prefix each
+time it fires — and this provider leans on prompt caching — so on a cache-heavy workload it
+can cost more than it saves. Measure before turning it on.
+
 `.mcp.json` is the MCP registry — remote HTTP servers (the nine PKULaw sub-services), stdio
 servers (EUR-Lex), and the in-tree `ccar_aviation` server. Activation is gated by
 jurisdiction and active packs. US federal and case-law sources are **direct-API connectors**
 in `legal_helper/connectors/`, not MCP servers — nothing to install for them.
+
+stdio entries name commands bare (`python`, `npx`) and `registry.resolve_command()` resolves
+them: `python` becomes the running interpreter, everything else is looked up on `PATH` and
+then in the conda bin directories. A bare command left to the OS resolves against whatever
+PATH the *launcher* happened to have, which is how a server ends up running under a system
+interpreter with no `mcp` package and dying as an opaque `CONNECTION_CLOSED`. Unresolvable
+commands are now reported by name instead.
 
 ---
 

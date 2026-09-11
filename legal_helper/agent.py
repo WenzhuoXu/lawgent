@@ -212,6 +212,97 @@ def _pack_playbook_section_index(pack: DomainPack) -> str:
     return "; ".join(f"§{t}" for t in picked)
 
 
+# Ceiling on inlined pack-playbook text. Above this a playbook is genuinely
+# reference material rather than standing context, and the §-index + an
+# explicit read stays the cheaper shape.
+_MAX_INLINE_PLAYBOOK_CHARS = 40_000
+
+
+_PACK_POINTER_RE = re.compile(r"/domains/([A-Za-z0-9_-]+)/")
+
+
+def _strip_inactive_pack_pointers(body: str, active: set[str]) -> str:
+    """Drop bullets pointing at domain packs that are not active this run.
+
+    Ten SKILL.md files hard-code an aviation overlay pointer, against
+    CLAUDE.md's "no aviation strings outside `domains/aviation/`" rule. That
+    stayed invisible while the body was fetched section-by-section; inlining
+    the whole body would otherwise put aviation guidance in front of every
+    specialist on every non-aviation run.
+    """
+    blocks: list[list[str]] = []
+    for line in body.split("\n"):
+        # A bullet owns its wrapped continuation lines (indented, non-bullet),
+        # which is where the pack path usually sits.
+        starts_block = bool(re.match(r"^\s*[-*]\s", line)) or not re.match(r"^\s+\S", line)
+        if starts_block or not blocks:
+            blocks.append([line])
+        else:
+            blocks[-1].append(line)
+
+    out: list[str] = []
+    for block in blocks:
+        text = "\n".join(block)
+        packs = set(_PACK_POINTER_RE.findall(text))
+        if packs and not (packs & active):
+            continue
+        out.extend(block)
+    return "\n".join(out)
+
+
+def _inline_skill_methodology(skill_name: str, active_packs: Iterable[str] = ()) -> str:
+    """The specialist's SKILL.md body + the general playbook, inlined.
+
+    Both are needed on essentially every invocation of a given skill, so they
+    are standing context, not on-demand reference — fetching them cost a
+    guaranteed two-iteration handshake per dispatch.
+    """
+    from .skills import load_playbook, load_skill_body
+
+    blocks: list[str] = []
+    try:
+        body = load_skill_body(skill_name).strip()
+    except Exception:  # noqa: BLE001 — a missing skill file never breaks a run
+        body = ""
+    if body:
+        body = _strip_inactive_pack_pointers(body, set(active_packs))
+    if body:
+        blocks.append(f"# Your methodology (`{skill_name}` SKILL.md)\n\n{body}\n\n")
+    try:
+        playbook = load_playbook().strip()
+    except Exception:  # noqa: BLE001
+        playbook = ""
+    if playbook:
+        blocks.append(f"# General legal playbook\n\n{playbook}\n\n")
+    return "".join(blocks)
+
+
+def _inline_pack_playbooks(active_packs: list[DomainPack]) -> str:
+    """Inline the active packs' playbook bodies into the prompt.
+
+    Returns "" when no pack has a playbook, or when the combined text exceeds
+    `_MAX_INLINE_PLAYBOOK_CHARS` — in which case the §-index already emitted
+    by the caller plus `read_document` remains the fallback.
+    """
+    blocks: list[str] = []
+    budget = _MAX_INLINE_PLAYBOOK_CHARS
+    for pack in active_packs:
+        if not pack.playbook_path.is_file():
+            continue
+        try:
+            body = pack.playbook_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if not body or len(body) > budget:
+            continue
+        budget -= len(body)
+        blocks.append(
+            f"\n# `{pack.name}` pack playbook (full text — do not re-read it "
+            f"from disk)\n\n{body}\n"
+        )
+    return "".join(blocks)
+
+
 def _build_parent_addendum(settings: Settings) -> str:
     """Per-run jurisdiction + active-pack addendum appended to the body."""
     parts = [
@@ -237,9 +328,19 @@ def _build_parent_addendum(settings: Settings) -> str:
                 "\nPack playbooks (the pack's §-numbered domain defaults — "
                 "specified positions, thresholds, minima): "
                 + "; ".join(playbook_lines)
-                + ". Read the relevant playbook with `read_document` before "
-                "stating a pack-specified position from memory.\n"
+                + ".\n"
             )
+        # Inline the active pack's playbook body rather than telling the model
+        # to fetch it. The old instruction ("Read the relevant playbook with
+        # `read_document` before stating a pack-specified position") produced
+        # 35 whole-file reads of one static 18KB file in a month — 80% of all
+        # instruction-fetch output — each costing a full tool iteration and
+        # then re-billed on every later iteration of the turn. A pack is only
+        # active when its content is needed, so the content belongs in the
+        # prompt, where it is cached instead of re-fetched.
+        inlined = _inline_pack_playbooks(active_packs)
+        if inlined:
+            parts.append(inlined)
     # Durable cross-chat project context (CLAUDE.md-equivalent brief + rolling
     # summary + salient memory). Empty unless a project is active for this run.
     try:
@@ -637,10 +738,7 @@ class SkillAgent:
                 index = _pack_playbook_section_index(pack)
                 if index:
                     hint += f": {index}"
-                hint += (
-                    f". Read it with `read_document(\"{rel_pb}\")` before "
-                    "relying on a pack-specified position."
-                )
+                hint += "."
                 overlay_hints.append(hint)
 
         prompt = (
@@ -655,14 +753,20 @@ class SkillAgent:
             f"Citation style: **{self.settings.citation_style}**. "
             f"Active domain pack(s): **{pack_names}**.\n\n"
             "You are a specialist sub-agent working for the orchestrator. "
-            "Your initial context intentionally contains only this compact "
-            "skill manifest, not the full SKILL.md, general playbook, or domain "
-            "pack overlays.\n\n"
-            "Before substantive analysis, use `list_skill_sections` and then "
-            "`read_skill_section` for the exact methodology sections needed "
-            "for the assigned task. Use `read_playbook_section` to load the "
-            "generic playbook sections relevant to the task. If a domain pack "
-            "is active and provides an overlay for this skill, also load it.\n\n"
+            "Your methodology and the general playbook are inlined below — you "
+            "already have what you need to start. Go straight to the assigned "
+            "task.\n\n"
+        )
+        # Inlined rather than fetched. The old prompt withheld this content and
+        # ordered a `list_skill_sections` -> `read_skill_section` handshake,
+        # which opened 13 of 13 specialist dispatches and is structurally
+        # unparallelisable (the first call must return before the second can
+        # name a heading). It cost two iterations of an eight-iteration budget
+        # before any legal work began, and 51.9% of all specialist tool calls
+        # were instruction fetches. `read_skill_section` / `read_playbook_section`
+        # remain available for the long `references/` tail.
+        prompt += _inline_skill_methodology(
+            self.skill_name, self.settings.active_domain_packs
         )
         if overlay_hints:
             prompt += (
@@ -670,6 +774,9 @@ class SkillAgent:
                 + "\n".join(overlay_hints)
                 + "\n\n"
             )
+        # Same reasoning as the orchestrator addendum: a pack is only active
+        # when its defaults are needed, so its playbook is standing context.
+        prompt += _inline_pack_playbooks(active_packs)
         # Durable cross-chat project context — standing jurisdiction pins,
         # decisions, and open questions the specialist's research must stay
         # consistent with. Empty unless a project is active for this run.

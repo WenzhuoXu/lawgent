@@ -9,7 +9,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
@@ -273,16 +273,41 @@ def _validated_attachment_path(chat_id: str, path: str) -> Path:
     return p
 
 
+def _chat_upload_files(chat_id: str) -> list[Path]:
+    """Every file uploaded to this chat, oldest first."""
+    upload_root = load_settings().outputs_dir / "chat_uploads" / _safe_chat_id(chat_id)
+    if not upload_root.is_dir():
+        return []
+    files = [p for p in upload_root.glob("*/*") if p.is_file()]
+    try:
+        return sorted(files, key=lambda item: item.stat().st_mtime)
+    except OSError:
+        return files
+
+
+# A filename fragment this short matches too much prose to be a real reference.
+_MIN_NAMED_FILE_STEM = 4
+# Enough to describe a working chat without turning the digest into a file tree.
+_MAX_INVENTORY_FILES = 40
+
+
 def _chat_context_attachment_paths(
     store: ChatStore,
     chat_id: str,
     current_paths: list[Path] | None = None,
+    *,
+    message_text: str = "",
 ) -> list[Path]:
-    """Return current + previously uploaded files that belong to this chat.
+    """Files inlined into THIS turn: the current upload, plus any the user names.
 
-    Uploads are chat-scoped on disk, while sent attachments are also recorded
-    in message metadata. Including both sources makes follow-ups like
-    "use the Word document I uploaded earlier" work without re-uploading.
+    This used to also replay every attachment recorded in message metadata AND
+    glob the whole upload directory, so a chat accumulated its uploads into
+    every later turn — in the worst observed case 33 screenshots re-sent on 66
+    consecutive provider calls, ~136k tokens per call of identical payload.
+
+    History stays reachable without being re-billed: `_chat_upload_inventory`
+    lists it in the context digest and the model opens what it needs with
+    `read_document` / `inspect_docx` / `inspect_xlsx` / `view_image`.
     """
     seen: set[str] = set()
     out: list[Path] = []
@@ -297,15 +322,42 @@ def _chat_context_attachment_paths(
 
     for p in current_paths or []:
         add(p)
-    for message in store.list_messages(chat_id):
-        for raw in message.metadata.get("attachments") or []:
-            add(raw)
 
-    upload_root = load_settings().outputs_dir / "chat_uploads" / _safe_chat_id(chat_id)
-    if upload_root.is_dir():
-        files = [p for p in upload_root.glob("*/*") if p.is_file()]
-        for p in sorted(files, key=lambda item: item.stat().st_mtime):
-            add(p)
+    # "Use the contract I uploaded earlier" — a file the user names by its
+    # filename is part of this turn, so it is still inlined up front.
+    haystack = (message_text or "").lower()
+    if haystack:
+        for p in _chat_upload_files(chat_id):
+            if str(p.resolve()) in seen:
+                continue
+            name = p.name.lower()
+            stem = p.stem.lower()
+            if name in haystack or (len(stem) >= _MIN_NAMED_FILE_STEM and stem in haystack):
+                add(p)
+    return out
+
+
+def _chat_upload_inventory(
+    chat_id: str, *, exclude: Iterable[Path] = ()
+) -> list[dict[str, Any]]:
+    """Previously uploaded files, listed rather than inlined.
+
+    The counterpart to `_chat_context_attachment_paths`: everything the model
+    may still need, described cheaply enough to sit in the cached part of the
+    prompt, with a path it can open on demand.
+    """
+    skip = {str(Path(p).resolve()) for p in exclude}
+    out: list[dict[str, Any]] = []
+    for p in reversed(_chat_upload_files(chat_id)):  # newest first
+        if str(p.resolve()) in skip:
+            continue
+        try:
+            size = p.stat().st_size
+        except OSError:
+            continue
+        out.append({"path": str(p), "name": p.name, "size": size})
+        if len(out) >= _MAX_INVENTORY_FILES:
+            break
     return out
 
 
@@ -1010,10 +1062,13 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     store,
                     chat_id,
                     current_paths=attachment_paths,
+                    message_text=req.message,
                 )
+                available_files = _chat_upload_inventory(chat_id, exclude=attachments)
                 for ev in executor.stream(
                     req.message,
                     attachments=attachments,
+                    available_files=available_files,
                     recent_messages=recent,
                     memory_summary=chat.memory_summary,
                     skill_hint=settings_model.skill_hint,

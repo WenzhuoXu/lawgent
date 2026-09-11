@@ -1,8 +1,10 @@
 # PLAN — Legal AI Helper architecture
 
 This document captures the working architecture as of the May 2026
-restructure. Historical aviation-only roots are preserved as a domain
-pack rather than as the core identity.
+restructure, with model IDs and counts refreshed 2026-09-11. Historical
+aviation-only roots are preserved as a domain pack rather than as the core
+identity. For current runtime behaviour (context management, memory,
+grounding, cost) see `README.md`; this file is the architectural intent.
 
 ## Goal
 
@@ -22,7 +24,7 @@ usable interface to:
 
 ## Principles
 
-1. **Generic core, domain packs on top.** The 10 skills are generic. The
+1. **Generic core, domain packs on top.** The 15 practice skills are generic. The
    `legal_helper/domains/<pack>/` folder layers per-skill overlays plus a
    pack-specific playbook. Aviation is the first populated pack; future
    packs (healthcare, fintech, employment) drop in without touching the
@@ -30,8 +32,8 @@ usable interface to:
 2. **PRC primary, comparative secondary.** PRC source hierarchy
    (法律 → 行政法规 → 部门规章 → 规范性文件 → 司法解释 → 指导案例) is
    the default. US / EU appear when relevant; never as default.
-3. **Provider parity.** Anthropic Claude (`claude-opus-4-7`) and OpenAI
-   GPT (`gpt-5.5`) are first-class peers behind one `Provider` protocol.
+3. **Provider parity.** Anthropic Claude (`claude-opus-5`) and OpenAI
+   GPT (`gpt-5.6-terra`) are first-class peers behind one `Provider` protocol.
    All tools — connectors, MCP-discovered, RAG, citations — surface as
    plain function tools to both SDKs; no provider-native MCP path.
 4. **Sub-agent runtime.** Orchestrator fans out via `run_skill`; each

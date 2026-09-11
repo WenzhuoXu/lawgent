@@ -4,7 +4,6 @@
 # scripts/monthly_harness_review.md and appends output to logs/.
 set -uo pipefail
 
-# Point LEGAL_HELPER_REPO at your checkout, or run this script from inside it.
 REPO="${LEGAL_HELPER_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 LOG_DIR="$REPO/logs"
 mkdir -p "$LOG_DIR" "$REPO/outputs/harness_reviews"

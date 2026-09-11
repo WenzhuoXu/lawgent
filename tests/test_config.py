@@ -64,6 +64,7 @@ def test_primary_and_internal_fast_models_are_routed_by_provider(monkeypatch):
     assert anthropic.model_for_provider() == "claude-sonnet-4-6"
     assert anthropic.model_for_provider(fast=True) == "claude-haiku-4-5"
     assert anthropic.high_effort_models_for_provider("anthropic") == [
+        "claude-opus-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-sonnet-5",
@@ -75,7 +76,6 @@ def test_primary_and_internal_fast_models_are_routed_by_provider(monkeypatch):
     assert openai.high_effort_models_for_provider("openai") == [
         "gpt-5.6-terra",
         "gpt-5.6-sol",
-        "gpt-5.5",
     ]
 
 

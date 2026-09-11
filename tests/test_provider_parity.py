@@ -106,18 +106,29 @@ def test_all_nine_skills_loadable_under_either_provider():
             agent = SkillAgent(skill, provider, settings)
             sp = agent._system_prompt()
             assert f"name: {skill}" in sp
-            assert "compact skill manifest" in sp
-            assert "read_skill_section" in sp
+            # Methodology is inlined at build time, not fetched at runtime.
+            assert "# Your methodology" in sp
+            assert "# General legal playbook" in sp
+            assert "list_skill_sections" not in sp
             assert "Aviation Playbook" not in sp
-            # Guardrail on the sub-agent SYSTEM PROMPT (input side) — keeps each
-            # specialist's fixed context compact so the bulk of the window stays
-            # available for retrieved sources + the answer. This is unrelated to
-            # output length: the answer ceiling is settings.max_tokens. Headroom
-            # 7000 → 8000 (per-jurisdiction source guidance) → 10000 (2026-07:
-            # runtime playbook path + section-index injection [proposal #11] and
-            # the flexible-language contract rewrite). Scaffold is ~9.4KB and
-            # uniform across all skills; <1% of even the 200K Haiku window.
-            assert len(sp) < 10000
+            # Guardrail on the sub-agent SYSTEM PROMPT (input side). This is
+            # unrelated to output length: the answer ceiling is
+            # settings.max_tokens. Headroom 7000 → 8000 (per-jurisdiction
+            # source guidance) → 10000 (2026-07: runtime playbook path +
+            # section-index injection and the flexible-language contract
+            # rewrite) → 30000 (2026-08).
+            #
+            # The 2026-08 raise is a deliberate trade, not drift. The prompt
+            # now inlines the SKILL.md body and the general playbook instead of
+            # ordering a `list_skill_sections` → `read_skill_section` handshake
+            # to fetch them. That handshake opened 13 of 13 specialist
+            # dispatches, is structurally unparallelisable, and cost two of
+            # eight iterations before any legal work began; 51.9% of all
+            # specialist tool calls were instruction fetches. Inlining costs
+            # MORE first-send tokens and buys back iterations — and the prefix
+            # is stable, so it caches, where tool results re-bill per
+            # iteration. ~23KB is ~12% of a 200K window and ~2% of a 1M one.
+            assert len(sp) < 30000
 
 
 def test_runtime_model_lists_stay_consistent_with_defaults():

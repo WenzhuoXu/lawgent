@@ -1099,13 +1099,17 @@ def test_followup_turn_inherits_same_chat_uploads(tmp_path, monkeypatch):
     import legal_helper.server as server_mod
 
     captured: list[list[str]] = []
+    captured_available: list[list[str]] = []
 
     class FakeExecutor:
         def __init__(self, settings):
             self.settings = settings
 
-        def stream(self, user_message, *, attachments=None, **kwargs):
+        def stream(self, user_message, *, attachments=None, available_files=None, **kwargs):
             captured.append([str(p) for p in attachments or []])
+            captured_available.append(
+                [str(entry.get("path", "")) for entry in available_files or []]
+            )
             yield StreamEvent("delta", {"text": "ok"})
             yield StreamEvent("done", {"text": "ok"})
 
@@ -1126,6 +1130,57 @@ def test_followup_turn_inherits_same_chat_uploads(tmp_path, monkeypatch):
         "POST",
         f"/api/chats/{chat['id']}/messages/stream",
         json={"message": "Use the Word document I uploaded earlier.", "attachments": []},
+    ) as resp:
+        assert resp.status_code == 200
+        "".join(resp.iter_text())
+
+    deadline = time.time() + 2
+    while time.time() < deadline and not captured:
+        time.sleep(0.01)
+    assert captured
+    # A prior upload stays reachable on later turns — but by reference, not by
+    # re-inlining its bytes into every subsequent prompt. Inlining the whole
+    # upload history is what shipped 33 identical screenshots on 66 consecutive
+    # provider calls; the model now opens what it needs with `read_document`.
+    assert uploaded_path not in captured[-1]
+    assert uploaded_path in captured_available[-1]
+
+
+def test_named_prior_upload_is_inlined_again(tmp_path, monkeypatch):
+    """Naming a previous upload in the message re-inlines that one file."""
+    monkeypatch.setenv("LEGAL_HELPER_OUTPUTS_DIR", str(tmp_path / "out"))
+    monkeypatch.setenv("LEGAL_HELPER_STATE_DIR", str(tmp_path / "state"))
+    load_settings(refresh=True)
+
+    import legal_helper.server as server_mod
+
+    captured: list[list[str]] = []
+
+    class FakeExecutor:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def stream(self, user_message, *, attachments=None, **kwargs):
+            captured.append([str(p) for p in attachments or []])
+            yield StreamEvent("delta", {"text": "ok"})
+            yield StreamEvent("done", {"text": "ok"})
+
+    monkeypatch.setattr(server_mod, "WorkflowExecutor", FakeExecutor)
+    monkeypatch.setattr(server_mod, "summarize_with_fast_model", lambda *args, **kwargs: "summary")
+    monkeypatch.setattr(server_mod, "summarize_title_with_fast_model", lambda *args, **kwargs: "t")
+
+    client = TestClient(server_mod.app)
+    chat = client.post("/api/chats", json={}).json()
+    upload = client.post(
+        f"/api/chats/{chat['id']}/upload",
+        files={"file": ("lease_agreement.docx", b"x", "application/octet-stream")},
+    )
+    uploaded_path = upload.json()["path"]
+
+    with client.stream(
+        "POST",
+        f"/api/chats/{chat['id']}/messages/stream",
+        json={"message": "Check clause 7 of lease_agreement.docx", "attachments": []},
     ) as resp:
         assert resp.status_code == 200
         "".join(resp.iter_text())
@@ -1443,3 +1498,91 @@ def test_cite_check_still_auto_passes_without_surface_signals(tmp_path, monkeypa
     audit = [ev for ev in events if ev.kind == "citation_audit"][-1]
     assert audit.data["ok"] is True
     assert audit.data["skip_reason"] == "no citations detected in final answer"
+
+
+# ---------------------------------------------------------------------------
+# Attachment turns: the forced agent_workflow must not erase the legal skill.
+# ---------------------------------------------------------------------------
+
+
+_DIRECT_PLAN_JSON = """
+{
+  "title": "Attached contract question",
+  "user_language": "English",
+  "execution_mode": "direct_answer",
+  "complexity": "simple",
+  "direct_response": "Sure, happy to help.",
+  "routing_reason": "looks conversational",
+  "agent_tasks": []
+}
+"""
+
+
+def _forced_plan_for(tmp_path, message: str, filename: str):
+    """Run the router with an attachment present and return the forced plan."""
+    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
+    provider = PlannerProvider(_DIRECT_PLAN_JSON)
+    attachment = tmp_path / filename
+    attachment.write_text("x", encoding="utf-8")
+
+    executor = WorkflowExecutor(settings=settings, provider=provider)
+    plans: list = []
+    for ev in executor.stream(message, attachments=[attachment]):
+        if ev.kind == "workflow_plan":
+            plans.append(ev.data)
+        if ev.kind == "done":
+            break
+    assert plans
+    return plans[-1]
+
+
+def test_attachment_override_keeps_legal_work_on_the_legal_path(tmp_path):
+    """A legal question about an upload must not land on the general branch.
+
+    The override used to set `agent_tasks: []`, which made `_is_general_plan`
+    true downstream — dropping the turn onto the general prompt with no legal
+    connectors, no `legal_source_search`, and cite-check degraded to a text
+    sniff. It fired on 52% of the router's direct_answer decisions.
+    """
+    from legal_helper.workflow import GENERAL_TASK_SKILL, _is_general_plan
+    from legal_helper.chat_models import WorkflowPlan
+
+    plan = WorkflowPlan(**_forced_plan_for(
+        tmp_path,
+        "Review the indemnity clause in this lease and tell me if it is enforceable.",
+        "lease.docx",
+    ))
+    assert plan.execution_mode == "agent_workflow"
+    assert len(plan.agent_tasks) == 1
+    assert plan.agent_tasks[0].skill_name != GENERAL_TASK_SKILL
+    assert not _is_general_plan(plan)
+
+
+def test_attachment_override_keeps_ordinary_files_on_the_general_path(tmp_path):
+    """A non-legal file task still routes to the general skill."""
+    from legal_helper.workflow import GENERAL_TASK_SKILL, _is_general_plan
+    from legal_helper.chat_models import WorkflowPlan
+
+    plan = WorkflowPlan(**_forced_plan_for(
+        tmp_path,
+        "Make a bar chart of the numbers in this spreadsheet.",
+        "sales.xlsx",
+    ))
+    assert plan.execution_mode == "agent_workflow"
+    assert plan.agent_tasks[0].skill_name == GENERAL_TASK_SKILL
+    assert _is_general_plan(plan)
+
+
+def test_router_prompt_names_the_attachment_constraint(tmp_path):
+    """The router is told what it can and cannot see, not left to guess."""
+    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
+    provider = CapturingPlannerProvider(_DIRECT_PLAN_JSON)
+    executor = WorkflowExecutor(settings=settings, provider=provider)
+
+    executor.plan("check this", has_attachments=True)
+    assert any("ATTACHMENTS:" in p for p in provider.prompts)
+    assert any("never" in p and "direct_answer" in p for p in provider.prompts)
+
+    provider2 = CapturingPlannerProvider(_DIRECT_PLAN_JSON)
+    WorkflowExecutor(settings=settings, provider=provider2).plan("check this")
+    assert not any("ATTACHMENTS:" in p for p in provider2.prompts)

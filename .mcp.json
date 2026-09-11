@@ -1,5 +1,5 @@
 {
-  "_comment": "MCP server registry consumed by legal_helper/mcp/registry.py. US sources (CourtListener, eCFR, Federal Register, GovInfo) are served by direct-API connectors in legal_helper/connectors/, not MCP. All PKULaw sub-services share PKULAW_API_TOKEN via the WSO2 apikey header. Activation is gated by active_domain_packs and jurisdictions.",
+  "_comment": "MCP server registry consumed by legal_helper/mcp/registry.py. US sources (CourtListener, eCFR, Federal Register, GovInfo) are served by direct-API connectors in legal_helper/connectors/, not MCP. All PKULaw sub-services share PKULAW_API_TOKEN via the WSO2 apikey header. Activation is gated by active_domain_packs and jurisdictions. stdio `command` values stay bare on purpose: registry.resolve_command() resolves them against the harness interpreter and the llm conda env (python -> sys.executable, npx -> the env bin dir), so the file stays portable instead of hardcoding this machine's paths. Override the env name with LEGAL_HELPER_MCP_ENV.",
   "mcpServers": {
     "eurlex": {
       "command": "npx",

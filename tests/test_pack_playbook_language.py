@@ -59,13 +59,16 @@ def test_skill_agent_prompt_surfaces_pack_playbook_with_section_index():
     # Overlay hint still present alongside the new playbook hint.
     assert "overlays/review-contract.md" in sp
     assert AVIATION_PLAYBOOK_REL in sp
-    assert f'read_document("{AVIATION_PLAYBOOK_REL}")' in sp
     # §-heading index makes overlay references like `playbook §2` resolvable.
     assert "§1. Insurance" in sp
     assert "§2. Cape Town Convention / IDERA" in sp
-    # Index only — playbook body and its H1 title never inline into the prompt.
-    assert "AVN52E" not in sp
-    assert "Aviation Playbook" not in sp
+    # The playbook BODY is now inlined rather than fetched. Telling the model
+    # to `read_document` it cost 35 whole-file reads of one static 18KB file in
+    # a month — 80% of all instruction-fetch output — one tool iteration each,
+    # then re-billed on every later iteration of the turn. A pack is only
+    # active when its defaults are needed, so they belong in the prompt.
+    assert "AVN52E" in sp
+    assert f'read_document("{AVIATION_PLAYBOOK_REL}")' not in sp
 
 
 def test_skill_agent_prompt_without_pack_has_no_playbook_hint():
@@ -73,8 +76,13 @@ def test_skill_agent_prompt_without_pack_has_no_playbook_hint():
 
     sp = SkillAgent("review-contract", provider=None, settings=_settings([]))._system_prompt()
     assert "Active domain-pack resources" not in sp
-    assert "domains/aviation" not in sp
     assert "playbook §N" not in sp
+    # The SKILL.md body is inlined now, and ten SKILL.md files hard-code an
+    # aviation overlay pointer against CLAUDE.md's "no aviation strings outside
+    # `domains/aviation/`" rule. Inlining must not leak that onto a run where
+    # the pack is inactive.
+    assert "domains/aviation" not in sp
+    assert "AVN52E" not in sp
 
 
 def test_parent_addendum_lists_pack_playbooks():

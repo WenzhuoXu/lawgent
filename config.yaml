@@ -10,10 +10,10 @@ default_language: zh                   # zh | en — user-facing language defaul
 citation_style: gb_t_7714              # gb_t_7714 | bluebook | oscola
 active_domain_packs: []                # e.g. [aviation]; empty = generic legal mode
 
-anthropic_model: claude-opus-4-8       # high-effort primary: claude-opus-4-8 | claude-opus-4-7 | claude-sonnet-5
+anthropic_model: claude-opus-5         # high-effort primary: claude-opus-5 | claude-opus-4-8 | claude-opus-4-7 | claude-sonnet-5
 anthropic_fast_model: claude-haiku-4-5 # internal low-effort routing / summarization
 
-openai_model: gpt-5.6-terra            # high-effort primary: gpt-5.6-terra | gpt-5.6-sol | gpt-5.5 (never bare "gpt-5.6" — that alias routes to Sol)
+openai_model: gpt-5.6-terra            # high-effort primary: gpt-5.6-terra | gpt-5.6-sol (never bare "gpt-5.6" — that alias routes to Sol; gpt-5.5 retired 2026-09-11, 2.5x the price for the same work)
 openai_fast_model: gpt-5.6-luna        # lower-latency routing / classification
 openai_reasoning_effort: medium        # none | low | medium | high | xhigh | max
 openai_enable_file_search: false
@@ -27,7 +27,7 @@ max_concurrent_agents: auto            # Anthropic=2, OpenAI=4; override with an
 max_tokens: 32000                      # per-turn output ceiling; 8192 truncated long legal memos. Opus 4.x allows up to 128000 (streaming).
 chat_context_token_budget: 16000       # FLOOR for the within-chat context digest (rolling summary + recent transcript)
 chat_context_window_fraction: 0.25     # digest budget = this share of the serving model's window, floored by the line above
-chat_compaction_threshold: 0.6         # fold older turns into the summary once the transcript hits this fraction of the model window
+chat_compaction_threshold: 0.0         # 0 = derive from the model tier (frontier 0.75, fast 0.55 — see context.compaction_threshold_for); any positive value pins it for every model
 
 # Paths (relative to project root)
 outputs_dir: outputs

@@ -108,6 +108,22 @@ def log_workflow_event(event_type: str, data: Optional[dict[str, Any]] = None) -
         "agent": agent_name_var.get(),
         "data": data or {},
     }
+    # Failure/degradation events carry their trajectory subclass so a run's
+    # failure profile can be aggregated after the fact without re-parsing prose.
+    # Tagging happens here rather than at ~30 call sites so the vocabulary
+    # cannot drift away from the events that actually fire.
+    try:
+        from .citations.trajectory import classify_event
+
+        subclass = classify_event(event_type)
+        if subclass is not None:
+            record["failure"] = {
+                "subclass": subclass.key,
+                "layer": subclass.layer.value,
+                "category": subclass.category.value,
+            }
+    except Exception:  # noqa: BLE001 — observability must never break a run
+        pass
     record = _redact(record)
     path = event_jsonl_path()
     path.parent.mkdir(parents=True, exist_ok=True)

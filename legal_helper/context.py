@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # avoid an import cycle (chat_models has no heavy deps, but k
 # to ``_DEFAULT_WINDOW``. Opus/Sonnet 4.x are 1M; Haiku 200K; gpt-5.x treated
 # conservatively. These bound the *compaction trigger*, not the per-turn digest.
 _WINDOWS = {
+    "claude-opus-5": 1_000_000,
     "claude-opus-4-8": 1_000_000,
     "claude-opus-4-7": 1_000_000,
     "claude-opus-4-6": 1_000_000,
@@ -43,6 +44,8 @@ _WINDOWS = {
     "gpt-5.6-terra": 1_000_000,
     "gpt-5.6-sol": 1_000_000,
     "gpt-5.6-luna": 1_000_000,
+    # Bare alias routes to Sol (CLAUDE.md); priced/windowed the same.
+    "gpt-5.6": 1_000_000,
     "gpt-5.5": 400_000,
     "gpt-5.4": 400_000,
     "gpt-5.4-mini": 400_000,
@@ -257,18 +260,70 @@ def render_recent(
     return "\n".join(out)
 
 
+# Compaction thresholds are model-strength dependent, not universal. Measured
+# on long-horizon search (arXiv 2606.29718): for strong agents, sub-agent
+# *isolation* beat summarization by a wide margin (54.0% vs 35.0% on
+# BrowseComp), while for weaker agents keep-latest-with-summarization won
+# (44.6%). This harness already isolates specialist work in sub-agents, so a
+# frontier model should ride further before folding turns into a lossy summary;
+# a fast-tier model, which degrades sooner and has a smaller window, should
+# summarize early. A single 0.6 for both was leaving frontier quality on the
+# table and compacting fast-tier models too late.
+_FAST_TIER_MODELS = frozenset(
+    {
+        "claude-haiku-4-5",
+        "claude-haiku-3-5",
+        "gpt-5.6-luna",
+        "gpt-5.4-mini",
+        "gpt-5.4-nano",
+    }
+)
+FRONTIER_COMPACTION_THRESHOLD = 0.75
+FAST_COMPACTION_THRESHOLD = 0.55
+
+
+def is_fast_tier(model: Optional[str]) -> bool:
+    """True for the cheap/short-window tier that should summarize early."""
+    if not model:
+        return False
+    name = model.strip().lower()
+    if name in _FAST_TIER_MODELS:
+        return True
+    return any(tok in name for tok in ("haiku", "luna", "mini", "nano"))
+
+
+def compaction_threshold_for(settings: "Settings") -> float:
+    """Window fraction at which to start compacting, by model tier.
+
+    An explicit ``chat_compaction_threshold`` in config/env always wins; the
+    tier default applies only when the setting is left at its sentinel.
+    """
+    configured = getattr(settings, "chat_compaction_threshold", None)
+    if configured is not None and configured > 0:
+        return float(configured)
+    try:
+        model = settings.model_for_provider()
+    except Exception:  # noqa: BLE001 — never let tiering break a turn
+        model = None
+    return FAST_COMPACTION_THRESHOLD if is_fast_tier(model) else FRONTIER_COMPACTION_THRESHOLD
+
+
 def should_compact(
     messages: Iterable["ChatMessage"],
     settings: "Settings",
     *,
-    threshold: float = 0.6,
+    threshold: Optional[float] = None,
     summary_tokens: int = 0,
 ) -> bool:
     """True when the chat transcript approaches ``threshold`` of the window.
 
-    Compact early (default 0.6, not 0.95) so quality doesn't degrade near the
-    limit. ``summary_tokens`` accounts for the rolling summary already carried.
+    Compact well before the limit so quality doesn't degrade near it. With
+    ``threshold=None`` the trigger is derived from the model tier
+    (``compaction_threshold_for``). ``summary_tokens`` accounts for the rolling
+    summary already carried.
     """
+    if threshold is None or threshold <= 0:
+        threshold = compaction_threshold_for(settings)
     total = summary_tokens + sum(estimate_tokens(m.content) for m in messages)
     return total >= threshold * context_window_for(settings)
 
@@ -281,6 +336,8 @@ __all__ = [
     "select_recent_within_budget",
     "render_recent",
     "compact_verification_appendix",
+    "is_fast_tier",
+    "compaction_threshold_for",
     "should_compact",
     "WindowedContext",
     "DEFAULT_CONTEXT_BUDGET",

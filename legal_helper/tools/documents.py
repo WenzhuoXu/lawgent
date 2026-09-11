@@ -548,6 +548,7 @@ def _visual_result(
     prefix: str,
     *,
     label: str = "Page",
+    authored: bool = True,
 ) -> str:
     """Attach a labeled contact sheet to a render result so the model SEES it.
 
@@ -569,10 +570,20 @@ def _visual_result(
         **payload,
         "contact_sheets": [str(p.resolve()) for p in sheets],
         "visual_qa": (
-            f"The images below are the rendered {label.lower()}s. Check each for "
-            "text overflowing its box, blank or near-empty pages, overlapping "
-            "elements, clipped tables, and inconsistent margins. Fix and re-render "
-            "before reporting the file as done."
+            (
+                f"The images below are the rendered {label.lower()}s of a file you "
+                "authored. Check each for text overflowing its box, blank or "
+                "near-empty pages, overlapping elements, clipped tables, and "
+                "inconsistent margins. Fix and re-render before reporting the "
+                "file as done."
+            )
+            if authored
+            else (
+                f"The images below are the rendered {label.lower()}s. This is a "
+                "source document you are reading, not one you produced — read "
+                "what you need and move on. For fine detail on a single "
+                f"{label.lower()}, call `view_image` rather than re-rendering."
+            )
         ),
     }
     return image_result(body, sheets or paths)
@@ -634,6 +645,13 @@ def inspect_xlsx_range(path: str, sheet: str, cell_range: str) -> str:
 @beta_tool
 def edit_xlsx_cells(source_path: str, filename: str, edits: list[CellEdit]) -> str:
     """Copy an existing .xlsx and replace specified cell values.
+
+    Scalar value edits only. For a STRUCTURAL change — inserting, deleting or
+    moving rows/columns, merging, copying a styled row, bulk styling — use
+    `reshape_xlsx` instead; a string of scalar edits cannot simulate a reshape
+    and will corrupt formulas and styles that reference the moved cells.
+    Inspect the real workbook coordinates first: markdown table exports shift
+    row numbers wherever blank rows or merged headers appear.
 
     Args:
         source_path: Absolute or project-relative path to the source workbook.
@@ -1042,6 +1060,11 @@ def render_pdf_pages(path: str, filename_prefix: str = "pages", dpi: int = 150, 
         out_dir,
         safe_prefix,
         label="Page",
+        # Read-only: this renders a PDF the model is READING, so the
+        # authored-file "fix and re-render before reporting it done" QA loop
+        # does not apply. Emitting it here told the model to repair a file it
+        # never wrote, and drove repeat single-page renders of source PDFs.
+        authored=False,
     )
 
 

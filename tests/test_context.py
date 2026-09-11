@@ -150,3 +150,43 @@ def test_build_context_block_puts_volatile_summary_after_stable_transcript():
     assert block.index("Recent visible chat transcript:") < block.index(
         "Current chat memory summary:"
     )
+
+
+def test_compaction_threshold_is_model_tier_aware():
+    """Strong models ride longer (sub-agent isolation); fast tier folds early."""
+    from legal_helper.config import load_settings
+    from legal_helper.context import (
+        FAST_COMPACTION_THRESHOLD,
+        FRONTIER_COMPACTION_THRESHOLD,
+        compaction_threshold_for,
+        is_fast_tier,
+    )
+
+    assert is_fast_tier("claude-haiku-4-5") is True
+    assert is_fast_tier("gpt-5.6-luna") is True
+    assert is_fast_tier("claude-opus-5") is False
+    assert is_fast_tier(None) is False
+
+    base = load_settings(refresh=True)
+    frontier = base.model_copy(
+        update={"provider": "anthropic", "anthropic_model": "claude-opus-5"}
+    )
+    fast = base.model_copy(
+        update={"provider": "anthropic", "anthropic_model": "claude-haiku-4-5"}
+    )
+    assert compaction_threshold_for(frontier) == FRONTIER_COMPACTION_THRESHOLD
+    assert compaction_threshold_for(fast) == FAST_COMPACTION_THRESHOLD
+
+    # An explicit setting still wins over the tier default.
+    pinned = frontier.model_copy(update={"chat_compaction_threshold": 0.42})
+    assert compaction_threshold_for(pinned) == 0.42
+
+
+def test_opus_5_gets_the_full_window():
+    from legal_helper.config import load_settings
+    from legal_helper.context import context_window_for
+
+    s = load_settings(refresh=True).model_copy(
+        update={"provider": "anthropic", "anthropic_model": "claude-opus-5"}
+    )
+    assert context_window_for(s) == 1_000_000

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any, Iterable, Iterator, Optional
 
 import httpx
@@ -49,6 +50,43 @@ WEB_FETCH_TOOL = {"type": "web_fetch_20250910", "name": "web_fetch"}
 WEB_BETAS = ["web-search-2025-03-05", "web-fetch-2025-09-10"]
 FILES_API_BETA = "files-api-2025-04-14"
 CACHE_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
+
+# Server-side context management. Clearing old tool results is measured at a
+# ~50% peak-token reduction on long research runs, but it INVALIDATES the
+# cached prompt prefix every time it fires — and this provider relies on
+# cache_control breakpoints for both the system block and the tool list. On a
+# cache-heavy legal workload that trade can go either way, so it stays opt-in
+# until the eval harness can measure it. Memory tool results are excluded
+# because they are meant to persist and be re-read deliberately.
+CONTEXT_MANAGEMENT_BETA = "context-management-2025-06-27"
+_CLEAR_TOOL_USES_TYPE = "clear_tool_uses_20250919"
+_CLEAR_TRIGGER_TOKENS = 120_000
+_CLEAR_KEEP_TOOL_USES = 6
+
+
+def _context_management_kwarg() -> Optional[dict[str, Any]]:
+    """``context_management`` param when LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS is on.
+
+    Set the env var to a token count to override the trigger threshold, or to
+    ``1``/``true`` for the default. Unset (the default) → no context management,
+    and the prompt cache stays intact.
+    """
+    raw = (os.getenv("LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS") or "").strip().lower()
+    if not raw or raw in {"0", "false", "no", "off"}:
+        return None
+    trigger = _CLEAR_TRIGGER_TOKENS
+    if raw.isdigit():
+        trigger = max(int(raw), 1_000)
+    return {
+        "edits": [
+            {
+                "type": _CLEAR_TOOL_USES_TYPE,
+                "trigger": {"type": "input_tokens", "value": trigger},
+                "keep": {"type": "tool_uses", "value": _CLEAR_KEEP_TOOL_USES},
+                "exclude_tools": ["memory"],
+            }
+        ]
+    }
 
 
 def _cached_system(system: str) -> Any:
@@ -153,6 +191,28 @@ def _instrument_local_tools(tools: list[Any], *, provider: str, model: str) -> l
         object.__setattr__(wrapped, "call", make_call(inner_call, tool_name))
         out.append(wrapped)
     return out
+
+
+# Parity with the OpenAI provider: when the tool loop is cut off by
+# `max_iterations` the model has the tool results but never got a turn in
+# which tools were unavailable, so the answer can come back empty.
+CEILING_SYNTHESIS_NUDGE = (
+    "You have reached this turn's tool-call limit, so no further tools are "
+    "available. Using only the information already gathered above, write the "
+    "complete final answer for the user now. Where something could not be "
+    "verified with the tools you had, say so explicitly instead of omitting it."
+)
+
+
+def _runner_hit_ceiling(final: Any) -> bool:
+    """True when `tool_runner` stopped while the model still wanted tools.
+
+    The SDK loop appends the assistant turn AND its tool results before
+    re-checking `_should_stop()` (`BaseSyncToolRunner.__run__`), so a final
+    message still carrying ``stop_reason == "tool_use"`` means the iteration
+    ceiling ended the loop rather than the model finishing its answer.
+    """
+    return getattr(final, "stop_reason", None) == "tool_use"
 
 
 def _merge_usage(total: dict[str, Any], u: Any) -> None:
@@ -295,6 +355,46 @@ class AnthropicProvider:
             structured_output=structured_output,
         )
 
+    def _forced_synthesis_after_ceiling(
+        self,
+        runner: Any,
+        *,
+        system: str,
+        betas: list[str],
+        usage: dict[str, Any],
+    ) -> str:
+        """One more call carrying the tool results, with no tools offered.
+
+        The runner has already folded the last assistant turn and its
+        tool_result message into its params, so the conversation is complete —
+        all that is missing is a turn the model can only answer in.
+        """
+        try:
+            params = getattr(runner, "_params", None) or {}
+            history = list(params.get("messages") or [])
+            if not history:
+                return ""
+            kwargs: dict[str, Any] = dict(
+                max_tokens=self.settings.max_tokens,
+                model=self.model,
+                system=_cached_system(system),
+                messages=[
+                    *history,
+                    {"role": "user", "content": CEILING_SYNTHESIS_NUDGE},
+                ],
+            )
+            if betas:
+                kwargs["betas"] = betas
+            resp = self.client.beta.messages.create(**kwargs)
+            _merge_usage(usage, getattr(resp, "usage", None))
+            return _extract_final_text(resp)
+        except Exception as exc:  # noqa: BLE001 — recovery must not raise
+            log_workflow_event(
+                "tool_loop_ceiling_synthesis_failed",
+                {"provider": self.name, "model": self.model, "error": str(exc)[:500]},
+            )
+            return ""
+
     def tool_runner(
         self,
         system: str,
@@ -322,6 +422,11 @@ class AnthropicProvider:
             system=_cached_system(system),
             max_iterations=max_iterations,
         )
+        ctx_mgmt = _context_management_kwarg()
+        if ctx_mgmt is not None:
+            kwargs["context_management"] = ctx_mgmt
+            if CONTEXT_MANAGEMENT_BETA not in betas:
+                betas.append(CONTEXT_MANAGEMENT_BETA)
         if betas:
             kwargs["betas"] = betas
         if structured_output is not None:
@@ -360,6 +465,23 @@ class AnthropicProvider:
                     final, tool_calls, hosted_calls, provider=self.name, model=self.model
                 )
 
+            ceiling_text = ""
+            if _runner_hit_ceiling(final):
+                log_workflow_event(
+                    "tool_loop_ceiling_hit",
+                    {
+                        "provider": self.name,
+                        "model": self.model,
+                        "max_iterations": max_iterations,
+                        "had_text": bool(_extract_final_text(final).strip()),
+                        "stream": False,
+                    },
+                )
+                if not _extract_final_text(final).strip():
+                    ceiling_text = self._forced_synthesis_after_ceiling(
+                        runner, system=system, betas=betas, usage=usage
+                    )
+
         record_usage(self.name, self.model, usage, state_dir=getattr(self.settings, "state_dir", None))
 
         structured_payload: Optional[dict[str, Any]] = None
@@ -370,7 +492,7 @@ class AnthropicProvider:
             except Exception:
                 structured_payload = None
 
-        text = _extract_final_text(final)
+        text = _extract_final_text(final) or ceiling_text
         message_id = getattr(final, "id", None)
         stop_reason = getattr(final, "stop_reason", None)
 
@@ -454,6 +576,11 @@ class AnthropicProvider:
             max_iterations=max_iterations or self.settings.max_iterations,
             stream=True,
         )
+        ctx_mgmt = _context_management_kwarg()
+        if ctx_mgmt is not None:
+            kwargs["context_management"] = ctx_mgmt
+            if CONTEXT_MANAGEMENT_BETA not in betas:
+                betas.append(CONTEXT_MANAGEMENT_BETA)
         if betas:
             kwargs["betas"] = betas
         thinking = _thinking_kwarg(
@@ -558,6 +685,27 @@ class AnthropicProvider:
 
         final = runner.until_done()
         text = _extract_final_text(final) or "".join(final_text_chunks)
+        if _runner_hit_ceiling(final):
+            log_workflow_event(
+                "tool_loop_ceiling_hit",
+                {
+                    "provider": self.name,
+                    "model": self.model,
+                    "max_iterations": max_iterations or self.settings.max_iterations,
+                    "had_text": bool(text.strip()),
+                    "stream": True,
+                },
+            )
+            if not text.strip():
+                # The loop ran out of iterations before the model wrote prose.
+                # Spend one more call with no tools rather than shipping an
+                # empty assistant message.
+                text = self._forced_synthesis_after_ceiling(
+                    runner, system=system, betas=betas, usage=usage
+                )
+                if text:
+                    final_text_chunks.append(text)
+                    yield StreamEvent("delta", {"text": text})
         if text and not final_text_chunks:
             # Defensive fallback: if the SDK produces a final message without
             # exposing text deltas, still show the answer in the chat stream.

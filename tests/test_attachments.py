@@ -206,3 +206,84 @@ def test_missing_file_falls_back_to_stub(tmp_path):
     blocks = att.build_user_content("hi", [missing], "anthropic")
     assert blocks[0]["type"] == "text"
     assert "ghost.bin" in blocks[0]["text"]
+
+
+def test_total_inline_budget_defers_the_overflow(tmp_path, monkeypatch):
+    """The per-file caps bound one upload; this bounds the turn.
+
+    A chat carrying 33 screenshots re-sent ~16 MB of identical image payload
+    on every provider call. Files past the budget must degrade to an openable
+    path stub rather than silently inflating the prompt.
+    """
+    monkeypatch.setattr(att, "_MAX_TOTAL_INLINE_BYTES", 1_000)
+    small = _write(tmp_path / "a.txt", b"x" * 400)
+    medium = _write(tmp_path / "b.txt", b"y" * 400)
+    overflow = _write(tmp_path / "c.txt", b"z" * 400)
+
+    blocks = att.build_user_content("look at these", [small, medium, overflow], "openai")
+    texts = [b.get("text", "") for b in blocks]
+
+    assert any("a.txt" in t and "xxx" in t for t in texts)
+    assert any("b.txt" in t and "yyy" in t for t in texts)
+    deferred = [t for t in texts if "attachment deferred" in t]
+    assert len(deferred) == 1
+    assert "c.txt" in deferred[0]
+    # Deferred is not lost: the model is told exactly how to open it.
+    assert "read_document" in deferred[0]
+    assert str(overflow) in deferred[0]
+
+
+def test_pdfs_do_not_draw_on_the_inline_budget(tmp_path, monkeypatch):
+    """PDFs travel as file_id references, not inlined bytes."""
+    monkeypatch.setattr(att, "_MAX_TOTAL_INLINE_BYTES", 10)
+    pdf = _write(tmp_path / "big.pdf", b"%PDF-1.4" + b"0" * 5_000)
+    assert att._inline_cost(att.describe(pdf)) == 0
+
+
+def test_single_large_document_is_still_inlined(tmp_path):
+    """One document belongs in the prompt — that is the case production evidence supports."""
+    from legal_helper.attachments import _should_navigate, _to_info
+
+    big = tmp_path / "lease.md"
+    big.write_text("第一条 " + "甲" * 300_000, encoding="utf-8")
+    infos = [_to_info(str(big))]
+    assert _should_navigate(infos) is False
+
+
+def test_document_corpus_switches_to_outline_navigation(tmp_path):
+    from legal_helper.attachments import (
+        _outline_text,
+        _should_navigate,
+        _to_info,
+    )
+
+    infos = []
+    for i in range(3):
+        f = tmp_path / f"doc{i}.md"
+        f.write_text(
+            "## Overview\n第一条 通则。\n第二条 适用范围。\n" + "内容" * 100_000,
+            encoding="utf-8",
+        )
+        infos.append(_to_info(str(f)))
+
+    assert _should_navigate(infos) is True
+
+    outline = _outline_text(infos[0])
+    # The outline advertises real landmarks and a way to read the rest.
+    assert "第一条" in outline and "第二条" in outline
+    assert "read_document" in outline
+    assert str(infos[0].path) in outline
+    # …and is drastically smaller than the body it replaces.
+    assert len(outline) < infos[0].size / 100
+
+
+def test_navigation_can_be_disabled(tmp_path, monkeypatch):
+    from legal_helper.attachments import _should_navigate, _to_info
+
+    monkeypatch.setenv("LEGAL_HELPER_INLINE_CORPUS_BYTES", "0")
+    infos = []
+    for i in range(3):
+        f = tmp_path / f"doc{i}.md"
+        f.write_text("x" * 300_000, encoding="utf-8")
+        infos.append(_to_info(str(f)))
+    assert _should_navigate(infos) is False

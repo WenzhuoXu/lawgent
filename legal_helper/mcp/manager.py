@@ -94,8 +94,22 @@ class McpManager:
         except ImportError:
             return McpClient(spec=spec, tools=[{"error": "mcp package not installed"}])
 
+        command = spec.launch_command()
+        if command is None:
+            return McpClient(
+                spec=spec,
+                tools=[
+                    {
+                        "error": (
+                            f"stdio command {spec.command!r} not found on PATH or in the "
+                            f"conda env — install it in the harness env (see CLAUDE.md) "
+                            f"or give an absolute path in .mcp.json"
+                        )
+                    }
+                ],
+            )
         params = StdioServerParameters(
-            command=spec.command or "python",
+            command=command,
             args=list(spec.args),
             env={**os.environ, **spec.env},
         )

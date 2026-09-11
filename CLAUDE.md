@@ -39,6 +39,15 @@ US sources (CourtListener, eCFR, Federal Register, GovInfo) are served by **dire
 
 The PKULaw MCP is **remote HTTP**, no install needed — set `PKULAW_API_TOKEN` in `legal_helper/api_key` (or `.env`).
 
+**stdio MCP commands stay bare in `.mcp.json`.** `registry.resolve_command()`
+resolves them at launch: `python` / `python3` → `sys.executable` (so an in-tree
+server always runs under the same interpreter, and therefore the same deps, as
+the harness), everything else → `PATH`, then the conda bin dirs. Do **not**
+hardcode absolute paths in `.mcp.json` — that was the previous bug in reverse.
+`LEGAL_HELPER_MCP_ENV` (default `llm`) names the env to search; an
+unresolvable command produces a named error from `unresolvable_stdio_specs()`
+instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
+
 ## Repo anatomy
 
 - `legal_helper/skills/<name>/` — generic, domain-agnostic skills. Each is `SKILL.md` (<100 lines) + `references/` (deep prose pulled on demand) + `resources/` (output templates) + `scripts/` (deterministic helpers).
@@ -88,18 +97,70 @@ explicitly asks for restructuring.
 - Billing semantics differ per provider and `usage.py` prices accordingly:
   Anthropic cache read/write are separate buckets; OpenAI cached tokens are a
   discounted subset of `input_tokens`.
+- **OpenAI long-context surcharge**: a request whose `input_tokens` exceeds
+  `OPENAI_LONG_CONTEXT_THRESHOLD` (272K) bills at 2x input and 1.5x output for
+  the whole request. This is modelled (`is_long_context`), and
+  `month_summary` reports `long_context_requests` per model and in totals.
+  Leaving it out under-reported 2026-08 by 21% and 2026-09 by 31% — if you
+  touch the pricing math, keep this term.
 - `GET /api/usage` serves the month summary (`?month=YYYY-MM` for history);
   the webui settings bar renders it (`CostCenter` in `src/main.jsx`).
-- Pricing table: `DEFAULT_PRICING` in `usage.py`; override with the
+- Pricing table: `DEFAULT_PRICING` in `usage.py`, **verified 2026-09-11**
+  against the official Anthropic and OpenAI pricing pages; override with the
   `LEGAL_HELPER_PRICING_JSON` env var (same shape) when list prices change.
+  Re-verify at each monthly review — the whole gpt-5.6 family moved between
+  July and September and the stale table was wrong in both directions.
 - `scripts/monthly_harness_review.md` + `.sh` — recurring monthly harness
   review (external sweep + repo audit + cost-center check), designed for a
   crontab entry `23 9 1 * *` running the shell script.
 
+## Context & memory management
+
+- **Compaction is tier-aware, not a constant.** `context.compaction_threshold_for`
+  returns 0.75 for frontier models and 0.55 for the fast tier
+  (`is_fast_tier`: haiku / luna / mini / nano). Rationale: strong agents do
+  better carrying the transcript further and isolating work in sub-agents,
+  weak ones do better summarizing early. `chat_compaction_threshold: 0.0` in
+  `config.yaml` means "derive"; any positive value pins it for every model.
+- **Model windows live in `context._WINDOWS`.** A model missing from that dict
+  silently gets `_DEFAULT_WINDOW` (200K) — which is how a 1M-window model ends
+  up compacting at ~120K. **Add every new model ID here, to
+  `usage.DEFAULT_PRICING`, and to the `*_HIGH_EFFORT_MODELS` tuple in
+  `config.py` at the same time.**
+- **Rolling summaries roll forward by delta, never by rewrite.** Both
+  `memory.summarize_with_fast_model` (per chat) and `ProjectStore.compact`
+  (cross-chat) ask the fast model only for `+ Section | …` / `- Section | …`
+  lines and merge them deterministically via `memory.apply_delta` over the
+  sections in `memory.SUMMARY_SECTIONS`. Re-summarizing a summary erodes
+  detail every pass (context collapse); do not reintroduce a "rewrite this
+  summary" prompt. An unparseable delta must leave the prior playbook intact.
+- **Attachments: inject one document, navigate a corpus.** A single text
+  attachment is inlined. Past `LEGAL_HELPER_INLINE_CORPUS_BYTES` (400 KB of
+  extracted text, `0` disables) each text attachment degrades to an outline
+  built from `rag.chunker._ARTICLE_RES` plus the `read_document` call that
+  opens it. Images and provider-side PDFs are unaffected.
+- **Anthropic server-side context management is opt-in.**
+  `LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS` enables `clear_tool_uses_20250919`.
+  It is off by default because it invalidates the cached prompt prefix every
+  time it fires, and this provider relies on `cache_control` breakpoints for
+  the system block and tool list. Do not default it on without measuring.
+
+## Workflow failure taxonomy
+
+`legal_helper/citations/trajectory.py` gives every workflow failure event a
+subclass across two layers — `substantive` (the legal content is wrong) and
+`procedural` (the agent misbehaved). `log_workflow_event` attaches the tag
+automatically, so **add new failure events to `EVENT_SUBCLASSES` rather than
+tagging at the call site**; progress events (`*_started`, `*_finished`)
+deliberately have no entry. `profile()` aggregates a run and reports the
+layers separately — a run with procedural failures and zero substantive ones
+is the right-answer-wrong-reason case, and summing them would hide it.
+
 ## Provider parity contract
 
-- Both `claude-opus-4-8` (primary; `claude-opus-4-7` still supported) and `gpt-5.6-terra` (primary; `gpt-5.6-sol` and `gpt-5.5` still supported) paths must work end-to-end on every change.
+- Both `claude-opus-5` (primary; `claude-opus-4-8` / `claude-opus-4-7` still supported) and `gpt-5.6-terra` (primary; `gpt-5.6-sol` still supported) paths must work end-to-end on every change.
 - Fast/lightweight tier: `claude-haiku-4-5` and `gpt-5.6-luna`. Note: the bare `gpt-5.6` alias routes to **Sol**, not Terra — always use the full `gpt-5.6-terra` ID.
+- `gpt-5.5` is **retired from the high-effort list** (2026-09-11): at verified list prices it is $5.00/$30.00 against Terra's $2.00/$12.00 for the same work, and it was 5.7% of September requests but 55% of real spend. It stays in `usage.DEFAULT_PRICING` so historical ledger months still replay — do not put it back in `OPENAI_HIGH_EFFORT_MODELS`.
 - MCP tools are surfaced as **plain function tools** to both SDKs; never use Anthropic's `mcp_servers` parameter or OpenAI's Responses-API `mcp` field as the only path.
 - Hosted `web_search` / `web_fetch` already at parity; do not touch.
 - RAG is local (bge-m3 + Qdrant); no provider API in the retrieval hot path.

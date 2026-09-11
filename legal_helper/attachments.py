@@ -20,6 +20,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import mimetypes
+import os
+import re
 import shutil
 import subprocess
 import threading
@@ -50,6 +52,40 @@ _INLINE_EXTS = _OFFICE_EXTS | _TEXT_EXTS | _CODE_EXTS
 
 _MAX_INLINE_BYTES = 2_000_000
 _MAX_INLINE_IMAGE_BYTES = 8_000_000
+# Aggregate ceiling across ONE turn's attachments. The two caps above bound a
+# single file; nothing bounded the sum, so a chat carrying 33 screenshots
+# shipped ~16 MB (~136k tokens) of identical image payload on every turn.
+# Files past the budget degrade to the same on-demand stub the binary category
+# already uses, so nothing becomes unreachable — only deferred to a tool call.
+_MAX_TOTAL_INLINE_BYTES = 10_000_000
+
+# ---- inject vs navigate -----------------------------------------------------
+# A single document belongs in the prompt; a *corpus* does not. Measured on
+# transactional legal documents (arXiv 2607.05764), navigating a structured
+# index matched or beat full injection on every document-bound question at
+# roughly a 56x smaller answering context, and embedding retrieval alone tied
+# on 16 of 18 at 17.3x fewer tokens — while the honest counter-case (Thomson
+# Reuters' production finding that full-document context beats RAG for
+# document-bound legal skills) holds for the single-document case. The break-
+# even given in the paper is corpus size relative to the retrieval payload.
+#
+# So: below the threshold, inline as before. Above it, every text attachment is
+# replaced by a navigable OUTLINE — headings and 第X条 / Article N labels, which
+# the chunker already knows how to find — plus the tool call that opens it. The
+# model then reads what it needs instead of everything, and nothing becomes
+# unreachable. Set LEGAL_HELPER_INLINE_CORPUS_BYTES=0 to disable.
+_NAVIGATE_CORPUS_BYTES = 400_000
+_OUTLINE_MAX_ENTRIES = 60
+
+
+def _navigate_threshold() -> int:
+    raw = os.getenv("LEGAL_HELPER_INLINE_CORPUS_BYTES")
+    if raw is None:
+        return _NAVIGATE_CORPUS_BYTES
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return _NAVIGATE_CORPUS_BYTES
 
 
 @dataclass
@@ -158,6 +194,100 @@ def _wrap_inline(info: AttachmentInfo, text: str) -> str:
         f"{text}\n"
         f"</attached-file>"
     )
+
+
+def _inline_cost(info: AttachmentInfo) -> int:
+    """Bytes this attachment adds to the prompt itself.
+
+    PDFs (and .pptx, which converts to one) travel as provider file_id
+    references rather than inlined bytes, so they do not draw on the turn's
+    inline budget.
+    """
+    if _is_pptx(info) or info.category == "native_pdf":
+        return 0
+    if info.category in {"native_image", "text_inline"}:
+        return info.size
+    return 0
+
+
+def _deferred_text(info: AttachmentInfo) -> str:
+    opener = {
+        "native_image": "view_image",
+        "text_inline": "read_document",
+    }.get(info.category, "read_document")
+    return (
+        f"[attachment deferred — this turn's inline budget "
+        f"({_MAX_TOTAL_INLINE_BYTES} bytes) is spent: {info.filename} "
+        f"({info.mime}, {info.size} bytes). Saved at {info.path}. "
+        f"Open it when you need it with `{opener}(path={str(info.path)!r})`.]"
+    )
+
+
+def _outline_entries(text: str) -> list[str]:
+    """Navigable landmarks in a document: headings and article/section labels.
+
+    Reuses the RAG chunker's boundary patterns so the labels the outline
+    advertises are the same ones retrieval can actually seek to.
+    """
+    try:
+        from .rag.chunker import _ARTICLE_RES  # type: ignore[attr-defined]
+
+        patterns = list(_ARTICLE_RES)
+    except Exception:  # noqa: BLE001 — outline must work without the RAG extras
+        patterns = [
+            re.compile(r"(?m)^\s*(第[一二三四五六七八九十百千零0-9]+条)"),
+            re.compile(r"(?m)^\s*(#{1,6}\s+.+)$"),
+            re.compile(r"(?m)^\s*(Article\s+\d+[A-Za-z]?)"),
+            re.compile(r"(?m)^\s*(§\s*\d+)"),
+        ]
+    seen: set[str] = set()
+    entries: list[str] = []
+    for pat in patterns:
+        for m in pat.finditer(text):
+            label = " ".join(m.group(1).split())[:120]
+            if label and label not in seen:
+                seen.add(label)
+                entries.append(label)
+            if len(entries) >= _OUTLINE_MAX_ENTRIES:
+                return entries
+    return entries
+
+
+def _outline_text(info: AttachmentInfo) -> str:
+    """Navigable map of a text attachment, in place of its full body."""
+    body = extract_inline_text(info)
+    entries = _outline_entries(body)
+    head = " ".join(body[:400].split())
+    lines = [
+        f"[attachment not inlined — this turn carries a document corpus, so it is "
+        f"indexed rather than pasted: {info.filename} ({info.mime}, {info.size} bytes). "
+        f"Saved at {info.path}.]",
+        f"opens with: {head}…" if head else "",
+    ]
+    if entries:
+        shown = ", ".join(entries)
+        more = " …" if len(entries) >= _OUTLINE_MAX_ENTRIES else ""
+        lines.append(f"sections: {shown}{more}")
+    lines.append(
+        f"Read the parts you need with `read_document(path={str(info.path)!r})`, "
+        f"or search the corpus with the retrieval tools."
+    )
+    return "\n".join(x for x in lines if x)
+
+
+def _should_navigate(infos: list[AttachmentInfo]) -> bool:
+    """True when the turn carries a corpus rather than a document.
+
+    One text attachment is always inlined regardless of size (the per-file cap
+    still applies) — that is the case the production evidence supports.
+    """
+    threshold = _navigate_threshold()
+    if threshold <= 0:
+        return False
+    text_infos = [i for i in infos if i.category == "text_inline"]
+    if len(text_infos) <= 1:
+        return False
+    return sum(i.size for i in text_infos) > threshold
 
 
 def _stub_text(info: AttachmentInfo) -> str:
@@ -453,8 +583,38 @@ def build_user_content(
         return text
     infos = [_to_info(a) for a in items]
     blocks: list[dict[str, Any]] = []
+
+    # Aggregate inline budget, spent in the order given (the current turn's
+    # own uploads come first). Overflow degrades to a path stub the model can
+    # open with a tool, so a large batch costs a tool call instead of the
+    # whole context window.
+    budget_left = _MAX_TOTAL_INLINE_BYTES
+    navigate = _should_navigate(infos)
+
+    def fits(info: AttachmentInfo) -> bool:
+        nonlocal budget_left
+        # Corpus mode: text documents are indexed, not pasted. Images and
+        # provider-side PDFs are unaffected — they are not the bloat here.
+        if navigate and info.category == "text_inline":
+            return False
+        cost = _inline_cost(info)
+        if cost == 0:
+            return True
+        if cost > budget_left:
+            return False
+        budget_left -= cost
+        return True
+
+    def not_inlined(info: AttachmentInfo) -> str:
+        if navigate and info.category == "text_inline":
+            return _outline_text(info)
+        return _deferred_text(info)
+
     if provider == "anthropic":
         for info in infos:
+            if not fits(info):
+                blocks.append({"type": "text", "text": not_inlined(info)})
+                continue
             blocks.append(build_anthropic_block(info))
             if _is_pptx(info):
                 blocks.append(_pptx_text_companion_anthropic(info))
@@ -467,6 +627,9 @@ def build_user_content(
             blocks.append({"type": "text", "text": text})
     else:
         for info in infos:
+            if not fits(info):
+                blocks.append({"type": "input_text", "text": not_inlined(info)})
+                continue
             blocks.append(build_openai_block(info))
             if _is_pptx(info):
                 blocks.append(_pptx_text_companion_openai(info))

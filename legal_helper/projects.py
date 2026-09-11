@@ -534,24 +534,44 @@ class ProjectStore:
             decisions = self.list_memory(project_id, kind="decision", limit=12)
             mem_blob = "\n".join(f"- ({m.kind}) {m.title}: {m.body}" for m in decisions)
             transcript = "\n\n".join(s for s in chat_summaries if s.strip())[:6000]
+            # Delta, not rewrite. The cross-chat summary is the longest-lived
+            # context in the product, so wholesale re-summarization erodes it
+            # fastest (ACE's context collapse). Ask only for what changed and
+            # merge deterministically; the existing summary is always the base.
+            from .memory import apply_delta, parse_delta, parse_summary, render_summary
+
+            sections = parse_summary(project.summary)
             prompt = (
-                "Distill a durable, high-fidelity project memory summary for a "
-                "legal matter. Preserve goals, settled conclusions, key decisions, "
-                "open questions, jurisdictions, and artifacts. Drop chit-chat. "
-                "Write in whichever language best preserves fidelity to the matter, "
-                "and keep Chinese legal terms and citations as written.\n\n"
-                f"Existing summary:\n{project.summary or '(none)'}\n\n"
+                "Below is a legal matter's durable project memory and the newest "
+                "material. Emit ONLY the changes, one per line, in exactly this form:\n"
+                "  + Section | new durable fact\n"
+                "  - Section | start of an existing bullet that is now wrong or resolved\n"
+                "Valid sections: Goals, Facts, Conclusions, Artifacts, Open. "
+                "Do not restate bullets that are still correct — they are kept "
+                "automatically. Drop chit-chat. Write bullet text in whichever "
+                "language best preserves fidelity to the matter, and keep Chinese "
+                "legal terms and citations exactly as written. If nothing changed, "
+                "output nothing.\n\n"
+                f"Current project memory:\n{project.summary or '(empty)'}\n\n"
                 f"Project brief:\n{project.brief[:1500] or '(none)'}\n\n"
                 f"Key memory entries:\n{mem_blob or '(none)'}\n\n"
                 f"Recent chat summaries:\n{transcript or '(none)'}"
             )
             result = provider.run(
-                system="You write concise durable project memory summaries, in whichever language best fits the matter.",
+                system=(
+                    "You maintain a legal matter's durable memory as an append-only "
+                    "playbook. You emit only deltas — never a rewritten summary."
+                ),
                 messages=[{"role": "user", "content": prompt}],
                 tools=[],
                 max_iterations=1,
             )
-            if result.text.strip():
+            ops = parse_delta(result.text)
+            if ops:
+                new_summary = render_summary(apply_delta(sections, ops))[:8000]
+            elif any(sections.values()):
+                new_summary = render_summary(sections)[:8000]
+            elif result.text.strip():
                 new_summary = result.text.strip()[:8000]
         except Exception:
             pass  # keep the local fallback

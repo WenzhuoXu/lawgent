@@ -14,6 +14,19 @@ from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
 
 
+# Sent when the tool loop is cut off by `max_iterations`. The tool results are
+# already in the conversation, so the model has everything it needs; what it
+# lacks is a turn in which tools are not an option. Without this the turn
+# shipped an empty assistant message — 9 of them in a single month, every one
+# at iterations == parent_max_iterations.
+CEILING_SYNTHESIS_NUDGE = (
+    "You have reached this turn's tool-call limit, so no further tools are "
+    "available. Using only the information already gathered above, write the "
+    "complete final answer for the user now. Where something could not be "
+    "verified with the tools you had, say so explicitly instead of omitting it."
+)
+
+
 def _accumulate_usage(usage_total: dict[str, Any], u: Any) -> None:
     """Fold one Responses-API usage object into a running total.
 
@@ -222,6 +235,7 @@ class OpenAIProvider:
             }
 
         iterations = 0
+        ceiling_hit = False
         log_workflow_event(
             "provider_turn_started",
             {
@@ -320,6 +334,28 @@ class OpenAIProvider:
                         }
                     )
                 previous_response_id = last_response_id
+                if iterations >= max_iterations:
+                    ceiling_hit = True
+
+            if ceiling_hit:
+                log_workflow_event(
+                    "tool_loop_ceiling_hit",
+                    {
+                        "provider": self.name,
+                        "model": self.model,
+                        "iterations": iterations,
+                        "max_iterations": max_iterations,
+                        "had_text": bool(final_text.strip()),
+                        "stream": False,
+                    },
+                )
+                if not final_text.strip():
+                    final_text = self._forced_synthesis_text(
+                        system=system,
+                        input_items=input_items,
+                        previous_response_id=previous_response_id,
+                        usage_total=usage_total,
+                    )
 
         record_usage(self.name, self.model, usage_total, state_dir=getattr(self.settings, "state_dir", None))
 
@@ -381,6 +417,96 @@ class OpenAIProvider:
             iterations=iterations,
         )
 
+    # ----- tool-loop ceiling recovery ---------------------------------------
+
+    def _forced_synthesis_kwargs(
+        self,
+        *,
+        system: str,
+        input_items: list[dict[str, Any]],
+        previous_response_id: Optional[str],
+    ) -> dict[str, Any]:
+        """One more call with the tool results but WITHOUT tools."""
+        items = list(input_items or [])
+        items.append(
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": CEILING_SYNTHESIS_NUDGE}],
+            }
+        )
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "instructions": system,
+            "input": items,
+            "max_output_tokens": self.settings.max_tokens,
+        }
+        if previous_response_id is not None:
+            kwargs["previous_response_id"] = previous_response_id
+        if self.reasoning_effort and self.reasoning_effort != "none":
+            kwargs["reasoning"] = {"effort": self.reasoning_effort}
+        return kwargs
+
+    def _forced_synthesis_text(
+        self,
+        *,
+        system: str,
+        input_items: list[dict[str, Any]],
+        previous_response_id: Optional[str],
+        usage_total: dict[str, Any],
+    ) -> str:
+        try:
+            resp = self.client.responses.create(
+                **self._forced_synthesis_kwargs(
+                    system=system,
+                    input_items=input_items,
+                    previous_response_id=previous_response_id,
+                )
+            )
+            _accumulate_usage(usage_total, getattr(resp, "usage", None))
+            return _extract_text_from_response(resp)
+        except Exception as exc:  # noqa: BLE001 — recovery must not raise
+            log_workflow_event(
+                "tool_loop_ceiling_synthesis_failed",
+                {"provider": self.name, "model": self.model, "error": str(exc)[:500]},
+            )
+            return ""
+
+    def _forced_synthesis_stream(
+        self,
+        *,
+        system: str,
+        input_items: list[dict[str, Any]],
+        previous_response_id: Optional[str],
+        text_buffer: list[str],
+        usage_total: dict[str, Any],
+    ) -> Iterator[StreamEvent]:
+        kwargs = self._forced_synthesis_kwargs(
+            system=system,
+            input_items=input_items,
+            previous_response_id=previous_response_id,
+        )
+        if self.reasoning_effort and self.reasoning_effort != "none":
+            kwargs["reasoning"] = {"effort": self.reasoning_effort, "summary": "auto"}
+        try:
+            with self.client.responses.stream(**kwargs) as stream:
+                for event in stream:
+                    et = getattr(event, "type", "")
+                    if et == "response.output_text.delta":
+                        chunk = getattr(event, "delta", "")
+                        if chunk:
+                            text_buffer.append(chunk)
+                            yield StreamEvent("delta", {"text": chunk})
+                    elif et in {"response.completed", "response.incomplete"}:
+                        _accumulate_usage(
+                            usage_total,
+                            getattr(getattr(event, "response", None), "usage", None),
+                        )
+        except Exception as exc:  # noqa: BLE001 — recovery must not raise
+            log_workflow_event(
+                "tool_loop_ceiling_synthesis_failed",
+                {"provider": self.name, "model": self.model, "error": str(exc)[:500]},
+            )
+
     # ----- streaming --------------------------------------------------------
 
     def stream(
@@ -406,6 +532,7 @@ class OpenAIProvider:
         text_buffer: list[str] = []
         truncated = False
         iterations = 0
+        ceiling_hit = False
         usage_total: dict[str, Any] = {}
         max_iter = max_iterations or self.settings.max_iterations
 
@@ -532,6 +659,32 @@ class OpenAIProvider:
                         }
                     )
                 previous_response_id = last_response_id
+                # Reaching here means the model asked for more tools. If that
+                # was the last permitted iteration the loop exits below with
+                # tool results in hand and, quite possibly, no prose at all.
+                if iterations >= max_iter:
+                    ceiling_hit = True
+
+            if ceiling_hit:
+                log_workflow_event(
+                    "tool_loop_ceiling_hit",
+                    {
+                        "provider": self.name,
+                        "model": self.model,
+                        "iterations": iterations,
+                        "max_iterations": max_iter,
+                        "had_text": bool("".join(text_buffer).strip()),
+                        "stream": True,
+                    },
+                )
+                if not "".join(text_buffer).strip():
+                    yield from self._forced_synthesis_stream(
+                        system=system,
+                        input_items=input_items,
+                        previous_response_id=previous_response_id,
+                        text_buffer=text_buffer,
+                        usage_total=usage_total,
+                    )
 
         final_text = "".join(text_buffer)
         if truncated:

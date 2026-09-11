@@ -74,30 +74,49 @@ def _ambient_context() -> dict[str, Any]:
 # USD per 1M tokens.  ``cache_read`` / ``cache_write`` are Anthropic buckets;
 # ``cached_input`` is OpenAI's discounted-cached-input rate.  Override or
 # extend without a code change via LEGAL_HELPER_PRICING_JSON (same shape).
-# Rates verified against official pricing pages 2026-07-20 (Anthropic:
-# platform.claude.com pricing table; OpenAI: developers.openai.com model page).
+# Rates verified against official pricing pages 2026-09-11 (Anthropic:
+# platform.claude.com/docs/en/about-claude/pricing; OpenAI:
+# developers.openai.com/api/docs/pricing).
 # Anthropic: cache read = 0.1x input, cache write (5-minute TTL) = 1.25x input.
-# claude-sonnet-5 is introductory pricing through 2026-08-31; from 2026-09-01
-# the standard rate is input 3.00 / output 15.00 (cache_read 0.30 / write 3.75).
+# claude-sonnet-5 stays at 2.00/10.00 — the increase to 3.00/15.00 scheduled for
+# 2026-09-01 was cancelled and the introductory rate is now standard.
 DEFAULT_PRICING: dict[str, dict[str, float]] = {
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-opus-4-8": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-opus-4-7": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
-    # gpt-5.5 publishes no cache-write charge; long-context (>272K input) bills
-    # at 2x input / 1.5x output — not modeled here.
+    # Fable/Mythos 5.1 read cache at 0.025x input (not the usual 0.1x).
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cache_read": 0.25, "cache_write": 12.50},
+    "claude-mythos-5-1": {"input": 10.00, "output": 50.00, "cache_read": 0.25, "cache_write": 12.50},
+    # gpt-5.5 publishes no cache-write charge.
     "gpt-5.5": {"input": 5.00, "output": 30.00, "cached_input": 0.50},
-    # gpt-5.6 family (verified on official OpenAI docs 2026-07-21). Unlike
-    # gpt-5.5 the 5.6 family BILLS CACHE WRITES at 1.25x input; the Responses
-    # API usage object does not yet report a cache-write token count
-    # (input_tokens_details carries only cached_tokens), so the rate sits here
-    # unused until the SDK exposes one — see the openai branch of _cost_usd.
-    # Bare "gpt-5.6" routes to Sol; only the named variants are used here.
-    "gpt-5.6-terra": {"input": 2.50, "output": 15.00, "cached_input": 0.25, "cache_write": 3.125},
-    "gpt-5.6-sol": {"input": 5.00, "output": 30.00, "cached_input": 0.50, "cache_write": 6.25},
-    "gpt-5.6-luna": {"input": 1.00, "output": 6.00, "cached_input": 0.10, "cache_write": 1.25},
+    # gpt-5.6 family. Unlike gpt-5.5 the 5.6 family BILLS CACHE WRITES at 1.25x
+    # input; the Responses API usage object does not yet report a cache-write
+    # token count (input_tokens_details carries only cached_tokens), so the rate
+    # sits here unused until the SDK exposes one — see the openai branch of
+    # _cost_usd. Bare "gpt-5.6" routes to Sol; only named variants are used.
+    "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cached_input": 0.20, "cache_write": 2.50},
+    "gpt-5.6-sol": {"input": 4.00, "output": 20.00, "cached_input": 0.40, "cache_write": 5.00},
+    "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cached_input": 0.02, "cache_write": 0.25},
 }
+
+# OpenAI bills a prompt whose input exceeds this threshold at 2x input (cached
+# input included) and 1.5x output, for the whole request. Every current
+# gpt-5.5/5.6 model carries it. Modelling it matters: through 2026-08 and
+# 2026-09 roughly a quarter of gpt-5.5 and terra requests crossed the line, and
+# leaving the term out under-reported the month by 21-31%.
+OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
+OPENAI_LONG_CONTEXT_INPUT_MULT = 2.0
+OPENAI_LONG_CONTEXT_OUTPUT_MULT = 1.5
+
+
+def is_long_context(rec: dict[str, Any]) -> bool:
+    """True when an OpenAI record crosses the long-context surcharge threshold."""
+    if rec.get("provider") != "openai":
+        return False
+    return int(rec.get("input_tokens") or 0) > OPENAI_LONG_CONTEXT_THRESHOLD
 
 # Used when a model has no pricing entry, so the estimate stays an estimate
 # instead of silently reading as zero spend.
@@ -192,15 +211,23 @@ def _cost_usd(rec: dict[str, Any], pricing: dict[str, dict[str, float]]) -> floa
     if rec.get("provider") == "openai":
         # cached tokens are a discounted subset of input_tokens
         cached_rate = rates.get("cached_input", rates["input"] * 0.1)
+        input_rate = rates["input"]
+        output_rate = rates["output"]
+        cwrite_rate = rates.get("cache_write")
+        if is_long_context(rec):
+            input_rate *= OPENAI_LONG_CONTEXT_INPUT_MULT
+            cached_rate *= OPENAI_LONG_CONTEXT_INPUT_MULT
+            output_rate *= OPENAI_LONG_CONTEXT_OUTPUT_MULT
+            if cwrite_rate:
+                cwrite_rate *= OPENAI_LONG_CONTEXT_INPUT_MULT
         cost = (
-            max(inp - cread, 0) * rates["input"]
+            max(inp - cread, 0) * input_rate
             + cread * cached_rate
-            + out * rates["output"]
+            + out * output_rate
         )
         # gpt-5.6 family bills cache writes (1.25x input). The Responses API
         # does not report cache-write tokens yet, so cwrite stays 0 in
         # practice; once the SDK exposes the detail field the term activates.
-        cwrite_rate = rates.get("cache_write")
         if cwrite_rate and cwrite:
             cost += cwrite * cwrite_rate
     else:
@@ -236,6 +263,7 @@ def month_summary(
         "cache_write_tokens": 0,
         "total_tokens": 0,
         "requests": 0,
+        "long_context_requests": 0,
     }
     by_model: dict[tuple[str, str], dict[str, Any]] = {}
     cost = 0.0
@@ -261,6 +289,7 @@ def month_summary(
                         "cache_read_tokens": 0,
                         "cache_write_tokens": 0,
                         "requests": 0,
+                        "long_context_requests": 0,
                         "estimated_cost_usd": 0.0,
                     },
                 )
@@ -270,6 +299,9 @@ def month_summary(
                     totals[k] += v
                 bucket["requests"] += 1
                 totals["requests"] += 1
+                if is_long_context(rec):
+                    bucket["long_context_requests"] += 1
+                    totals["long_context_requests"] += 1
                 rec_cost = _cost_usd(rec, pricing)
                 bucket["estimated_cost_usd"] += rec_cost
                 cost += rec_cost

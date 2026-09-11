@@ -33,6 +33,19 @@ env (see README); the in-tree `ccar_aviation` MCP starts from
 `python -m legal_helper.mcp.servers.ccar_aviation`. The PKULaw MCP is
 remote HTTP — set `PKULAW_API_TOKEN` in `.env`.
 
+Commands in `.mcp.json` are deliberately bare (`python`, `npx`) and are
+resolved at launch by `registry.resolve_command()` — `python` becomes the
+running interpreter, anything else is looked up on `PATH` then in the conda
+bin dirs (`LEGAL_HELPER_MCP_ENV`, default `llm`). Leave them bare; an
+absolute path pins the file to one machine. To check every configured
+launcher resolves:
+
+```bash
+conda run -n llm python -c \
+  "from legal_helper.mcp.registry import load_registry, unresolvable_stdio_specs; \
+   print(unresolvable_stdio_specs(load_registry()) or 'all stdio commands resolve')"
+```
+
 To smoke an MCP from the command line:
 
 ```bash
@@ -59,10 +72,16 @@ production web service in the background:
 
 1. Stop old app processes on ports 8010 / 8011 / 5174.
 2. Rebuild the frontend: `conda run -n llm npm run build`.
-3. Start the backend with the env Python directly:
+3. Start the backend with the env Python directly. Resolve the interpreter
+   rather than assuming a path — `conda info --base` is the *base* install and
+   is not necessarily the parent of the env (envs created with `conda create
+   --name` under a user prefix live in `~/.conda/envs`, not
+   `$(conda info --base)/envs`), so hardcoding either one breaks on some
+   machines:
 
    ```bash
-   setsid "$(conda info --base)/envs/llm/bin/python" -u -m legal_helper serve \
+   PY=$(conda run -n llm python -c 'import sys; print(sys.executable)' | tr -d '\r\n')
+   setsid "$PY" -u -m legal_helper serve \
        --host 0.0.0.0 --port 8010 </dev/null > logs/server-8010.log 2>&1 &
    ```
 

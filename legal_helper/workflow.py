@@ -58,6 +58,7 @@ from .tools.documents import (
     reshape_xlsx,
     rotate_pdf_pages,
     split_pdf,
+    view_image,
     write_docx,
     write_pdf,
     write_pptx,
@@ -107,6 +108,10 @@ def _document_io_tools() -> list[Any]:
         reshape_pptx,
         render_pptx_slides,
         read_document,
+        # Four instruction sources tell the model to reach for `view_image`
+        # when it needs fine detail on one page, but it was absent from this
+        # surface — so the only way to look closely was another full render.
+        view_image,
         fetch_url_to_artifact,
         list_format_recipes,
         read_format_recipe,
@@ -128,16 +133,10 @@ deliverable, write it with the matching tool and reply with the artifact
 path — never paste the document body into chat as a substitute.
 
 For Office/PDF work, use the document tools directly in this general response
-path. Call `read_format_recipe("xlsx" | "docx" | "pptx" | "pdf")` before any
-non-trivial edit — the recipe lists every tool you have and the rule for when
-to choose `reshape_*` over scalar `edit_*`. For Excel, always inspect the real
-workbook coordinates first; reach for `reshape_xlsx` (insert/delete/move rows,
-merge, copy_row, style) when the user asks for a structural change — never
-simulate a structural reshape with a string of scalar `edit_xlsx_cells`
-calls. Finish by re-inspecting and, when layout matters, rendering with
-`render_xlsx_pages` for visual QA. Do not derive edit coordinates from
-markdown table exports when blank rows or merged headers may shift the row
-numbers.
+path. For Excel, inspect the real workbook coordinates before editing — do not
+derive edit coordinates from markdown table exports, where blank rows or merged
+headers shift the row numbers. `read_format_recipe` is available when you want
+the deeper recipe for a format; it is not a required first step.
 """
 
 
@@ -280,6 +279,30 @@ def _make_task(skill_name: str, title: str, task: str, depends_on: Optional[list
         task=task,
         depends_on=depends_on or [],
     )
+
+
+_EMPTY_ANSWER_NOTICE = (
+    "> ⚠️ 本轮未能生成正文答复（工具调用次数达到上限）。本轮生成的文件（如有）"
+    "已保存并列在下方；请再发一次消息，我会基于已收集的材料直接作答。\n\n"
+    "> ⚠️ This turn produced no prose answer — the tool-call limit was reached "
+    "before the model wrote one. Any files generated this turn are saved and "
+    "listed below; send the message again and I will answer from the material "
+    "already gathered."
+)
+
+
+def _guard_empty_answer(text: str, stage: str) -> str:
+    """Never ship an empty assistant message.
+
+    The providers now recover from a tool-loop ceiling by forcing one no-tools
+    synthesis pass; this is the backstop for when that recovery itself fails.
+    Shipping the blank is the worst option: the run's artifacts were written to
+    disk, so the user sees an empty reply next to files they did receive.
+    """
+    if text and text.strip():
+        return text
+    log_workflow_event("empty_answer_guarded", {"stage": stage})
+    return _EMPTY_ANSWER_NOTICE
 
 
 def _make_general_task(user_message: str) -> AgentTask:
@@ -428,6 +451,24 @@ _LEGAL_CLAIM_RE = re.compile(
     r"liability|compliance|jurisdiction|authority|must|shall|may|prohibit|"
     r"legal advice|counsel|citation|sources?"
     r")\b|[\u4e00-\u9fff].*(法律|法规|公约|责任|合规|来源|资料)",
+    re.IGNORECASE,
+)
+
+
+# `_LEGAL_CLAIM_RE` above detects legal markers in a produced ANSWER. Deciding
+# whether an incoming request about an uploaded file is legal work needs the
+# request-side vocabulary instead — the words a user types, in either language.
+_LEGAL_REQUEST_RE = re.compile(
+    r"\b("
+    r"contract|agreement|clause|lease|indemnit\w*|warrant(?:y|ies)|liabilit\w*|"
+    r"enforceab\w*|breach|terminat\w*|nda|confidentialit\w*|governing law|"
+    r"arbitrat\w*|litigat\w*|dispute|jurisdiction|complian\w*|regulat\w*|"
+    r"statut\w*|legal|lawful|unlawful|counsel|due diligence|redline|"
+    r"terms and conditions|policy|policies|obligation|licen[cs]\w*|tariff"
+    r")\b"
+    r"|(合同|协议|条款|条文|租赁|租约|赔偿|责任|违约|解约|终止|保密|竞业|"
+    r"管辖|仲裁|诉讼|争议|合规|法律|法规|规章|监管|审查|尽调|尽职调查|"
+    r"红线|批注|义务|许可|授权|条例|办法|规定)",
     re.IGNORECASE,
 )
 
@@ -1395,11 +1436,38 @@ def heuristic_plan(user_message: str, skill_hint: Optional[str] = None) -> Workf
     )
 
 
+def _render_available_files(available_files: Optional[Iterable[dict]]) -> str:
+    """List chat uploads that are NOT inlined this turn, with how to open them.
+
+    Inlining every historical upload on every turn is what this replaces: the
+    listing costs a few hundred tokens and sits in the stable (cacheable) part
+    of the digest, while the bytes are fetched only when a tool asks for them.
+    """
+    files = list(available_files or [])
+    if not files:
+        return ""
+    lines = [
+        "Files already uploaded in this chat. They are NOT inlined in this "
+        "turn — open the ones you actually need with `read_document`, "
+        "`inspect_docx`, `inspect_xlsx`, `view_image`, or `render_pdf_pages`:"
+    ]
+    for entry in files:
+        path = str(entry.get("path", "")).strip()
+        if not path:
+            continue
+        name = entry.get("name") or Path(path).name
+        size = entry.get("size")
+        size_note = f" ({size:,} bytes)" if isinstance(size, int) and size > 0 else ""
+        lines.append(f"- {name}{size_note} — {path}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def _build_context_block(
     memory_summary: str,
     recent_messages: Iterable[ChatMessage],
     *,
     budget_tokens: Optional[int] = None,
+    available_files: Optional[Iterable[dict]] = None,
 ) -> str:
     """Assemble the within-chat context digest under a token budget.
 
@@ -1441,10 +1509,18 @@ def _build_context_block(
     lines: list[str] = []
     if project_block:
         lines.append(project_block)
+    files_block = _render_available_files(available_files)
+    if files_block:
+        # Stable across turns (it only changes when a file is uploaded), so it
+        # belongs with the cacheable prefix rather than after the summary.
+        lines.append(files_block)
     summary = memory_summary.strip()
     remaining = max(
         1_000,
-        budget_tokens - estimate_tokens(summary) - estimate_tokens(project_block),
+        budget_tokens
+        - estimate_tokens(summary)
+        - estimate_tokens(project_block)
+        - estimate_tokens(files_block),
     )
     windowed = select_recent_within_budget(recent_messages, remaining)
     if windowed.kept:
@@ -1579,11 +1655,20 @@ class WorkflowExecutor:
         skill_hint: Optional[str] = None,
         recent_messages: Optional[list[ChatMessage]] = None,
         memory_summary: str = "",
+        available_files: Optional[list[dict]] = None,
+        has_attachments: bool = False,
     ) -> WorkflowPlan:
-        context_block = _build_context_block(memory_summary, recent_messages or [])
+        context_block = _build_context_block(
+            memory_summary, recent_messages or [], available_files=available_files
+        )
         try:
             result = self._run_planner(
-                self._routing_prompt(user_message, skill_hint=skill_hint, context_block=context_block),
+                self._routing_prompt(
+                    user_message,
+                    skill_hint=skill_hint,
+                    context_block=context_block,
+                    has_attachments=has_attachments,
+                ),
                 system=(
                     "You are a cost-aware router for an legal assistant. "
                     "Return only valid JSON."
@@ -1661,6 +1746,7 @@ class WorkflowExecutor:
         *,
         skill_hint: Optional[str] = None,
         context_block: str = "",
+        has_attachments: bool = False,
     ) -> str:
         prompt = (
             "Route this chat turn before any expensive specialist work.\n\n"
@@ -1718,6 +1804,23 @@ class WorkflowExecutor:
             "agent task rather than a legal skill. "
             "Default user-facing output to Chinese when the user writes in Chinese.\n"
         )
+        if has_attachments:
+            # The router only ever sees filenames, never the bytes, and used to
+            # be told nothing about what that implies — so it picked
+            # direct_answer on half of all attachment turns and was overridden
+            # immediately afterwards. Make the constraint explicit instead, so
+            # the classification it returns (legal specialist vs general task)
+            # is one worth keeping.
+            prompt += (
+                "\nATTACHMENTS: this turn carries uploaded file(s), listed at "
+                "the end of the request. You can see their names but NOT their "
+                "contents. A turn with attachments always needs tools, so never "
+                "answer it with direct_answer or clarify — choose agent_workflow "
+                "and classify it on the merits. Judge the SKILL from the request "
+                "and the filenames: if the user is asking a legal question about "
+                "the file, or asking you to review, draft, or check a legal "
+                "document, this is legal specialist work, NOT a general task.\n"
+            )
         if skill_hint:
             prompt += f"\nUser selected skill hint: {skill_hint}\n"
         if context_block:
@@ -2205,6 +2308,7 @@ class WorkflowExecutor:
         user_message: str,
         *,
         attachments: Optional[Iterable[Path]] = None,
+        available_files: Optional[list[dict]] = None,
         recent_messages: Optional[list[ChatMessage]] = None,
         memory_summary: str = "",
         skill_hint: Optional[str] = None,
@@ -2277,7 +2381,9 @@ class WorkflowExecutor:
             # provider content blocks are built where each sub-agent or the
             # integration step actually calls the model.
             content = _build_user_message(user_message, attachment_paths)
-            context_block = _build_context_block(memory_summary, recent_messages or [])
+            context_block = _build_context_block(
+                memory_summary, recent_messages or [], available_files=available_files
+            )
             if merged_packs:
                 # Surface active-pack(s) to the UI so it can render a banner.
                 yield StreamEvent(
@@ -2292,23 +2398,66 @@ class WorkflowExecutor:
                 skill_hint=skill_hint,
                 recent_messages=recent_messages,
                 memory_summary=memory_summary,
+                available_files=available_files,
+                has_attachments=bool(attachment_paths),
             )
             raise_if_cancelled()
-            log_workflow_event(
-                "workflow_plan_created",
-                {"plan": plan.model_dump(), "agent_count": len(plan.agent_tasks)},
-            )
-            yield StreamEvent("workflow_plan", plan.model_dump())
 
             if plan.execution_mode in {"direct_answer", "clarify"} and attachment_paths:
                 # The cheap planner only sees filenames, not the file bytes.
                 # When attachments are present, force the workflow to spin up a
                 # specialist so the model actually sees the file content.
+                #
+                # This used to blank `agent_tasks`, which made `_is_general_plan`
+                # true at the single-pass gate below and silently dropped the
+                # turn onto the GENERAL branch — no legal connectors, no
+                # `legal_source_search`, no citation requirements, and
+                # cite-check degraded from mandatory to a text sniff. It fired
+                # on 52% of the router's direct_answer decisions. Carry an
+                # explicit classification instead of an absent one.
+                prior_mode = plan.execution_mode
+                forced_signal = "\n".join(
+                    [user_message, *(p.name for p in attachment_paths)]
+                )
+                forced_task = (
+                    _make_general_task(user_message)
+                    if not _LEGAL_REQUEST_RE.search(forced_signal)
+                    else _make_task(
+                        "brief",
+                        plan.title or "Attached document review",
+                        (
+                            "Read the attached file(s) and answer the user's request "
+                            "about them, with sources and pinpoints for any legal "
+                            f"proposition.\n\nUser request:\n{user_message}"
+                        ),
+                    )
+                )
                 plan = plan.model_copy(update={
                     "execution_mode": "agent_workflow",
-                    "agent_tasks": [],
-                    "routing_reason": (plan.routing_reason or "") + " (forced agent_workflow: attachments present)",
+                    "agent_tasks": [forced_task],
+                    "routing_reason": (
+                        (plan.routing_reason or "")
+                        + f" (forced agent_workflow: attachments present; "
+                        f"skill={forced_task.skill_name})"
+                    ),
                 })
+                log_workflow_event(
+                    "workflow_plan_attachment_override",
+                    {
+                        "from_mode": prior_mode,
+                        "skill_name": forced_task.skill_name,
+                        "attachment_count": len(attachment_paths),
+                    },
+                )
+
+            # Emitted after the attachment override so the plan the UI shows is
+            # the plan that actually runs — it used to announce `direct_answer`
+            # on turns that immediately became an agent_workflow.
+            log_workflow_event(
+                "workflow_plan_created",
+                {"plan": plan.model_dump(), "agent_count": len(plan.agent_tasks)},
+            )
+            yield StreamEvent("workflow_plan", plan.model_dump())
 
             if plan.execution_mode in {"direct_answer", "clarify"}:
                 final_text = plan.direct_response.strip()
@@ -2438,7 +2587,9 @@ class WorkflowExecutor:
                 if tail:
                     direct_chunks.append(tail)
                     yield StreamEvent("delta", {"text": tail})
-                final_text = "".join(direct_chunks)
+                final_text = _guard_empty_answer("".join(direct_chunks), "single_pass")
+                if final_text and not direct_chunks:
+                    yield StreamEvent("delta", {"text": final_text})
                 audit_payload = None
                 for ev in self._run_cite_check_after_summary(
                     plan=plan,
@@ -2523,7 +2674,9 @@ class WorkflowExecutor:
             if tail:
                 final_chunks.append(tail)
                 yield StreamEvent("delta", {"text": tail})
-            final_text = "".join(final_chunks)
+            final_text = _guard_empty_answer("".join(final_chunks), "integration")
+            if final_text and not final_chunks:
+                yield StreamEvent("delta", {"text": final_text})
             audit_payload = None
             for ev in self._run_cite_check_after_summary(
                 plan=plan,

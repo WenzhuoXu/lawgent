@@ -35,10 +35,11 @@ def list_format_recipes() -> str:
 
 @beta_tool
 def read_format_recipe(format: str) -> str:
-    """Read the recipe for one office file format. Call this before invoking
-    ``write_docx`` / ``write_xlsx`` / ``write_pptx`` / ``write_pdf`` when the
-    request needs charts, conditional formatting, master slides, or other
-    structure that goes beyond plain headings and bullet lists.
+    """Read the deep recipe for one office file format: charts, conditional
+    formatting, master slides, and other structure beyond plain headings and
+    bullet lists. Optional — the writer and reshape tools carry the rules they
+    need in their own descriptions. Reach for this when a format's advanced
+    features are actually in play.
 
     Args:
         format: One of "docx", "xlsx", "pptx", "pdf".

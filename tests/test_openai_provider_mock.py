@@ -102,3 +102,76 @@ def test_hosted_web_search_call_recorded():
 
     assert any(c.name == "web_search_call" for c in result.hosted_tool_calls)
     assert "Cited FAA source" in result.text
+
+
+def test_tool_loop_ceiling_forces_a_final_synthesis_pass(monkeypatch):
+    """A loop cut off by max_iterations must not ship an empty answer.
+
+    Every zero-length answer observed in production sat at
+    iterations == max_iterations: the model kept asking for tools and never
+    got a turn in which it had to write prose.
+    """
+    settings = load_settings(refresh=True)
+    provider = OpenAIProvider(settings)
+
+    from legal_helper.tools.documents import read_document
+
+    calls: list = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        # Always ask for another tool — the model never volunteers prose.
+        if kwargs.get("tools"):
+            return _resp(
+                [_fc_item(f"call_{len(calls)}", "read_document", {"path": "README.md"})],
+                response_id=f"resp_{len(calls)}",
+                usage=SimpleNamespace(input_tokens=10, output_tokens=2, total_tokens=12),
+            )
+        # The recovery pass: no tools offered, so it must answer.
+        return _resp(
+            [_msg_item("Answer assembled from the material already gathered.")],
+            response_id="resp_final",
+            usage=SimpleNamespace(input_tokens=20, output_tokens=8, total_tokens=28),
+        )
+
+    with patch.object(provider.client.responses, "create", side_effect=fake_create):
+        result = provider.tool_runner(
+            system="You are a test sub-agent.",
+            messages=[{"role": "user", "content": "review it"}],
+            tools=[read_document],
+            max_iterations=3,
+        )
+
+    assert result.text.strip(), "ceiling exit must not return an empty answer"
+    assert "already gathered" in result.text
+    # 3 tool-armed iterations, then exactly one tool-free recovery call.
+    assert len(calls) == 4
+    assert not calls[-1].get("tools")
+    assert calls[-1]["input"][-1]["content"][0]["text"].startswith("You have reached")
+
+
+def test_no_synthesis_pass_when_the_loop_ends_normally():
+    """The recovery call is spent only on a real ceiling exit."""
+    settings = load_settings(refresh=True)
+    provider = OpenAIProvider(settings)
+
+    calls: list = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        return _resp(
+            [_msg_item("Done in one pass.")],
+            response_id="resp_1",
+            usage=SimpleNamespace(input_tokens=5, output_tokens=3),
+        )
+
+    with patch.object(provider.client.responses, "create", side_effect=fake_create):
+        result = provider.tool_runner(
+            system="s",
+            messages=[{"role": "user", "content": "q"}],
+            tools=[],
+            max_iterations=3,
+        )
+
+    assert result.text == "Done in one pass."
+    assert len(calls) == 1
