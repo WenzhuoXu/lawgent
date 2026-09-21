@@ -1359,17 +1359,54 @@ def reshape_pptx(
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
+def _read_document_window(p: Path, suffix: str, *, offset: int, limit: int) -> str:
+    """Return a line window of a document's extracted text.
+
+    Paging exists so a tool result that spilled to a file (see
+    ``tool_budget``) can be read back in pieces instead of re-entering the
+    context whole — the read that recovers an over-budget result must not
+    itself be over budget.
+    """
+    try:
+        if suffix in {".txt", ".md", ".csv"}:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        elif suffix == ".pdf":
+            text = _read_pdf(p)
+        elif suffix == ".docx":
+            text = _read_docx(p)
+        elif suffix == ".xlsx":
+            text = _read_xlsx(p)
+        elif suffix == ".pptx":
+            text = _read_pptx(p)
+        else:
+            text = p.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001 — same contract as the whole-file path
+        return f"ERROR reading {p}: {e}"
+    lines = text.splitlines()
+    start = max(0, int(offset))
+    end = len(lines) if int(limit) <= 0 else min(len(lines), start + int(limit))
+    if start >= len(lines):
+        return f"[No content: requested line {start} of {len(lines)} in {p.name}]"
+    body = "\n".join(lines[start:end])
+    header = f"[{p.name}: lines {start}-{end - 1} of {len(lines)}]"
+    return f"{header}\n{body}"
+
+
 @beta_tool
-def read_document(path: str) -> str:
+def read_document(path: str, offset: int = 0, limit: int = 0) -> str:
     """Read .txt, .md, .pdf, .docx, .xlsx, .pptx, or .csv and return text content.
 
     Args:
         path: Absolute or project-relative path to the file.
+        offset: First line to return (0-based). Use to page through a long file.
+        limit: Maximum number of lines to return; 0 returns the rest of the file.
     """
     p = _resolve_read_path(path)
     if not p.is_file():
         return f"ERROR: File not found: {p}"
     suffix = p.suffix.lower()
+    if offset or limit:
+        return _read_document_window(p, suffix, offset=offset, limit=limit)
     try:
         if suffix in {".txt", ".md"}:
             return p.read_text(encoding="utf-8", errors="replace")

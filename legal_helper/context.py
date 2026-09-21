@@ -60,6 +60,20 @@ DEFAULT_CONTEXT_BUDGET = 16_000
 # Share of the model context window spent on the within-chat digest. The rest is
 # left for the system prompt, tool surface, tool results, and the output ceiling.
 DEFAULT_CONTEXT_WINDOW_FRACTION = 0.25
+# Output allowance removed from the window before any input-side threshold is
+# computed. Mirrors ``Settings.max_tokens``; used when that is unreadable.
+OUTPUT_RESERVE_TOKENS = 32_000
+# Headroom kept below every ceiling. A request that lands exactly on a pricing
+# cliff pays the surcharge, so aim short of it rather than at it.
+COMPACTION_BUFFER_TOKENS = 13_000
+# How the turn ceiling is divided. Measured 2026-09-21 on this repo: a skill
+# agent's fixed overhead is ~21K tokens (5.6K system prompt + 15.4K of schemas
+# for 58 tools) and the orchestrator's is ~15K. Against a 259K ceiling that
+# leaves ~238K, and the split below reserves ~78K for the transcript digest and
+# ~117K for tool results (`tool_budget.TURN_RESULT_SHARE`), keeping ~40K for the
+# user's message and attachments. Most of a research turn's input is tool
+# results, not transcript, so the digest takes the smaller share.
+DIGEST_SHARE_OF_TURN_CEILING = 0.3
 # Per-message cap inside the digest, as a share of the budget: one message may
 # never eat more than this fraction, so a single giant paste cannot crowd out the
 # conversation — but on a large budget a full prior answer survives intact.
@@ -85,12 +99,65 @@ def context_window_for(settings: "Settings") -> int:
     return _WINDOWS.get(model, _DEFAULT_WINDOW)
 
 
+def effective_context_window_for(settings: "Settings") -> int:
+    """Input-side window: the model's window minus this turn's output ceiling.
+
+    A provider window is shared between input and output, and compaction can
+    only yield on the input side, so the denominator for every threshold below
+    has the output allowance removed first. With ``max_tokens`` at 32000 a
+    1M-window model has 968K of input to work with, not 1M.
+    """
+    window = context_window_for(settings)
+    reserve = int(getattr(settings, "max_tokens", OUTPUT_RESERVE_TOKENS) or OUTPUT_RESERVE_TOKENS)
+    return max(1_000, window - min(reserve, window - 1_000))
+
+
+def cost_ceiling_for(settings: "Settings") -> Optional[int]:
+    """Input-token count this provider starts charging a surcharge above.
+
+    OpenAI bills a request whose input exceeds 272K at 2x input and 1.5x
+    output — for the whole request, cached tokens included. On the 2026-09
+    ledger 40 of 667 requests crossed it at a mean input of 646K tokens and
+    carried ~55% of the month's spend, because the only limit in the harness
+    was a window fraction that sits at 750K for a 1M-window model: the pricing
+    cliff and the compaction trigger were unrelated numbers that never met.
+    Returns None for providers with no such cliff.
+    """
+    try:
+        if getattr(settings, "provider", None) != "openai":
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    from .usage import OPENAI_LONG_CONTEXT_THRESHOLD
+
+    return max(1_000, OPENAI_LONG_CONTEXT_THRESHOLD - COMPACTION_BUFFER_TOKENS)
+
+
+def turn_input_ceiling_for(settings: "Settings") -> int:
+    """Target maximum input tokens for one request to this model.
+
+    The smaller of "a tier-appropriate share of the input window" and "below
+    the provider's pricing cliff". This is the budget every other limit is
+    carved out of, and the ceiling the tool loop stops at.
+    """
+    effective = effective_context_window_for(settings)
+    ceiling = max(1_000, int(compaction_threshold_for(settings) * effective))
+    cliff = cost_ceiling_for(settings)
+    if cliff is not None:
+        ceiling = min(ceiling, cliff)
+    return ceiling
+
+
 def context_budget_for(settings: "Settings") -> int:
     """Token budget for the per-turn within-chat digest.
 
     Scales with the model actually serving the turn: ``fraction × window``,
     floored at ``chat_context_token_budget`` so the configured value can only
-    ever raise the budget, never shrink it below what previous runs used.
+    ever raise the budget, never shrink it below what previous runs used, and
+    capped at ``DIGEST_SHARE_OF_TURN_CEILING`` of the turn ceiling so the
+    digest alone cannot walk a request over the pricing cliff. Unclamped,
+    0.25 × 1M handed the digest 250K tokens — most of the way to the cliff
+    before a single tool had run.
     """
     try:
         fraction = float(
@@ -100,7 +167,8 @@ def context_budget_for(settings: "Settings") -> int:
         fraction = DEFAULT_CONTEXT_WINDOW_FRACTION
     fraction = min(max(fraction, 0.0), 0.9)
     floor = int(getattr(settings, "chat_context_token_budget", DEFAULT_CONTEXT_BUDGET) or 0)
-    return max(floor, int(fraction * context_window_for(settings)), 1_000)
+    share = int(DIGEST_SHARE_OF_TURN_CEILING * turn_input_ceiling_for(settings))
+    return max(floor, min(int(fraction * context_window_for(settings)), share), 1_000)
 
 
 def per_message_cap_for(budget_tokens: int) -> int:
@@ -116,19 +184,43 @@ def per_message_cap_for(budget_tokens: int) -> int:
     )
 
 
-def _truncate_to_tokens(text: str, max_tokens: int) -> str:
-    """Truncate ``text`` so its estimate is ≤ ``max_tokens`` (char-proportional)."""
+def truncate_to_tokens(text: str, max_tokens: int, *, keep: str = "head") -> str:
+    """Truncate ``text`` so its estimate is ≤ ``max_tokens`` (char-proportional).
+
+    ``keep="tail"`` retains the end instead of the start — the right choice for
+    a result whose useful part is last (a command's final output, a log).
+    """
     if estimate_tokens(text) <= max_tokens:
         return text
     # Estimate is monotonic in length; binary-search the cut point.
     lo, hi = 0, len(text)
     while lo < hi:
         mid = (lo + hi + 1) // 2
-        if estimate_tokens(text[:mid]) <= max_tokens - 1:
+        window = text[-mid:] if keep == "tail" else text[:mid]
+        if estimate_tokens(window) <= max_tokens - 1:
             lo = mid
         else:
             hi = mid - 1
+    if keep == "tail":
+        return "…" + text[-lo:].lstrip()
     return text[:lo].rstrip() + "…"
+
+
+# Back-compat alias for the original private name.
+_truncate_to_tokens = truncate_to_tokens
+
+
+@dataclass(frozen=True)
+class CompactionDecision:
+    """Why the chat layer did or did not compact, for the event log."""
+
+    should_compact: bool
+    observed_tokens: int
+    estimated_tokens: int
+    reported_tokens: Optional[int]
+    token_source: str  # "provider_usage" | "estimate"
+    ceiling_tokens: int
+    cost_ceiling_tokens: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -308,29 +400,75 @@ def compaction_threshold_for(settings: "Settings") -> float:
     return FAST_COMPACTION_THRESHOLD if is_fast_tier(model) else FRONTIER_COMPACTION_THRESHOLD
 
 
+def compaction_decision(
+    messages: Iterable["ChatMessage"],
+    settings: "Settings",
+    *,
+    threshold: Optional[float] = None,
+    summary_tokens: int = 0,
+    provider_usage_tokens: Optional[int] = None,
+) -> "CompactionDecision":
+    """Whether to compact, and on what evidence.
+
+    ``provider_usage_tokens`` is the input-token count the provider reported
+    for the last turn of this chat. When present it is authoritative: it counts
+    the system prompt, the tool schemas, attachments and tool results, none of
+    which the local estimate can see, and it is already captured for the UI's
+    context widget. The estimate remains the fallback and is always reported so
+    the two can be compared.
+    """
+    if threshold is None or threshold <= 0:
+        threshold = compaction_threshold_for(settings)
+    estimated = summary_tokens + sum(estimate_tokens(m.content) for m in messages)
+    reported = int(provider_usage_tokens or 0)
+    source = "provider_usage" if reported > 0 else "estimate"
+    observed = reported if reported > 0 else estimated
+    # Two ceilings: the tier-derived share of the input window, and the pricing
+    # cliff. A pinned `threshold` overrides only the first.
+    ceiling = max(1_000, int(threshold * effective_context_window_for(settings)))
+    cliff = cost_ceiling_for(settings)
+    if cliff is not None:
+        ceiling = min(ceiling, cliff)
+    return CompactionDecision(
+        should_compact=observed >= ceiling,
+        observed_tokens=observed,
+        estimated_tokens=estimated,
+        reported_tokens=reported or None,
+        token_source=source,
+        ceiling_tokens=ceiling,
+        cost_ceiling_tokens=cliff,
+    )
+
+
 def should_compact(
     messages: Iterable["ChatMessage"],
     settings: "Settings",
     *,
     threshold: Optional[float] = None,
     summary_tokens: int = 0,
+    provider_usage_tokens: Optional[int] = None,
 ) -> bool:
-    """True when the chat transcript approaches ``threshold`` of the window.
+    """True when this chat's context has reached its compaction ceiling.
 
-    Compact well before the limit so quality doesn't degrade near it. With
-    ``threshold=None`` the trigger is derived from the model tier
-    (``compaction_threshold_for``). ``summary_tokens`` accounts for the rolling
-    summary already carried.
+    Compact well before the limit so quality doesn't degrade near it. See
+    ``compaction_decision`` for the evidence behind the answer.
     """
-    if threshold is None or threshold <= 0:
-        threshold = compaction_threshold_for(settings)
-    total = summary_tokens + sum(estimate_tokens(m.content) for m in messages)
-    return total >= threshold * context_window_for(settings)
+    return compaction_decision(
+        messages,
+        settings,
+        threshold=threshold,
+        summary_tokens=summary_tokens,
+        provider_usage_tokens=provider_usage_tokens,
+    ).should_compact
 
 
 __all__ = [
     "estimate_tokens",
+    "truncate_to_tokens",
     "context_window_for",
+    "effective_context_window_for",
+    "cost_ceiling_for",
+    "turn_input_ceiling_for",
     "context_budget_for",
     "per_message_cap_for",
     "select_recent_within_budget",
@@ -338,8 +476,13 @@ __all__ = [
     "compact_verification_appendix",
     "is_fast_tier",
     "compaction_threshold_for",
+    "compaction_decision",
     "should_compact",
+    "CompactionDecision",
     "WindowedContext",
     "DEFAULT_CONTEXT_BUDGET",
     "DEFAULT_CONTEXT_WINDOW_FRACTION",
+    "OUTPUT_RESERVE_TOKENS",
+    "COMPACTION_BUFFER_TOKENS",
+    "DIGEST_SHARE_OF_TURN_CEILING",
 ]

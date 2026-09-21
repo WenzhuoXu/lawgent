@@ -38,4 +38,10 @@ playbook_path: legal_helper/playbook/general_playbook.md
 # Hosted-tool toggles
 enable_web_search: true
 enable_web_fetch: true
-enable_cite_check: false                # skip post-synthesis citation audit (faster iteration)
+# Citation audit. This gates BOTH the post-synthesis audit and the
+# verify-then-repair pass below: with it false, a substantive legal answer
+# streams unaudited and nothing repairs a citation that does not support its
+# claim. Set it true for real matter work; false is a fast-iteration setting.
+enable_cite_check: false
+verify_before_reveal: true              # audit (and repair) before the answer is shown
+max_repair_rounds: 1                    # repair passes a failed audit may trigger; 0 = advisory

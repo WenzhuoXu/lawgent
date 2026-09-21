@@ -19,14 +19,12 @@ memo, redline, workbook, or deck.
 </div>
 
 > [!NOTE]
-> **A little side project.** I built this for my girlfriend, a practising lawyer, to take
-> the grind out of the research-and-citation part of the job. It is open-sourced in case it
-> is useful to anyone else in the same position — a solo practitioner, an in-house team of
-> one, or anyone who has to be right about the law in more than one country. It stands on a
-> lot of other people's work — Anthropic's legal skills, their Chinese-law adaptation, and
-> plenty more in [acknowledgements](#acknowledgements). It is a personal project, not a
-> product: expect rough edges, and read the [known gaps](#status-and-known-gaps) before you
-> rely on it.
+> **Who it is for.** Built for a practising lawyer, to take the grind out of the
+> research-and-citation part of the job: a solo practitioner, an in-house team of one, or
+> anyone who has to be right about the law in more than one country. The legal-skill
+> structure and the citation-verification approach build on prior work credited in
+> [acknowledgements](#acknowledgements). [Current limitations](#status-and-known-gaps) are
+> listed in full.
 
 > [!IMPORTANT]
 > **Not legal advice.** This harness assists with legal workflows. Every output must be
@@ -375,6 +373,15 @@ The workflow runs citation QC as its own task when the answer's stakes warrant i
 web UI renders the verdict as a reviewer-facing card: what was checked, what passed, what
 needs a human.
 
+**The audit runs before you read the answer, and it repairs.** A substantive legal answer is
+synthesised into a buffer, audited, and only then revealed — so a citation that does not
+support its claim is fixed rather than labelled. When the audit fails, a bounded repair pass
+(`max_repair_rounds`, default one round) gets the draft plus the critical findings and has to
+fix exactly those: re-verify with the tools, correct the pinpoint if the source supports the
+claim, change or drop the claim if it does not, and never substitute an invented citation.
+Research progress, tool calls and phases stream live throughout, so the run stays visible
+while the prose is held back. `verify_before_reveal: false` restores stream-then-label.
+
 ---
 
 ## Runtime internals
@@ -411,11 +418,39 @@ merge applies them. Bullets accumulate and disappear only when the model says so
 hits its cap, so loss is bounded and visible rather than emergent. A delta that will not parse
 leaves the prior playbook untouched.
 
-**Compaction is tier-aware.** When to fold older turns into the summary depends on the model,
-not on a universal constant: strong models do better carrying the raw transcript further and
-isolating side quests in sub-agents, while cheaper models degrade sooner and benefit from
-summarizing early. Frontier models compact at 75 % of the window, the fast tier at 55 %.
-Setting `chat_compaction_threshold` to any positive value pins it for every model instead.
+**Compaction is tier-aware, and priced.** When to fold older turns into the summary depends
+on the model, not on a universal constant: strong models do better carrying the raw
+transcript further and isolating side quests in sub-agents, while cheaper models degrade
+sooner and benefit from summarizing early. Frontier models compact at 75 % of the input
+window, the fast tier at 55 %. Two things bound that share. The *input* window is the window
+minus the output ceiling, because a provider window is shared between the two. And on OpenAI
+the trigger is additionally capped below the 272 K long-context cliff: a fraction of the
+window alone put it at 750 K on a 1 M-token model while the surcharge began at 272 K, which
+is how 6 % of requests came to carry half the bill. The decision itself uses the token count
+the provider reported for the last turn — which counts the system prompt, the tool schemas
+and every tool result — and falls back to the local estimate only when no usage has arrived
+yet. `chat_compaction_threshold` pins the window share; it never raises the cliff.
+
+**Tool results have a budget.** A statute body, a court opinion or a wide retrieval used to
+enter the context at whatever size the source happened to be, and stay there for the rest of
+the turn. Each tool now declares how much of its output may reach the model, measured in
+tokens rather than bytes — the same 50 KB is ~12 K tokens of English and ~50 K of Chinese.
+Over-budget results either truncate with the loss stated, or spill to `state/tool_results/`
+and hand back a path the model can page through with `read_document(path=…, offset=…,
+limit=…)`, so the evidence stays reachable without being resident. A 245 K-token statute
+becomes 12 K in context and one call away. A turn's cumulative tool output is capped as
+well; past the cap a tool returns a notice to answer from what is already gathered, so every
+tool call still gets a well-formed result. Two things are never cut: anything carrying inline
+images, and anything that *is* the deliverable — a sub-agent's finished answer, a cite-check
+report — because truncating those shortens the memo instead of the evidence.
+
+**Runs are durable.** Each run writes its phases to `state/runs/<run_id>/artifacts/` as they
+complete — the plan, every research bundle, the draft, each audit, each repair — alongside a
+snapshot and an event log. A cancel or a provider outage finishes the run as `paused` rather
+than discarding it, and passing that `run_id` back as `resume_run_id` reuses the completed
+bundles instead of re-running the research. For a run that is thirty primary-source lookups
+deep before it writes a word, that is the expensive half of the turn. `GET /api/runs` lists
+what is resumable. Every write is best-effort: durability can never fail a turn.
 
 **Documents: inject one, navigate many.** A single attached document is pasted into the
 prompt — that is where full context genuinely wins. A *corpus* of them is not: past a total
@@ -478,6 +513,7 @@ POST /api/chats/{id}/upload              GET  /api/chats/{id}/artifacts/{artifac
 GET  /api/projects                       POST /api/projects/{id}/memory
 POST /api/projects/{id}/compact          GET  /api/usage
 GET  /api/skills                         GET  /domains        GET /jurisdictions
+GET  /api/runs                           GET  /api/runs/{run_id}
 ```
 
 ---
@@ -505,7 +541,13 @@ chat_compaction_threshold: 0.0    # 0 = derive from the model tier; any value pi
 
 enable_web_search: true
 enable_web_fetch: true
+enable_cite_check: true           # post-synthesis citation audit
+verify_before_reveal: true        # audit (and repair) before the answer is shown
+max_repair_rounds: 1              # repair passes a failed audit may trigger; 0 = advisory
 ```
+
+`verify_before_reveal` and `max_repair_rounds` both require `enable_cite_check: true` —
+without the audit there is no verdict to act on.
 
 Three environment switches have no `config.yaml` equivalent:
 
@@ -546,7 +588,10 @@ legal_helper/
 ├── server.py           # FastAPI + SSE streaming + chat/project/usage API
 ├── cli.py              # run · chat · serve · project
 ├── config.py           # settings, jurisdiction codes, citation styles
-├── context.py          # within-chat token budgeting + compaction
+├── context.py          # within-chat token budgeting + compaction ceilings
+├── tool_budget.py      # per-tool + per-turn result budgets, spill to file
+├── tool_policy.py      # declared tool capability; read-only surface for auditors
+├── runs.py             # durable run record: phase artifacts, snapshot, resume
 ├── projects.py         # cross-chat brief, typed memory, rolling summary
 ├── usage.py            # monthly token/cost ledger
 ├── skills/             # 15 generic, domain-agnostic skills
@@ -569,28 +614,38 @@ scripts/                # corpus fetchers, expiry flagging, monthly harness revi
 
 ## Testing
 
-```bash
-pytest -q                                   # full suite
-pytest -q tests/test_skill_anatomy.py       # SKILL.md < 100 lines, valid frontmatter,
-                                            # no domain strings leaking into the core
-pytest -q tests/test_provider_parity.py     # identical tool surface across providers
-pytest -q tests/test_citations.py           # extraction + validation
-pytest -q tests/test_grounding.py           # quote round-trip
-pytest -q tests/test_rag_hybrid.py          # hybrid retrieval + rerank
+Always `python -m pytest`: a bare `pytest` resolves against whatever interpreter is first on
+PATH, which in a conda setup is usually not the one holding the dependencies.
 
-LEGAL_HELPER_LIVE=1 pytest tests/test_integration_live.py -m live                # Anthropic
-LEGAL_HELPER_LIVE_OPENAI=1 pytest tests/test_integration_live_openai.py -m live  # OpenAI
+```bash
+python -m pytest -q                                 # full suite
+python -m pytest -q tests/test_skill_anatomy.py     # SKILL.md < 100 lines, valid frontmatter,
+                                                    # no domain strings leaking into the core
+python -m pytest -q tests/test_provider_parity.py   # identical tool surface across providers
+python -m pytest -q tests/test_citations.py         # extraction + validation
+python -m pytest -q tests/test_grounding.py         # quote round-trip
+python -m pytest -q tests/test_tool_budget.py       # per-tool and per-turn result budgets
+python -m pytest -q tests/test_verified_synthesis.py  # audit-then-reveal, repair, clarify gates
+python -m pytest -q tests/test_runs.py              # durable run record and resume
+python -m pytest -q tests/test_rag_hybrid.py        # hybrid retrieval + rerank
+
+LEGAL_HELPER_LIVE=1 python -m pytest tests/test_integration_live.py -m live                # Anthropic
+LEGAL_HELPER_LIVE_OPENAI=1 python -m pytest tests/test_integration_live_openai.py -m live  # OpenAI
 ```
 
 The anatomy test is the architectural guardrail: it fails if a skill grows past its manifest
 budget, if frontmatter is malformed, or if domain-specific vocabulary leaks out of a pack and
 into the generic core.
 
+The current baseline is 504 passed, 3 failed, 2 skipped. The three failures are all in
+`tests/test_caac_local_connector.py` and need the staged CAAC corpus
+(`scripts/fetch_caac_corpus.py`); anything beyond them is a regression.
+
 ---
 
 ## Status and known gaps
 
-Honest notes, so nobody discovers these the hard way:
+Current limitations, in full:
 
 - **Aviation is the only populated domain pack.** The pack mechanism is general; the content
   is not yet.

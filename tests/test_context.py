@@ -3,15 +3,21 @@ from __future__ import annotations
 from legal_helper.chat_models import ChatMessage
 from legal_helper.config import load_settings
 from legal_helper.context import (
+    DIGEST_SHARE_OF_TURN_CEILING,
     compact_verification_appendix,
+    compaction_decision,
     context_budget_for,
     context_window_for,
+    cost_ceiling_for,
+    effective_context_window_for,
     estimate_tokens,
     per_message_cap_for,
     render_recent,
     select_recent_within_budget,
     should_compact,
+    turn_input_ceiling_for,
 )
+from legal_helper.usage import OPENAI_LONG_CONTEXT_THRESHOLD
 from legal_helper.workflow import _build_context_block
 
 
@@ -91,9 +97,43 @@ def test_context_budget_scales_with_model_window():
     # A share of the window, never below the configured floor.
     assert budget >= s.chat_context_token_budget
     assert budget <= window
-    # A 1M-window model must not get the same digest as a 200K one.
-    big = s.model_copy(update={"chat_context_window_fraction": 0.25})
-    assert context_budget_for(big) >= int(0.25 * window)
+    # A 1M-window model must not get the same digest as a 200K one. Shown on
+    # the Anthropic side: every OpenAI model lands on the same digest budget
+    # because the 272K pricing cliff, not the window, is the binding limit
+    # there — which is the point of the clamp.
+    big = s.model_copy(update={"provider": "anthropic", "anthropic_model": "claude-opus-5"})
+    small = s.model_copy(update={"provider": "anthropic", "anthropic_model": "claude-haiku-4-5"})
+    assert context_budget_for(big) > context_budget_for(small)
+
+
+def test_context_budget_is_capped_by_the_turn_ceiling():
+    """The digest alone must not walk a request over the pricing cliff.
+
+    0.25 x 1M handed the digest 250K tokens — most of the way to OpenAI's 272K
+    long-context threshold before a single tool had run. The window fraction
+    still scales the budget, but the turn ceiling caps it.
+    """
+    s = load_settings(refresh=True)
+    greedy = s.model_copy(update={"chat_context_window_fraction": 0.9})
+    budget = context_budget_for(greedy)
+    ceiling = turn_input_ceiling_for(greedy)
+    assert budget <= int(DIGEST_SHARE_OF_TURN_CEILING * ceiling) + 1
+    assert budget < 0.9 * context_window_for(greedy)
+
+
+def test_the_turn_ceiling_sits_below_the_openai_pricing_cliff():
+    s = load_settings(refresh=True)
+    assert s.provider == "openai"
+    assert turn_input_ceiling_for(s) < OPENAI_LONG_CONTEXT_THRESHOLD
+    # Anthropic has no such cliff: the ceiling is the tier share of the window.
+    anthropic = s.model_copy(update={"provider": "anthropic"})
+    assert cost_ceiling_for(anthropic) is None
+    assert turn_input_ceiling_for(anthropic) > turn_input_ceiling_for(s)
+
+
+def test_output_reserve_comes_off_the_window_first():
+    s = load_settings(refresh=True)
+    assert effective_context_window_for(s) == context_window_for(s) - s.max_tokens
 
 
 def test_per_message_cap_derives_from_budget():
@@ -190,3 +230,39 @@ def test_opus_5_gets_the_full_window():
         update={"provider": "anthropic", "anthropic_model": "claude-opus-5"}
     )
     assert context_window_for(s) == 1_000_000
+
+
+def test_compaction_prefers_the_provider_s_token_count_over_the_estimate():
+    """The estimate cannot see the system prompt, tool schemas or tool results.
+
+    The provider reports what it actually billed for; that number was already
+    being captured for the UI's context ring while the compaction decision
+    re-estimated from the stored transcript and reached a different answer.
+    """
+    settings = load_settings(refresh=True)
+    tiny = [_m("user", "hi")]
+
+    estimate_only = compaction_decision(tiny, settings)
+    assert estimate_only.token_source == "estimate"
+    assert not estimate_only.should_compact
+
+    # Same short transcript, but the provider says the request was enormous.
+    reported = compaction_decision(tiny, settings, provider_usage_tokens=400_000)
+    assert reported.token_source == "provider_usage"
+    assert reported.observed_tokens == 400_000
+    assert reported.estimated_tokens < 100  # the estimate never saw it
+    assert reported.should_compact
+
+
+def test_compaction_reports_the_ceiling_it_measured_against():
+    settings = load_settings(refresh=True)
+    decision = compaction_decision([_m("user", "hi")], settings)
+    assert decision.ceiling_tokens == turn_input_ceiling_for(settings)
+    assert decision.cost_ceiling_tokens == cost_ceiling_for(settings)
+
+
+def test_a_pinned_threshold_cannot_raise_the_ceiling_past_the_pricing_cliff():
+    """`chat_compaction_threshold` tunes the window share, not the cliff."""
+    settings = load_settings(refresh=True)
+    decision = compaction_decision([_m("user", "hi")], settings, threshold=0.95)
+    assert decision.ceiling_tokens <= OPENAI_LONG_CONTEXT_THRESHOLD

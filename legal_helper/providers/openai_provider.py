@@ -9,6 +9,7 @@ from openai import OpenAI
 
 from ..config import Settings
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
+from ..tool_budget import apply_result_budget, budget_log_fields, turn_result_budget
 from ..tools.multimodal import split_inline_images, to_openai_tool_content
 from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
@@ -245,7 +246,7 @@ class OpenAIProvider:
                 "reasoning_effort": self.reasoning_effort,
             },
         )
-        with TurnTimer() as t:
+        with TurnTimer() as t, turn_result_budget(self.settings):
             while iterations < max_iterations:
                 iterations += 1
                 kwargs = {k: v for k, v in kwargs_base.items() if v is not None}
@@ -314,6 +315,9 @@ class OpenAIProvider:
                     )
                     raw_output = _call_local_tool(tools_by_name, name, args)
                     output_str, images = split_inline_images(raw_output)
+                    # Image-carrying results keep their protocol intact; text-only
+                    # results are cut to the tool's declared model-facing budget.
+                    budgeted = apply_result_budget(name, output_str) if not images else None
                     log_workflow_event(
                         "local_tool_call_finished",
                         {
@@ -324,13 +328,18 @@ class OpenAIProvider:
                             "output_chars": len(output_str),
                             "iteration": iterations,
                             **({"inline_images": len(images)} if images else {}),
+                            **budget_log_fields(budgeted),
                         },
                     )
                     input_items.append(
                         {
                             "type": "function_call_output",
                             "call_id": call_id,
-                            "output": to_openai_tool_content(raw_output) if images else output_str,
+                            "output": (
+                                to_openai_tool_content(raw_output)
+                                if images
+                                else (budgeted.text if budgeted is not None else output_str)
+                            ),
                         }
                     )
                 previous_response_id = last_response_id
@@ -546,7 +555,7 @@ class OpenAIProvider:
                 "stream": True,
             },
         )
-        with TurnTimer() as t:
+        with TurnTimer() as t, turn_result_budget(self.settings):
             while iterations < max_iter:
                 iterations += 1
                 kwargs: dict[str, Any] = {
@@ -639,6 +648,9 @@ class OpenAIProvider:
                     )
                     raw_output = _call_local_tool(tools_by_name, name, args)
                     output_str, images = split_inline_images(raw_output)
+                    # Image-carrying results keep their protocol intact; text-only
+                    # results are cut to the tool's declared model-facing budget.
+                    budgeted = apply_result_budget(name, output_str) if not images else None
                     log_workflow_event(
                         "local_tool_call_finished",
                         {
@@ -649,13 +661,18 @@ class OpenAIProvider:
                             "output_chars": len(output_str),
                             "iteration": iterations,
                             **({"inline_images": len(images)} if images else {}),
+                            **budget_log_fields(budgeted),
                         },
                     )
                     input_items.append(
                         {
                             "type": "function_call_output",
                             "call_id": call_id,
-                            "output": to_openai_tool_content(raw_output) if images else output_str,
+                            "output": (
+                                to_openai_tool_content(raw_output)
+                                if images
+                                else (budgeted.text if budgeted is not None else output_str)
+                            ),
                         }
                     )
                 previous_response_id = last_response_id

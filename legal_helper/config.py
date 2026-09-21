@@ -29,6 +29,21 @@ ANTHROPIC_HIGH_EFFORT_MODELS = (
 # 5.7% of requests and 55% of spend. Kept priced in usage.py for ledger replay.
 OPENAI_HIGH_EFFORT_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol")
 
+# Why a model stopped being offered, for the log line when a stored selection is
+# migrated off it. Retirement must be enforced at *load*, not only at selection:
+# a chat persists its model at creation (``ChatStore.default_settings``) and
+# re-applies it on every later run, so dropping a model from the tuples above
+# only ever affected new chats. gpt-5.5 kept billing on pre-retirement chats for
+# 18 requests after 2026-09-11 that way. The enforcement rule is the allowlist in
+# ``offered_models_for_provider`` — this map only explains the substitution.
+RETIRED_MODELS: dict[str, str] = {
+    "gpt-5.5": "retired 2026-09-11: $5.00/$30.00 against gpt-5.6-terra's $2.00/$12.00 for the same work",
+}
+
+
+def _dedupe(values: "list[str]") -> list[str]:
+    return list(dict.fromkeys(v for v in values if v))
+
 
 def _bool_env(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -120,6 +135,16 @@ class Settings(BaseModel):
     # Post-synthesis citation audit (the /cite-check skill). Disable to skip it
     # on every run (faster iteration; the orchestrator still cites inline).
     enable_cite_check: bool = True
+    # Audit a substantive legal answer before the reader sees it, rather than
+    # streaming it and labelling the problems afterwards. The answer is
+    # buffered, audited, repaired if the audit flags anything, and then
+    # revealed; research progress, tool calls and phases still stream live.
+    # False restores stream-then-label.
+    verify_before_reveal: bool = True
+    # How many repair passes a failed audit may trigger. Each round costs one
+    # synthesis turn plus one re-audit, so this is a cost dial as much as a
+    # quality one; 0 disables repair and keeps the audit advisory.
+    max_repair_rounds: int = 1
 
     def model_for_provider(self, fast: bool = False) -> str:
         if self.provider == "anthropic":
@@ -131,6 +156,40 @@ class Settings(BaseModel):
         if selected == "anthropic":
             return list(ANTHROPIC_HIGH_EFFORT_MODELS)
         return list(OPENAI_HIGH_EFFORT_MODELS)
+
+    def offered_models_for_provider(self, provider: Optional[str] = None) -> list[str]:
+        """Every model this provider may legitimately serve a turn with.
+
+        The high-effort tier, the fast tier, and whatever is pinned in
+        ``config.yaml`` — an explicit pin is by definition the user's selection,
+        so it must stay valid even when it is not in the tuples above. This is
+        the allowlist ``resolve_model_for_provider`` enforces, and the same set
+        ``/api/runtime-options`` offers the UI.
+        """
+        selected = provider or self.provider
+        if selected == "anthropic":
+            return _dedupe(
+                [*ANTHROPIC_HIGH_EFFORT_MODELS, self.anthropic_model, self.anthropic_fast_model]
+            )
+        return _dedupe([*OPENAI_HIGH_EFFORT_MODELS, self.openai_model, self.openai_fast_model])
+
+    def resolve_model_for_provider(
+        self, model: Optional[str], provider: Optional[str] = None
+    ) -> str:
+        """``model`` if it is still offered for ``provider``, else the user's default.
+
+        Stored selections outlive the policy that created them. Anything no
+        longer offered — a retired model, a model from the other provider in a
+        cross-wired record, a typo — collapses to ``model_for_provider()``, the
+        model the user has actually selected in config.
+        """
+        selected = provider or self.provider
+        candidate = (model or "").strip()
+        if candidate and candidate in self.offered_models_for_provider(selected):
+            return candidate
+        if selected == "anthropic":
+            return self.anthropic_model
+        return self.openai_model
 
     def effective_max_concurrent_agents(self) -> int:
         if self.max_concurrent_agents != "auto":

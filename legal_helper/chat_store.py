@@ -30,6 +30,23 @@ def _json_loads(raw: str | None, default: Any) -> Any:
         return default
 
 
+def _log_model_substitution(before: Any, after: str, provider: str, *, where: str) -> None:
+    """Record a stored-model substitution so it is visible, not silent."""
+    from .config import RETIRED_MODELS
+    from .logging_setup import log_workflow_event
+
+    log_workflow_event(
+        "model_selection_migrated",
+        {
+            "where": where,
+            "provider": provider,
+            "from": before,
+            "to": after,
+            "reason": RETIRED_MODELS.get(str(before), "no longer offered for this provider"),
+        },
+    )
+
+
 def _row_to_session(row: sqlite3.Row) -> ChatSession:
     keys = row.keys()
     return ChatSession(
@@ -221,12 +238,57 @@ class ChatStore:
                 """
             )
             self._ensure_artifact_origin_column(con)
+            self._migrate_unoffered_models(con)
 
     def _ensure_artifact_origin_column(self, con: sqlite3.Connection) -> None:
         """Backfill the `origin` column for databases created before it existed."""
         cols = {r["name"] for r in con.execute("PRAGMA table_info(artifacts)").fetchall()}
         if "origin" not in cols:
             con.execute("ALTER TABLE artifacts ADD COLUMN origin TEXT NOT NULL DEFAULT 'generated'")
+
+    def _migrate_unoffered_models(self, con: sqlite3.Connection) -> None:
+        """Move stored chat selections off models this provider no longer offers.
+
+        A chat froze its model at creation and re-applied it on every later run,
+        so a retirement in `config` never reached chats created before it. This
+        rewrites those rows once, at open, to the model the user has actually
+        selected — so the UI selector, the run path and the usage ledger agree.
+        """
+        try:
+            rows = con.execute("SELECT id, settings_json FROM chats").fetchall()
+        except sqlite3.Error:  # table not created yet on a fresh file
+            return
+        for row in rows:
+            stored = _json_loads(row["settings_json"], {})
+            if not isinstance(stored, dict):
+                continue
+            provider = stored.get("provider") or self.settings.provider
+            before = stored.get("model")
+            after = self.settings.resolve_model_for_provider(before, provider)
+            if after == before:
+                continue
+            stored["model"] = after
+            con.execute(
+                "UPDATE chats SET settings_json = ? WHERE id = ?",
+                (json.dumps(stored), row["id"]),
+            )
+            _log_model_substitution(before, after, provider, where=f"chat:{row['id']}")
+
+    def _normalized_settings(self, chat_settings: ChatSettings) -> ChatSettings:
+        """Apply the live model allowlist to a `ChatSettings` before it is stored.
+
+        Covers the other direction too: a client that cached the old selection
+        and posts it back would otherwise re-persist a retired model.
+        """
+        resolved = self.settings.resolve_model_for_provider(
+            chat_settings.model, chat_settings.provider
+        )
+        if resolved == chat_settings.model:
+            return chat_settings
+        _log_model_substitution(
+            chat_settings.model, resolved, chat_settings.provider, where="chat_settings"
+        )
+        return chat_settings.model_copy(update={"model": resolved})
 
     def default_settings(self) -> ChatSettings:
         return ChatSettings(
@@ -240,7 +302,7 @@ class ChatStore:
     def create_chat(self, title: str = "New chat", settings: Optional[ChatSettings] = None) -> ChatSession:
         chat_id = uuid.uuid4().hex[:16]
         now = utc_now()
-        chat_settings = settings or self.default_settings()
+        chat_settings = self._normalized_settings(settings or self.default_settings())
         with self._connect() as con:
             con.execute(
                 """
@@ -284,7 +346,7 @@ class ChatStore:
         if archived is not None:
             fields["archived"] = 1 if archived else 0
         if settings is not None:
-            fields["settings_json"] = settings.model_dump_json()
+            fields["settings_json"] = self._normalized_settings(settings).model_dump_json()
         if memory_summary is not None:
             fields["memory_summary"] = memory_summary
         if last_response_id is not None:
@@ -296,6 +358,26 @@ class ChatStore:
                 (*fields.values(), current.id),
             )
         return self.get_chat(chat_id)
+
+    def consecutive_clarify_rounds(self, chat_id: str) -> int:
+        """How many of the most recent turns in a row asked for clarification.
+
+        An intake question is useful once and occasionally twice; a third in a
+        row means the model is stuck asking instead of working. The workflow
+        reads this to cap the loop, which has to be counted here because each
+        turn is a separate request with no memory of the last routing decision.
+        """
+        rounds = 0
+        for event in reversed(self.list_events(chat_id)):
+            if event.event_type != "workflow_plan":
+                continue
+            mode = (event.data or {}).get("execution_mode")
+            if mode == "clarify":
+                rounds += 1
+                continue
+            if mode:
+                break
+        return rounds
 
     def delete_chat(self, chat_id: str) -> None:
         with self._connect() as con:

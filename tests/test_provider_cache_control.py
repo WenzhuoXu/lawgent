@@ -284,3 +284,49 @@ def test_build_user_content_back_compat_plain_string():
 
     assert build_user_content("just text", [], "anthropic") == "just text"
     assert build_user_content("just text", [], "openai", cache_prefix="") == "just text"
+
+
+# --- the property the breakpoints depend on -----------------------------
+# A cache_control breakpoint only pays off while the prefix in front of it is
+# byte-identical between requests. ZCode's context builder keeps that true by
+# splitting its system prompt into "stable" and "dynamic" blocks and pushing
+# volatile content (the date, workspace instructions, the skills listing) out of
+# the system block entirely. This harness gets there a different way — every
+# per-turn value lives in `messages`, never in the system prompt — so the
+# property is worth asserting rather than assuming.
+
+
+def test_system_prompts_carry_no_per_turn_content():
+    """A date, a path or an id in the system block re-bills the whole prefix."""
+    import re
+
+    from legal_helper.agent import OrchestratorAgent, SkillAgent
+    from legal_helper.config import current_settings
+    from legal_helper.providers import build_provider
+
+    provider = build_provider(current_settings())
+    prompts = {
+        "orchestrator": OrchestratorAgent()._system_prompt(),
+        "legal-response": SkillAgent("legal-response", provider)._system_prompt(),
+        "cite-check": SkillAgent("cite-check", provider)._system_prompt(),
+    }
+    volatile = re.compile(
+        r"20\d\d-\d\d-\d\d"  # an ISO date
+        r"|/storage/|/tmp/|outputs/chat_artifacts"  # a machine-specific path
+        r"|chat_id|run_id",  # a per-turn identifier
+        re.IGNORECASE,
+    )
+    for name, prompt in prompts.items():
+        found = volatile.search(prompt)
+        assert found is None, f"{name} system prompt carries per-turn content: {found.group(0)!r}"
+
+
+def test_a_system_prompt_is_byte_identical_across_builds():
+    from legal_helper.agent import SkillAgent
+    from legal_helper.config import current_settings
+    from legal_helper.providers import build_provider
+
+    provider = build_provider(current_settings())
+    first = SkillAgent("legal-response", provider)._system_prompt()
+    second = SkillAgent("legal-response", provider)._system_prompt()
+    assert first == second

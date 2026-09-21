@@ -111,6 +111,9 @@ class ChatStreamRequest(BaseModel):
     attachments: list[str] = []
     skill_hint: Optional[str] = None
     settings: Optional[ChatSettings] = None
+    # Reuse the completed research bundles of an earlier run instead of paying
+    # for them again. `GET /api/runs` lists what can be resumed.
+    resume_run_id: Optional[str] = None
 
 
 class ProjectCreateRequest(BaseModel):
@@ -395,11 +398,16 @@ def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Option
                 "enable_web_fetch": chat_settings.enable_web_fetch,
             }
         )
+        # Resolve through the live allowlist rather than trusting the stored
+        # value: a chat persists its model at creation and re-applies it on
+        # every later run, so without this a retired model keeps serving turns
+        # (and keeps billing) on any chat created before the retirement.
+        model = base.resolve_model_for_provider(chat_settings.model, chat_settings.provider)
         if chat_settings.provider == "openai":
-            updates["openai_model"] = chat_settings.model
+            updates["openai_model"] = model
             updates["openai_reasoning_effort"] = chat_settings.reasoning_effort
         else:
-            updates["anthropic_model"] = chat_settings.model
+            updates["anthropic_model"] = model
     if chat_id:
         updates["outputs_dir"] = _chat_outputs_dir(chat_id)
         # A project pins jurisdiction + packs for every chat under it, so the
@@ -595,6 +603,29 @@ def index() -> HTMLResponse:
     if built_index.is_file():
         return HTMLResponse(built_index.read_text(encoding="utf-8"))
     return HTMLResponse((_WEBUI_DIR / "index.html").read_text(encoding="utf-8"))
+
+
+@app.get("/api/runs")
+def list_workflow_runs(chat_id: Optional[str] = None, limit: int = 50) -> dict[str, Any]:
+    """Durable run records, newest first.
+
+    A run whose ``status`` is ``paused`` still holds its completed research
+    bundles; pass its ``run_id`` as ``resume_run_id`` on the next turn to reuse
+    them instead of paying for that research again.
+    """
+    from .runs import list_runs
+
+    return {"runs": list_runs(current_settings(), chat_id=chat_id, limit=max(1, min(limit, 200)))}
+
+
+@app.get("/api/runs/{run_id}")
+def get_workflow_run(run_id: str) -> dict[str, Any]:
+    from .runs import load_run
+
+    store = load_run(current_settings(), run_id)
+    if store is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return store.snapshot.to_json()
 
 
 @app.get("/api/skills")
@@ -985,7 +1016,10 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
     settings_model = req.settings or chat.settings
     if req.skill_hint:
         settings_model.skill_hint = req.skill_hint
-    store.update_chat(chat_id, settings=settings_model)
+    # update_chat applies the live model allowlist; read the stored settings back
+    # so the run record and the UI report the model that will actually serve the
+    # turn rather than the stale selection that arrived.
+    settings_model = store.update_chat(chat_id, settings=settings_model).settings
     user_msg = store.add_message(chat_id, "user", req.message, {"attachments": req.attachments})
     assistant_msg = store.add_message(
         chat_id,
@@ -1032,6 +1066,10 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
         )
         assistant_text = ""
         run_finished = False
+        # Provider-reported context fill for the last turn; 0 until a usage
+        # payload arrives, which makes the compaction decision fall back to its
+        # local estimate rather than raise.
+        reported_context_tokens = 0
         run_settings = _settings_for_chat(settings_model, chat_id=chat_id)
         active_project_id = _project_store().project_id_for_chat(chat_id)
         seen_paths = store.existing_artifact_paths(chat_id)
@@ -1073,6 +1111,8 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     memory_summary=chat.memory_summary,
                     skill_hint=settings_model.skill_hint,
                     cancel_event=cancel_event,
+                    clarify_rounds_used=store.consecutive_clarify_rounds(chat_id),
+                    resume_run_id=req.resume_run_id,
                 ):
                     if is_cancelled():
                         finish_cancelled()
@@ -1108,6 +1148,11 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                             # so the sum collapses to input_tokens. One formula,
                             # both providers.
                             context_tokens = input_tok + cache_read + cache_write
+                            # Authoritative context fill for the compaction
+                            # decision below: it counts the system prompt, tool
+                            # schemas, attachments and tool results, none of
+                            # which a transcript estimate can see.
+                            reported_context_tokens = context_tokens
                             turn_usage_payload = {
                                 "input_tokens": input_tok,
                                 "output_tokens": _u("output_tokens"),
@@ -1147,22 +1192,32 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                         # window, widen the lookback so older turns dropping out of
                         # the per-turn digest are folded into the summary (lossless
                         # compaction) and surface the event for observability.
-                        from .context import estimate_tokens, should_compact
+                        from .context import compaction_decision, estimate_tokens
 
                         all_messages = store.list_messages(chat_id)
-                        compacting = should_compact(
+                        decision = compaction_decision(
                             all_messages,
                             run_settings,
                             threshold=run_settings.chat_compaction_threshold,
                             summary_tokens=estimate_tokens(chat.memory_summary),
+                            provider_usage_tokens=reported_context_tokens,
                         )
+                        compacting = decision.should_compact
                         lookback = 40 if compacting else 18
                         messages = store.list_messages(chat_id, limit=lookback)
                         if compacting:
                             emit(
                                 "context_compaction",
-                                {"reason": "transcript_near_window", "lookback": lookback,
-                                 "transcript_messages": len(all_messages)},
+                                {
+                                    "reason": "context_at_ceiling",
+                                    "lookback": lookback,
+                                    "transcript_messages": len(all_messages),
+                                    "observed_tokens": decision.observed_tokens,
+                                    "estimated_tokens": decision.estimated_tokens,
+                                    "token_source": decision.token_source,
+                                    "ceiling_tokens": decision.ceiling_tokens,
+                                    "cost_ceiling_tokens": decision.cost_ceiling_tokens,
+                                },
                             )
                         memory_token = workflow_event_sink_var.set(None)
                         try:

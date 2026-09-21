@@ -116,12 +116,46 @@ explicitly asks for restructuring.
 
 ## Context & memory management
 
+- **Every input-side limit is carved out of one number: `context.turn_input_ceiling_for`.**
+  It is the smaller of a tier share of the *input* window
+  (`effective_context_window_for` = window − `max_tokens`, because the window is
+  shared with the output) and the provider's pricing cliff
+  (`cost_ceiling_for` = 272K − 13K buffer for OpenAI, None for Anthropic). The
+  ceiling is then divided: ~21K measured fixed overhead (system prompt + tool
+  schemas), 30% to the transcript digest (`DIGEST_SHARE_OF_TURN_CEILING`), 45%
+  to tool results (`tool_budget.TURN_RESULT_SHARE`), the rest for the user's
+  message. **If you change one share, re-check that the sum still fits** — the
+  arithmetic is the whole point. A fraction of the window alone put the trigger
+  at 750K on a 1M model while OpenAI started surcharging at 272K, and that gap
+  was ~55% of the 2026-09 bill.
 - **Compaction is tier-aware, not a constant.** `context.compaction_threshold_for`
   returns 0.75 for frontier models and 0.55 for the fast tier
   (`is_fast_tier`: haiku / luna / mini / nano). Rationale: strong agents do
   better carrying the transcript further and isolating work in sub-agents,
   weak ones do better summarizing early. `chat_compaction_threshold: 0.0` in
-  `config.yaml` means "derive"; any positive value pins it for every model.
+  `config.yaml` means "derive"; any positive value pins it for every model —
+  but it tunes the window share only, never the pricing cliff.
+- **The compaction decision uses the provider's token count, not the estimate.**
+  `context.compaction_decision` takes `provider_usage_tokens` (the last turn's
+  reported input, which the server already captures for the UI's context ring)
+  and treats it as authoritative: it counts the system prompt, tool schemas,
+  attachments and tool results, none of which a transcript estimate can see.
+  The CJK-aware estimate stays as the fallback and is reported alongside.
+- **Tool results are budgeted per tool** (`legal_helper/tool_budget.py`), in
+  estimated *tokens* rather than bytes — the same 50 KB is ~12K tokens of
+  English and ~50K of Chinese. Over-budget results either truncate with a
+  stated loss or spill to `state/tool_results/` and hand the model a path to
+  `read_document(path=…, offset=…, limit=…)`. Add a heavy new source to
+  `_EXACT_BUDGETS` / `_PREFIX_BUDGETS`. Two exemptions are load-bearing:
+  a result carrying inline images is never re-serialised (it would break the
+  image protocol), and a result that *is* the deliverable — `run_skill`,
+  `cite_check_report_tool`, the grounding tools — is never cut, because
+  truncating it shortens the memo rather than the evidence. Both providers
+  apply this at their tool-execution sites; keep them in step.
+- **A turn's cumulative tool output is capped too** (`turn_result_budget`,
+  entered by both providers around their tool loops). Past the cap a tool
+  returns a notice telling the model to answer from what it has, rather than
+  the loop being cut — every `tool_use` still gets a well-formed result.
 - **Model windows live in `context._WINDOWS`.** A model missing from that dict
   silently gets `_DEFAULT_WINDOW` (200K) — which is how a 1M-window model ends
   up compacting at ~120K. **Add every new model ID here, to
@@ -145,6 +179,42 @@ explicitly asks for restructuring.
   time it fires, and this provider relies on `cache_control` breakpoints for
   the system block and tool list. Do not default it on without measuring.
 
+## Answer verification and durable runs
+
+- **A substantive legal answer is audited before the reader sees it.**
+  `WorkflowExecutor._verified_synthesis` buffers the synthesis, runs the
+  citation audit, repairs what the audit flagged, and only then streams the
+  prose. Research progress, tool calls and phases stream live throughout, so
+  the UI still shows work happening; the existing `citation_audit_started`
+  event already drives an "auditing" phase. Gated by `verify_before_reveal`
+  (default on) **and** `enable_cite_check` — note `config.yaml` currently ships
+  `enable_cite_check: false`, which disables both the audit and the repair.
+- **Repair is bounded and targeted.** `max_repair_rounds` (default 1) rounds,
+  each one synthesis turn plus one re-audit. `_repair_prompt` passes the draft
+  plus the critical/major findings and requires: fix only what was flagged,
+  re-verify with tools, never invent a replacement citation, and write
+  `pinpoint unavailable` / `无法获得具体条款` where that is the truth. An
+  intermediate failing audit is not emitted as the answer's verdict; only the
+  final one is.
+- **`clarify` has two gates, both arithmetic** (`_resolve_clarify`):
+  `intake_confidence >= CLARIFY_CONFIDENCE_THRESHOLD` (0.8) means the router is
+  hedging, so the turn proceeds; more than `MAX_CLARIFY_ROUNDS` (2) consecutive
+  clarifying turns also proceeds. Either way the question it wanted to ask
+  becomes an assumption the answer must state. An **absent**
+  `intake_confidence` is not a confident one — the heuristic planner omits it,
+  and reading that as confidence would disable clarify entirely.
+- **Every run is recorded under `state/runs/<run_id>/`** (`legal_helper/runs.py`):
+  `artifacts/NN-<phase>.md` per phase (plan, each research bundle, the draft,
+  each audit, each repair) plus `snapshot.json` and `events.jsonl`. A cancel or
+  a provider outage finishes the run as `paused`, not lost; passing that
+  `run_id` as `resume_run_id` reuses the completed bundles instead of paying
+  for that research again. `GET /api/runs` lists them. Every write is
+  best-effort: durability must never be able to fail a turn.
+- **An auditing skill cannot rewrite what it audits.** `tool_policy.py` declares
+  which tools mutate a document and drops them for `READ_ONLY_SKILLS`
+  (`cite-check`). `render_*` stays — it writes a PNG so the model can *look* at
+  a page to confirm a pinpoint. Classification is by explicit name, not prefix.
+
 ## Workflow failure taxonomy
 
 `legal_helper/citations/trajectory.py` gives every workflow failure event a
@@ -161,6 +231,20 @@ is the right-answer-wrong-reason case, and summing them would hide it.
 - Both `claude-opus-5` (primary; `claude-opus-4-8` / `claude-opus-4-7` still supported) and `gpt-5.6-terra` (primary; `gpt-5.6-sol` still supported) paths must work end-to-end on every change.
 - Fast/lightweight tier: `claude-haiku-4-5` and `gpt-5.6-luna`. Note: the bare `gpt-5.6` alias routes to **Sol**, not Terra — always use the full `gpt-5.6-terra` ID.
 - `gpt-5.5` is **retired from the high-effort list** (2026-09-11): at verified list prices it is $5.00/$30.00 against Terra's $2.00/$12.00 for the same work, and it was 5.7% of September requests but 55% of real spend. It stays in `usage.DEFAULT_PRICING` so historical ledger months still replay — do not put it back in `OPENAI_HIGH_EFFORT_MODELS`.
+- **Retirement is enforced at load, not only at selection.** A chat freezes its
+  model at creation (`ChatStore.default_settings`) and re-applies it on every
+  later run, so editing the tuples above only ever reached *new* chats — 85 of
+  236 chats were still pinned to `gpt-5.5` on 2026-09-21, and 18 requests billed
+  at its rates after the retirement date. `Settings.resolve_model_for_provider`
+  collapses anything outside `offered_models_for_provider` (high-effort tier +
+  fast tier + the `config.yaml` pin) to the user's configured model, and it runs
+  in three places: `ChatStore._normalized_settings` (write path),
+  `ChatStore._migrate_unoffered_models` (one-time rewrite at open), and
+  `server._settings_for_chat` (the run itself). Substitutions emit a
+  `model_selection_migrated` event. **Retiring a model means removing it from
+  the tuple and nothing else** — the allowlist does the rest. Never read a
+  persisted model, jurisdiction or pack straight into a run without resolving it
+  against live policy first.
 - MCP tools are surfaced as **plain function tools** to both SDKs; never use Anthropic's `mcp_servers` parameter or OpenAI's Responses-API `mcp` field as the only path.
 - Hosted `web_search` / `web_fetch` already at parity; do not touch.
 - RAG is local (bge-m3 + Qdrant); no provider API in the retrieval hot path.
@@ -206,12 +290,17 @@ python -m legal_helper run --domain-pack aviation --task review-contract --input
 python -m legal_helper chat
 python -m legal_helper serve --port 8010
 python -m legal_helper.rag.ingest --collection aviation --source caac_ccar
-pytest -q
-pytest -q tests/test_pptx_flowchart.py   # native flowchart shape contract
+python -m pytest -q                      # always `python -m`: bare `pytest` resolves
+                                         # to base's interpreter and dies at collection
+python -m pytest -q tests/test_pptx_flowchart.py   # native flowchart shape contract
 ```
 
 ## Testing
 
-- `pytest -q tests/test_skill_anatomy.py` — anatomy contract: each SKILL.md <100 lines, frontmatter valid, referenced files exist.
-- `pytest -q tests/test_provider_parity.py` — Anthropic and OpenAI see identical tool surface and equivalent results.
+- `python -m pytest -q tests/test_skill_anatomy.py` — anatomy contract: each SKILL.md <100 lines, frontmatter valid, referenced files exist.
+- `python -m pytest -q tests/test_provider_parity.py` — Anthropic and OpenAI see identical tool surface and equivalent results.
+- `python -m pytest -q tests/test_tool_budget.py tests/test_context.py` — the token budgets below.
+- `python -m pytest -q tests/test_verified_synthesis.py tests/test_runs.py` — audit-then-reveal, the clarify gates, and the durable run record.
+- The baseline is **3 failed / 504 passed / 2 skipped**; the three failures are
+  `tests/test_caac_local_connector.py` (staged CAAC corpus absent). Anything else is a regression.
 - Live smoke once per provider per major change: `MODEL_PROVIDER=anthropic` then `MODEL_PROVIDER=openai`.

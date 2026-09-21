@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from ..skills import SKILL_NAMES, load_skill_frontmatter
+from ..tool_policy import apply_skill_tool_policy
 from .aviation_search import aviation_source_search
 from .citations import (
     cite_check_report_tool,
@@ -322,7 +323,8 @@ def skill_tools_for_task(
             ]
         )
 
-    return base
+    # An auditing skill reviews work; it must not be able to rewrite it.
+    return apply_skill_tool_policy(base, skill_name)
 
 
 __all__ = [

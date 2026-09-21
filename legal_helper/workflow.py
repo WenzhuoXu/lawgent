@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import queue
 import re
 import contextvars
@@ -9,7 +10,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional
 
 from .agent import (
     SkillAgent,
@@ -33,6 +34,8 @@ from .logging_setup import (
     setup_logging,
 )
 from .providers import Provider, StreamEvent, build_provider
+from .runs import RunStore, load_run
+from .usage import usage_context_var
 from .skills import SKILL_NAMES
 from .tools.documents import (
     copy_xlsx_sheet,
@@ -471,6 +474,16 @@ _LEGAL_REQUEST_RE = re.compile(
     r"红线|批注|义务|许可|授权|条例|办法|规定)",
     re.IGNORECASE,
 )
+
+
+# Intake confidence below which a turn asks instead of guessing, and the number
+# of consecutive clarifying turns allowed before the workflow proceeds on stated
+# assumptions. A question is useful once, occasionally twice; a third in a row is
+# the model stuck asking rather than working, and the user has to type the same
+# facts again each time. Both are enforced in `_normalize_plan`, not asked for in
+# the prompt, so a hedging planner cannot talk its way past them.
+CLARIFY_CONFIDENCE_THRESHOLD = 0.8
+MAX_CLARIFY_ROUNDS = 2
 
 
 class WorkflowCancelled(Exception):
@@ -1037,6 +1050,20 @@ _FILED_STAKES_RE = re.compile(
 )
 
 
+def _audit_is_repairable(audit: Optional[dict[str, Any]]) -> bool:
+    """True when the audit failed in a way a revision pass can act on.
+
+    A skipped audit (no citations, disabled, generic enquiry) has nothing to
+    repair, and a pass needs no repair. Everything else — a critical item, a
+    DO-NOT-FILE verdict — is actionable, because the report names the claims.
+    """
+    if not audit or audit.get("skipped") or audit.get("ok"):
+        return False
+    return bool(audit.get("items")) or bool(audit.get("do_not_file")) or bool(
+        (audit.get("report_markdown") or "").strip()
+    )
+
+
 def _infer_cite_check_stakes(plan: Optional[WorkflowPlan], final_text: str) -> str:
     """Choose `filed` vs `internal` from the answer and plan.
 
@@ -1601,6 +1628,8 @@ def write_followup_docx(
 
 
 class WorkflowExecutor:
+    _run_store: Optional[RunStore] = None
+
     def __init__(self, settings: Optional[Settings] = None, provider: Optional[Provider] = None) -> None:
         setup_logging()
         self.settings = settings or current_settings()
@@ -1657,6 +1686,7 @@ class WorkflowExecutor:
         memory_summary: str = "",
         available_files: Optional[list[dict]] = None,
         has_attachments: bool = False,
+        clarify_rounds_used: int = 0,
     ) -> WorkflowPlan:
         context_block = _build_context_block(
             memory_summary, recent_messages or [], available_files=available_files
@@ -1674,11 +1704,15 @@ class WorkflowExecutor:
                     "Return only valid JSON."
                 ),
             )
-            routed = self._normalize_plan(self._parse_plan_result(result))
+            routed = self._resolve_clarify(
+                self._normalize_plan(self._parse_plan_result(result)),
+                clarify_rounds_used,
+            )
             log_workflow_event(
                 "workflow_plan_routed",
                 {
                     "execution_mode": routed.execution_mode,
+                    "intake_confidence": routed.intake_confidence,
                     "complexity": routed.complexity,
                     "routing_reason": routed.routing_reason,
                     "agent_count": len(routed.agent_tasks),
@@ -1755,7 +1789,8 @@ class WorkflowExecutor:
             "short answers you are confident you can give from your own knowledge "
             "with no tools required.\n"
             "- clarify: essential facts are missing and any specialist work would "
-            "be wasteful.\n"
+            "be wasteful. Ask only for facts that change the answer, and only "
+            "when you cannot proceed on a stated assumption instead.\n"
             "- agent_workflow: anything that requires action or tools — legal "
             "research, document review, source verification, drafting/saving "
             "files, downloading or fetching external resources, web search, "
@@ -1792,11 +1827,18 @@ class WorkflowExecutor:
             '  "complexity": "simple | standard | complex",\n'
             '  "direct_response": "user-facing answer or clarification question",\n'
             '  "routing_reason": "brief reason",\n'
+            '  "intake_confidence": 0.0,\n'
             '  "issue_decomposition": [],\n'
             '  "agent_tasks": [],\n'
             '  "integration_instructions": "",\n'
             '  "citation_requirements": ""\n'
             "}\n\n"
+            "`intake_confidence` is 0.0-1.0: how confident you are that you have "
+            "the facts needed to do the work (jurisdiction, governing law, the "
+            "party's role, the operative date, the document in question). "
+            f"Below {CLARIFY_CONFIDENCE_THRESHOLD} the turn asks; at or above it "
+            "the turn proceeds on stated assumptions. Report it honestly — it is "
+            "read as a number, not as a sentiment.\n\n"
             "Do not use direct_answer for substantive legal claims, current factual claims, "
             "or search/research requests that need source support. "
             "For ordinary non-legal document, spreadsheet, deck, PDF, search, "
@@ -2073,6 +2115,73 @@ class WorkflowExecutor:
                 )
         return WorkflowPlan(**data)
 
+    def _resolve_clarify(self, plan: WorkflowPlan, clarify_rounds_used: int) -> WorkflowPlan:
+        """Decide whether a `clarify` routing actually gets to ask.
+
+        Two gates, both arithmetic rather than instruction, because a planner
+        that is inclined to hedge will hedge past any wording:
+
+        - **Confidence.** `clarify` with `intake_confidence` at or above the
+          threshold is a hedge, not a blocker: the model says it knows enough
+          and then asks anyway. It proceeds instead.
+        - **Rounds.** After `MAX_CLARIFY_ROUNDS` consecutive clarifying turns,
+          the next one proceeds on stated assumptions. Asking a third time
+          costs the user the same typing again and produces nothing.
+        """
+        if plan.execution_mode != "clarify":
+            return plan
+
+        confident = (
+            plan.intake_confidence is not None
+            and plan.intake_confidence >= CLARIFY_CONFIDENCE_THRESHOLD
+        )
+        exhausted = clarify_rounds_used >= MAX_CLARIFY_ROUNDS
+        if not confident and not exhausted:
+            return plan
+
+        reason = "confidence_at_threshold" if confident else "clarify_rounds_exhausted"
+        log_workflow_event(
+            "clarify_overridden",
+            {
+                "reason": reason,
+                "intake_confidence": plan.intake_confidence,
+                "threshold": CLARIFY_CONFIDENCE_THRESHOLD,
+                "clarify_rounds_used": clarify_rounds_used,
+                "max_rounds": MAX_CLARIFY_ROUNDS,
+            },
+        )
+        return plan.model_copy(
+            update={
+                "execution_mode": "agent_workflow",
+                "direct_response": "",
+                "routing_reason": (
+                    f"{plan.routing_reason} [proceeding without further questions: {reason}]"
+                ).strip(),
+                # The question the router wanted to ask becomes the assumption
+                # the work has to state, so the answer still surfaces the gap.
+                "integration_instructions": "\n".join(
+                    filter(
+                        None,
+                        [
+                            plan.integration_instructions,
+                            (
+                                "Essential facts were not supplied. State the "
+                                "assumptions you proceed on at the top of the "
+                                "answer, and answer for the most likely reading. "
+                                "Where an assumption changes the conclusion, give "
+                                "the alternative outcome too."
+                                + (
+                                    f" The open question was: {plan.direct_response.strip()}"
+                                    if plan.direct_response.strip()
+                                    else ""
+                                )
+                            ),
+                        ],
+                    )
+                ),
+            }
+        )
+
     def _normalize_plan(self, plan: WorkflowPlan) -> WorkflowPlan:
         """Drop redundant aggregator/QC sub-agents; preserve real specialist dependencies.
 
@@ -2313,11 +2422,39 @@ class WorkflowExecutor:
         memory_summary: str = "",
         skill_hint: Optional[str] = None,
         cancel_event: Optional[threading.Event] = None,
+        clarify_rounds_used: int = 0,
+        resume_run_id: Optional[str] = None,
     ) -> Iterator[StreamEvent]:
         run_id = new_run_id()
         token_run = run_id_var.set(run_id)
         token_parent = parent_run_id_var.set(None)
         token_agent = agent_name_var.set("orchestrator")
+        # Durable run record. Opened before any model call so a crash in
+        # routing is still visible, and reused when resuming: the research a
+        # previous attempt completed is the expensive part to lose.
+        chat_id = (usage_context_var.get() or {}).get("chat_id")
+        self._run_store = RunStore(self.settings, run_id, chat_id=chat_id)
+        # Set at every exit that actually answered. The direct-answer and
+        # clarify branches return early, so the terminal status is settled in
+        # `finally` from this flag rather than at one happy-path line.
+        answered = False
+        resume_outputs: dict[str, str] = {}
+        if resume_run_id:
+            previous = load_run(self.settings, resume_run_id)
+            if previous is not None:
+                resume_outputs = previous.resumable_outputs()
+                self._run_store.append_event(
+                    "resumed_from",
+                    {"run_id": resume_run_id, "reused_tasks": sorted(resume_outputs)},
+                )
+                log_workflow_event(
+                    "workflow_resumed",
+                    {
+                        "from_run_id": resume_run_id,
+                        "reused_task_count": len(resume_outputs),
+                        "previous_status": previous.snapshot.status,
+                    },
+                )
 
         # Auto-detect domain packs from the user message + recent messages and
         # merge with explicit settings.active_domain_packs. The resolved
@@ -2400,8 +2537,11 @@ class WorkflowExecutor:
                 memory_summary=memory_summary,
                 available_files=available_files,
                 has_attachments=bool(attachment_paths),
+                clarify_rounds_used=clarify_rounds_used,
             )
             raise_if_cancelled()
+            if self._run_store is not None:
+                self._run_store.record_plan(plan)
 
             if plan.execution_mode in {"direct_answer", "clarify"} and attachment_paths:
                 # The cheap planner only sees filenames, not the file bytes.
@@ -2487,6 +2627,7 @@ class WorkflowExecutor:
                     if ev.kind == "citation_audit":
                         audit_payload = ev.data
                     yield ev
+                answered = True
                 yield StreamEvent("done", _done_payload(final_text, audit_payload))
                 return
 
@@ -2549,8 +2690,6 @@ class WorkflowExecutor:
                     if is_general_single
                     else _SINGLE_PASS_LEGAL_SYSTEM + _build_parent_addendum(self._resolved)
                 )
-                direct_chunks: list[str] = []
-                stripper = _ToolXmlStripper()
                 log_workflow_event(
                     "workflow_direct_llm_started",
                     {
@@ -2561,50 +2700,27 @@ class WorkflowExecutor:
                         "user_language": plan.user_language,
                     },
                 )
-                for ev in self.provider.stream(
+                final_text, audit_payload = yield from self._verified_synthesis(
                     system=direct_system,
-                    messages=[{"role": "user", "content": direct_user_content}],
-                    tools=direct_tools,
-                    max_iterations=self.settings.parent_max_iterations,
-                ):
-                    raise_if_cancelled()
-                    if ev.kind == "delta":
-                        clean = stripper.feed(ev.data.get("text", ""))
-                        if clean:
-                            direct_chunks.append(clean)
-                            yield StreamEvent("delta", {"text": clean})
-                    elif ev.kind == "done":
-                        _capture_usage(ev)
-                        if not direct_chunks and ev.data.get("text"):
-                            clean = stripper.feed(ev.data.get("text", ""))
-                            if clean:
-                                direct_chunks.append(clean)
-                                yield StreamEvent("delta", {"text": clean})
-                        continue
-                    else:
-                        yield ev
-                tail = stripper.flush()
-                if tail:
-                    direct_chunks.append(tail)
-                    yield StreamEvent("delta", {"text": tail})
-                final_text = _guard_empty_answer("".join(direct_chunks), "single_pass")
-                if final_text and not direct_chunks:
-                    yield StreamEvent("delta", {"text": final_text})
-                audit_payload = None
-                for ev in self._run_cite_check_after_summary(
+                    content=direct_user_content,
                     plan=plan,
-                    final_text=final_text,
                     attachments=attachment_paths,
+                    capture_usage=_capture_usage,
                     cancel_event=cancel_event,
-                ):
-                    if ev.kind == "citation_audit":
-                        audit_payload = ev.data
-                    yield ev
+                    stage="single_pass",
+                    provider=self.provider,
+                    tools=direct_tools,
+                )
+                raise_if_cancelled()
+                answered = True
                 yield StreamEvent("done", _done_payload(final_text, audit_payload))
                 return
 
             task_outputs, failed_tasks = yield from self._stream_tasks(
-                plan, attachments=attachment_paths, cancel_event=cancel_event
+                plan,
+                attachments=attachment_paths,
+                cancel_event=cancel_event,
+                resume_outputs=resume_outputs,
             )
             raise_if_cancelled()
             if failed_tasks:
@@ -2630,8 +2746,6 @@ class WorkflowExecutor:
             integration_content = build_user_content(
                 integration_prompt, attachment_paths, self.provider.name
             )
-            final_chunks: list[str] = []
-            stripper = _ToolXmlStripper()
             log_workflow_event(
                 "integration_started",
                 {
@@ -2641,65 +2755,312 @@ class WorkflowExecutor:
                     "attachment_count": len(attachment_paths),
                 },
             )
-            for ev in self.integration_provider.stream(
+            final_text, audit_payload = yield from self._verified_synthesis(
                 system=(
                     _GENERAL_SYSTEM_PROMPT
                     if _is_general_plan(plan)
                     else (_PARENT_PROMPT_BODY + _build_parent_addendum(self._resolved))
                 ),
-                messages=[{"role": "user", "content": integration_content}],
-                tools=_document_io_tools(),
-                max_iterations=self.settings.parent_max_iterations,
-            ):
-                raise_if_cancelled()
-                if ev.kind == "delta":
-                    clean = stripper.feed(ev.data.get("text", ""))
-                    if clean:
-                        final_chunks.append(clean)
-                        yield StreamEvent("delta", {"text": clean})
-                elif ev.kind == "done":
-                    # We emit our own final done with citation audit below. If a
-                    # provider only exposes text at completion, still surface it.
-                    _capture_usage(ev)
-                    if not final_chunks and ev.data.get("text"):
-                        clean = stripper.feed(ev.data.get("text", ""))
-                        if clean:
-                            final_chunks.append(clean)
-                            yield StreamEvent("delta", {"text": clean})
-                    continue
-                else:
-                    yield ev
-            tail = stripper.flush()
-            raise_if_cancelled()
-            if tail:
-                final_chunks.append(tail)
-                yield StreamEvent("delta", {"text": tail})
-            final_text = _guard_empty_answer("".join(final_chunks), "integration")
-            if final_text and not final_chunks:
-                yield StreamEvent("delta", {"text": final_text})
-            audit_payload = None
-            for ev in self._run_cite_check_after_summary(
+                content=integration_content,
                 plan=plan,
-                final_text=final_text,
                 attachments=attachment_paths,
+                capture_usage=_capture_usage,
                 cancel_event=cancel_event,
-            ):
-                if ev.kind == "citation_audit":
-                    audit_payload = ev.data
-                yield ev
+            )
+            raise_if_cancelled()
+            answered = True
             yield StreamEvent("done", _done_payload(final_text, audit_payload))
         except WorkflowCancelled:
-            yield StreamEvent("cancelled", {"message": "Cancelled by user."})
+            # Paused, not lost: the completed research bundles are on disk and a
+            # resumed run reuses them.
+            if self._run_store is not None:
+                self._run_store.finish("paused", pause_reason="cancelled")
+            yield StreamEvent(
+                "cancelled",
+                {"message": "Cancelled by user.", "run_id": run_id, "resumable": True},
+            )
         except Exception as exc:
-            if is_out_of_money_error(exc):
+            out_of_money = is_out_of_money_error(exc)
+            if self._run_store is not None:
+                self._run_store.finish(
+                    "paused" if out_of_money else "failed",
+                    pause_reason="provider_unavailable" if out_of_money else "error",
+                    error=str(exc)[:2000],
+                )
+            if out_of_money:
                 yield StreamEvent("delta", {"text": OUT_OF_MONEY_MESSAGE})
                 yield StreamEvent("error", {"message": OUT_OF_MONEY_MESSAGE, "out_of_money": True})
             else:
-                yield StreamEvent("error", {"message": str(exc)})
+                yield StreamEvent("error", {"message": str(exc), "run_id": run_id})
         finally:
+            # A generator abandoned mid-turn (the client disconnected) never
+            # reaches an except clause, so a run left "running" here is not a
+            # completed one — it is resumable work nobody is waiting for.
+            if self._run_store is not None and self._run_store.snapshot.status == "running":
+                if answered:
+                    self._run_store.finish("complete")
+                else:
+                    self._run_store.finish("paused", pause_reason="abandoned")
             run_id_var.reset(token_run)
             parent_run_id_var.reset(token_parent)
             agent_name_var.reset(token_agent)
+
+    # --- verified synthesis -------------------------------------------------
+    # A citation audit that only reports is a warning label; the answer still
+    # ships with the bad cite in it. These three methods turn the audit into a
+    # repair: synthesise into a buffer, audit, fix exactly what the audit
+    # flagged, then reveal. Bounded by ``max_repair_rounds`` so a model that
+    # cannot satisfy its own auditor cannot loop.
+
+    def _synthesis_pass(
+        self,
+        *,
+        system: str,
+        content: Any,
+        reveal: bool,
+        capture_usage: Callable[[StreamEvent], None],
+        cancel_event: Optional[threading.Event],
+        stage: str = "integration",
+        provider: Optional[Provider] = None,
+        tools: Optional[list[Any]] = None,
+    ) -> Iterator[StreamEvent]:
+        """One synthesis turn. Yields provider events, returns the answer text.
+
+        With ``reveal=False`` the prose is buffered rather than streamed, so a
+        verification pass can run before the reader sees a single citation.
+        Tool calls, sources and phase events still stream either way.
+        """
+        chunks: list[str] = []
+        stripper = _ToolXmlStripper()
+
+        def emit_text(clean: str) -> Iterator[StreamEvent]:
+            chunks.append(clean)
+            if reveal:
+                yield StreamEvent("delta", {"text": clean})
+
+        for ev in (provider or self.integration_provider).stream(
+            system=system,
+            messages=[{"role": "user", "content": content}],
+            tools=_document_io_tools() if tools is None else tools,
+            max_iterations=self.settings.parent_max_iterations,
+        ):
+            if cancel_event is not None and cancel_event.is_set():
+                raise WorkflowCancelled()
+            if ev.kind == "delta":
+                clean = stripper.feed(ev.data.get("text", ""))
+                if clean:
+                    yield from emit_text(clean)
+            elif ev.kind == "done":
+                capture_usage(ev)
+                if not chunks and ev.data.get("text"):
+                    clean = stripper.feed(ev.data.get("text", ""))
+                    if clean:
+                        yield from emit_text(clean)
+            else:
+                yield ev
+        tail = stripper.flush()
+        if tail:
+            yield from emit_text(tail)
+        return _guard_empty_answer("".join(chunks), stage)
+
+    def _audit_pass(
+        self,
+        *,
+        plan: Optional[WorkflowPlan],
+        final_text: str,
+        attachments: Optional[list[Path]],
+        cancel_event: Optional[threading.Event],
+        emit_result: bool = True,
+    ) -> Iterator[StreamEvent]:
+        """Run the citation audit, returning its payload.
+
+        ``emit_result=False`` keeps the progress events but withholds the
+        ``citation_audit`` verdict, so an intermediate audit of a draft that is
+        about to be repaired never reaches the UI as the answer's verdict.
+        """
+        payload: Optional[dict[str, Any]] = None
+        for ev in self._run_cite_check_after_summary(
+            plan=plan,
+            final_text=final_text,
+            attachments=attachments,
+            cancel_event=cancel_event,
+        ):
+            if ev.kind == "citation_audit":
+                payload = ev.data
+                if not emit_result:
+                    continue
+            yield ev
+        return payload
+
+    def _verified_synthesis(
+        self,
+        *,
+        system: str,
+        content: Any,
+        plan: WorkflowPlan,
+        attachments: Optional[list[Path]],
+        capture_usage: Callable[[StreamEvent], None],
+        cancel_event: Optional[threading.Event],
+        stage: str = "integration",
+        provider: Optional[Provider] = None,
+        tools: Optional[list[Any]] = None,
+    ) -> Iterator[StreamEvent]:
+        """Synthesise, audit, repair what the audit flagged, then reveal.
+
+        Returns ``(final_text, audit_payload)``. When verification is disabled
+        for this plan the prose streams as it is generated and no repair runs —
+        repairing an answer the reader has already seen would append a second
+        copy rather than correct the first.
+        """
+        buffered = self._verify_before_reveal(plan)
+        rounds = max(0, int(getattr(self.settings, "max_repair_rounds", 1))) if buffered else 0
+        draft = yield from self._synthesis_pass(
+            system=system,
+            content=content,
+            reveal=not buffered,
+            capture_usage=capture_usage,
+            cancel_event=cancel_event,
+            stage=stage,
+            provider=provider,
+            tools=tools,
+        )
+        if self._run_store is not None:
+            self._run_store.set_phase(stage)
+            self._run_store.write_artifact(f"{stage}-draft", draft, title="Draft answer")
+        audit: Optional[dict[str, Any]] = None
+        for attempt in range(rounds + 1):
+            last = attempt >= rounds
+            audit = yield from self._audit_pass(
+                plan=plan,
+                final_text=draft,
+                attachments=attachments,
+                cancel_event=cancel_event,
+                emit_result=last,
+            )
+            if self._run_store is not None and audit is not None:
+                self._run_store.write_artifact(
+                    f"citation-audit-{attempt + 1}",
+                    (audit.get("report_markdown") or "").strip()
+                    or json.dumps(audit, ensure_ascii=False, indent=2, default=str),
+                    title=f"Citation audit (round {attempt + 1})",
+                )
+            if last or not _audit_is_repairable(audit):
+                if not last and audit is not None:
+                    # Passed on an earlier round: emit the verdict we withheld.
+                    yield StreamEvent("citation_audit", audit)
+                break
+            items = [
+                it for it in (audit.get("items") or [])
+                if str(it.get("severity", "")).lower() in {"critical", "major"}
+            ]
+            log_workflow_event(
+                "answer_repair_started",
+                {
+                    "round": attempt + 1,
+                    "flagged_items": len(items),
+                    "do_not_file": bool(audit.get("do_not_file")),
+                },
+            )
+            yield StreamEvent(
+                "answer_repair",
+                {
+                    "round": attempt + 1,
+                    "rounds_allowed": rounds,
+                    "flagged_items": len(items),
+                    "do_not_file": bool(audit.get("do_not_file")),
+                },
+            )
+            repaired = yield from self._synthesis_pass(
+                system=system,
+                content=build_user_content(
+                    self._repair_prompt(draft, audit, plan),
+                    attachments or [],
+                    self.provider.name,
+                ),
+                reveal=False,
+                capture_usage=capture_usage,
+                cancel_event=cancel_event,
+                stage="repair",
+                provider=provider,
+                tools=tools,
+            )
+            if not repaired.strip():
+                log_workflow_event("answer_repair_abandoned", {"round": attempt + 1})
+                break
+            draft = repaired
+            if self._run_store is not None:
+                self._run_store.snapshot.repair_rounds = attempt + 1
+                self._run_store.write_artifact(
+                    f"repair-{attempt + 1}", draft, title=f"Repaired answer (round {attempt + 1})"
+                )
+        if buffered and draft:
+            yield StreamEvent("delta", {"text": draft})
+        return draft, audit
+
+    def _verify_before_reveal(self, plan: Optional[WorkflowPlan]) -> bool:
+        """True when this answer is audited before the reader sees it.
+
+        Only substantive legal workflow answers: a greeting or a UI question
+        has nothing to verify, and holding it back would add latency for
+        nothing.
+        """
+        if not getattr(self.settings, "verify_before_reveal", True):
+            return False
+        if not self.settings.enable_cite_check:
+            return False
+        if plan is None or _is_general_plan(plan):
+            return False
+        return plan.execution_mode == "agent_workflow"
+
+    def _repair_prompt(
+        self,
+        draft: str,
+        audit: dict[str, Any],
+        plan: Optional[WorkflowPlan],
+    ) -> str:
+        """Instructions to fix exactly what the audit flagged, and nothing else."""
+        items = [
+            it for it in (audit.get("items") or [])
+            if str(it.get("severity", "")).lower() in {"critical", "major"}
+        ]
+        lines = [
+            "The draft answer below failed its citation audit. Repair it.",
+            "",
+            "## Draft",
+            draft,
+            "",
+            "## Audit findings",
+            (audit.get("report_markdown") or "").strip() or "(no report body)",
+        ]
+        if items:
+            lines += [
+                "",
+                "## Findings to fix, in order",
+                *[
+                    f"{n}. [{it.get('severity', '?')}] {it.get('claim') or it.get('cite') or ''}"
+                    f" — {it.get('note') or it.get('verdict') or 'unsupported'}"
+                    for n, it in enumerate(items[:20], 1)
+                ],
+            ]
+        lines += [
+            "",
+            "## How to repair",
+            "- Fix only what the audit flagged. Leave every other sentence, "
+            "heading, table and citation exactly as it is.",
+            "- Re-verify each flagged citation with the tools you have. If the "
+            "source supports the claim, correct the pinpoint and keep the claim.",
+            "- If the source does not support the claim, change the claim to "
+            "what the source does support, or remove it and say in the analysis "
+            "that the point could not be verified.",
+            "- Never invent a replacement citation, and never keep a pinpoint "
+            "you could not confirm. Write `pinpoint unavailable` / "
+            "`无法获得具体条款` where that is the truth.",
+            "- Return the complete repaired answer, in "
+            f"{(plan.user_language if plan else 'the user') or 'the user'}'s language, "
+            "with its `## Sources` / `## 资料来源` section intact. Return the "
+            "answer only — no changelog, no commentary on the repair.",
+        ]
+        return "\n".join(lines)
 
     def _run_cite_check_after_summary(
         self,
@@ -2893,12 +3254,33 @@ class WorkflowExecutor:
         })
         yield StreamEvent("citation_audit", payload)
 
+    def _record_task(
+        self,
+        plan: WorkflowPlan,
+        task_id: str,
+        output: str,
+        *,
+        error: Optional[str] = None,
+    ) -> None:
+        """Persist one specialist's bundle to the run record."""
+        if self._run_store is None:
+            return
+        task = next((item for item in plan.agent_tasks if item.id == task_id), None)
+        self._run_store.task_finished(
+            task_id,
+            output,
+            skill_name=getattr(task, "skill_name", ""),
+            title=getattr(task, "title", ""),
+            error=error,
+        )
+
     def _stream_tasks(
         self,
         plan: WorkflowPlan,
         *,
         attachments: Optional[list[Path]] = None,
         cancel_event: Optional[threading.Event] = None,
+        resume_outputs: Optional[dict[str, str]] = None,
     ) -> Iterator[StreamEvent]:
         outputs: dict[str, str] = {}
         # task_id → error message for specialists that failed after retry.
@@ -2908,6 +3290,18 @@ class WorkflowExecutor:
         failures: dict[str, str] = {}
         pending = {task.id: task for task in plan.agent_tasks}
         completed: set[str] = set()
+        # A resumed run inherits the research a previous attempt finished: the
+        # tasks are already complete, so only what was left runs again.
+        for task_id, text in (resume_outputs or {}).items():
+            if task_id in pending and text.strip():
+                outputs[task_id] = text
+                completed.add(task_id)
+                pending.pop(task_id, None)
+        if resume_outputs:
+            reused = sorted(completed)
+            if reused:
+                log_workflow_event("workflow_tasks_reused", {"task_ids": reused})
+                yield StreamEvent("workflow_tasks_reused", {"task_ids": reused})
         adaptive_max_concurrent = self.settings.effective_max_concurrent_agents()
         rate_limit_retried: set[str] = set()
 
@@ -3225,6 +3619,7 @@ class WorkflowExecutor:
                     outputs[task_id] = text or ""
                     finished_ready.add(task_id)
                     completed.add(task_id)
+                    self._record_task(plan, task_id, text or "")
                 elif status == "error":
                     # Only unrecoverable run-level errors (out of money) arrive
                     # as "error" now; per-task failures degrade via "failed".
@@ -3233,6 +3628,9 @@ class WorkflowExecutor:
                     failures[task_id] = ev.data.get("message", "specialist failed")
                     outputs.setdefault(task_id, "")
                     finished_ready.add(task_id)
+                    self._record_task(
+                        plan, task_id, outputs.get(task_id, ""), error=failures[task_id]
+                    )
                     # Counts as completed for dependency purposes: dependents
                     # still run, minus the missing upstream bundle.
                     completed.add(task_id)

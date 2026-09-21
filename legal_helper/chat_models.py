@@ -153,6 +153,13 @@ class WorkflowPlan(BaseModel):
     complexity: Literal["simple", "standard", "complex"] = "standard"
     direct_response: str = ""
     routing_reason: str = ""
+    # Router's confidence that it has the facts needed to do the work, 0-1.
+    # At or above `CLARIFY_CONFIDENCE_THRESHOLD` a `clarify` routing is treated
+    # as a hedge and the turn proceeds. None means the router did not report a
+    # number — the heuristic planner and any model that ignores the field — and
+    # an unreported confidence must not be read as a confident one, so the gate
+    # simply does not apply.
+    intake_confidence: Optional[float] = None
     artifact_format: Optional[Literal["pdf", "docx"]] = None  # legacy; ignored
     issue_decomposition: list[str] = Field(default_factory=list)
     agent_tasks: list[AgentTask] = Field(default_factory=list)

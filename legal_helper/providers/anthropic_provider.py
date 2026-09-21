@@ -16,6 +16,7 @@ from anthropic.lib.tools._beta_functions import (
 from ..attachments import needs_anthropic_files_beta
 from ..config import Settings
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
+from ..tool_budget import apply_result_budget, budget_log_fields, turn_result_budget
 from ..tools.multimodal import split_inline_images, to_anthropic_tool_content
 from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
@@ -172,6 +173,11 @@ def _instrument_local_tools(tools: list[Any], *, provider: str, model: str) -> l
                 # content blocks so the model actually SEES what it produced.
                 # Log the text half only — base64 must never hit the log.
                 output_str, images = split_inline_images(result)
+                # Image-carrying results keep their protocol intact; text-only
+                # results are cut to the tool's declared model-facing budget.
+                budgeted = (
+                    apply_result_budget(_name, output_str) if not images else None
+                )
                 log_workflow_event(
                     "local_tool_call_finished",
                     {
@@ -181,9 +187,12 @@ def _instrument_local_tools(tools: list[Any], *, provider: str, model: str) -> l
                         "output_preview": output_str[:1200],
                         "output_chars": len(output_str),
                         **({"inline_images": len(images)} if images else {}),
+                        **budget_log_fields(budgeted),
                     },
                 )
-                return to_anthropic_tool_content(result) if images else result
+                if images:
+                    return to_anthropic_tool_content(result)
+                return budgeted.text if budgeted is not None else result
 
             return instrumented_call
 
@@ -446,7 +455,7 @@ class AnthropicProvider:
         tool_calls: list[ToolCallRecord] = []
         hosted_calls: list[ToolCallRecord] = []
         usage: dict[str, Any] = {}
-        with TurnTimer() as t:
+        with TurnTimer() as t, turn_result_budget(self.settings):
             runner = self.client.beta.messages.tool_runner(**kwargs)
             # Iterate per model turn: `until_done()` alone exposes only the
             # final message, which undercounts usage on multi-tool turns and
@@ -606,7 +615,7 @@ class AnthropicProvider:
         tool_calls: list[ToolCallRecord] = []
         hosted_calls: list[ToolCallRecord] = []
         usage: dict[str, Any] = {}
-        with TurnTimer() as t:
+        with TurnTimer() as t, turn_result_budget(self.settings):
             # Anthropic's streaming tool runner yields a BetaMessageStream for each
             # model turn. The stream itself yields content_block_* events.
             for stream in runner:
