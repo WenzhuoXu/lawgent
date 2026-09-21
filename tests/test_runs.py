@@ -18,7 +18,7 @@ from legal_helper.runs import RunStore, list_runs, load_run
 
 def _plan() -> WorkflowPlan:
     return WorkflowPlan(
-        title="Xiamen-Ethiopia route",
+        title="ET route filing",
         agent_tasks=[
             AgentTask(id="a1", skill_name="legal-response", title="ET aviation law", task="research"),
             AgentTask(id="a2", skill_name="brief", title="CN outbound", task="research"),

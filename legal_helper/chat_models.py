@@ -95,8 +95,8 @@ class Project(BaseModel):
     and instructions re-injected into the orchestrator every turn (it survives
     chat compaction). ``summary`` is the rolling, model-distilled digest of work
     done across the project's chats. ``jurisdiction`` / ``domain_packs`` let a
-    project pin a working jurisdiction + pack set (e.g. ET + aviation for the
-    Addis Ababa route).
+    project pin a working jurisdiction + pack set (e.g. ET + aviation for
+    Ethiopian route work).
     """
 
     id: str

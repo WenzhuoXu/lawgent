@@ -411,7 +411,7 @@ def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Option
     if chat_id:
         updates["outputs_dir"] = _chat_outputs_dir(chat_id)
         # A project pins jurisdiction + packs for every chat under it, so the
-        # right connectors (e.g. ET/aviation for the Addis route) surface and
+        # right connectors (e.g. ET/aviation for Ethiopian route work) surface and
         # the orchestrator inherits the project's standing context.
         project = _project_for_chat(chat_id)
         if project is not None:

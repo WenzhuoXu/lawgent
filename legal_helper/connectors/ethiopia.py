@@ -21,9 +21,9 @@ index (metaappz search is a Google Custom Search widget; ECAA has no list
 endpoint). The catalogue mirrors the shape of ``easa_ear_index`` — hand
 maintained, each entry carrying an official / mirror URL and a pinpoint hint.
 
-The company is opening an Addis Ababa route, so the catalogue is weighted
-toward civil-aviation instruments; general foundational laws are included so
-``ethiopia_law_fetch`` is useful beyond aviation too.
+The catalogue is weighted toward civil-aviation instruments, since that is
+what ET work in this product touches; general foundational laws are included
+so ``ethiopia_law_fetch`` is useful beyond aviation too.
 """
 
 from __future__ import annotations
@@ -165,7 +165,7 @@ _ECAA_FRAMEWORK_INDEX: list[dict[str, str]] = [
     {
         "instrument": "Cape Town Convention + Aircraft Protocol (IDERA)",
         "role": "Ethiopia is a contracting state; relevant to aircraft leasing/financing "
-                "security and deregistration (IDERA) for the new route's fleet.",
+                "security and deregistration (IDERA) for an operator's fleet.",
         "fetch": "retrieve_legal(collection='aviation_treaties', query='Cape Town Aircraft Protocol IDERA')",
         "url": "https://www.unidroit.org/instruments/security-interests/cape-town-convention/",
     },

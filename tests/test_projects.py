@@ -34,7 +34,7 @@ def store(tmp_path: Path) -> ProjectStore:
 
 
 def test_slugify():
-    assert slugify("Addis Ababa Route Launch!") == "addis-ababa-route-launch"
+    assert slugify("ET Route Launch Review!") == "et-route-launch-review"
     assert slugify("   ") == "project"
 
 
@@ -90,13 +90,13 @@ def test_chat_assignment(store: ProjectStore):
 
 def test_build_context_block(store: ProjectStore):
     p = store.create_project(
-        "Addis Route", brief="Open ADD route; ECAA AOC validation.",
+        "ET Route", brief="Open an ET route; ECAA AOC validation.",
         jurisdiction="ET", domain_packs=["aviation"],
     )
     store.add_memory(p.id, "decision", "Adopt MC99 liability floor", salience=5)
     store.add_memory(p.id, "open_question", "Which BASA governs ADD?", salience=4)
     block = store.build_context_block(p.id)
-    assert "Project context — Addis Route" in block
+    assert "Project context — ET Route" in block
     assert "ECAA AOC validation" in block          # brief
     assert "Adopt MC99 liability floor" in block    # decision
     assert "Which BASA governs ADD?" in block       # open question
