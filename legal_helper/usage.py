@@ -74,13 +74,15 @@ def _ambient_context() -> dict[str, Any]:
 # USD per 1M tokens.  ``cache_read`` / ``cache_write`` are Anthropic buckets;
 # ``cached_input`` is OpenAI's discounted-cached-input rate.  Override or
 # extend without a code change via LEGAL_HELPER_PRICING_JSON (same shape).
-# Rates verified against official pricing pages 2026-09-11 (Anthropic:
+# Rates verified against official pricing pages 2026-09-22 (Anthropic:
 # platform.claude.com/docs/en/about-claude/pricing; OpenAI:
 # developers.openai.com/api/docs/pricing).
 # Anthropic: cache read = 0.1x input, cache write (5-minute TTL) = 1.25x input.
 # claude-sonnet-5 stays at 2.00/10.00 — the increase to 3.00/15.00 scheduled for
 # 2026-09-01 was cancelled and the introductory rate is now standard.
 DEFAULT_PRICING: dict[str, dict[str, float]] = {
+    # Opus 5.5 reads cache at 0.05x input (not the usual 0.1x).
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "cache_read": 0.20, "cache_write": 5.00},
     "claude-opus-5": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-opus-4-8": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-opus-4-7": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
@@ -100,11 +102,16 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cached_input": 0.20, "cache_write": 2.50},
     "gpt-5.6-sol": {"input": 4.00, "output": 20.00, "cached_input": 0.40, "cache_write": 5.00},
     "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cached_input": 0.02, "cache_write": 0.25},
+    # gpt-6 family: same cache-write billing and 272K long-context surcharge
+    # as 5.6. No bare "gpt-6" alias exists; only named variants are used.
+    "gpt-6-astra": {"input": 10.00, "output": 50.00, "cached_input": 1.00, "cache_write": 12.50},
+    "gpt-6-sol": {"input": 2.00, "output": 10.00, "cached_input": 0.20, "cache_write": 2.50},
+    "gpt-6-luna": {"input": 0.10, "output": 0.50, "cached_input": 0.01, "cache_write": 0.125},
 }
 
 # OpenAI bills a prompt whose input exceeds this threshold at 2x input (cached
 # input included) and 1.5x output, for the whole request. Every current
-# gpt-5.5/5.6 model carries it. Modelling it matters: through 2026-08 and
+# gpt-5.5/5.6/6 model carries it. Modelling it matters: through 2026-08 and
 # 2026-09 roughly a quarter of gpt-5.5 and terra requests crossed the line, and
 # leaving the term out under-reported the month by 21-31%.
 OPENAI_LONG_CONTEXT_THRESHOLD = 272_000
@@ -121,8 +128,8 @@ def is_long_context(rec: dict[str, Any]) -> bool:
 # Used when a model has no pricing entry, so the estimate stays an estimate
 # instead of silently reading as zero spend.
 PROVIDER_FALLBACK_PRICING: dict[str, dict[str, float]] = {
-    "anthropic": DEFAULT_PRICING["claude-opus-4-8"],
-    "openai": DEFAULT_PRICING["gpt-5.6-terra"],
+    "anthropic": DEFAULT_PRICING["claude-opus-5-5"],
+    "openai": DEFAULT_PRICING["gpt-6-sol"],
 }
 
 

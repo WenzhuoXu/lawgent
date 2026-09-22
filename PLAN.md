@@ -32,8 +32,8 @@ usable interface to:
 2. **PRC primary, comparative secondary.** PRC source hierarchy
    (法律 → 行政法规 → 部门规章 → 规范性文件 → 司法解释 → 指导案例) is
    the default. US / EU appear when relevant; never as default.
-3. **Provider parity.** Anthropic Claude (`claude-opus-5`) and OpenAI
-   GPT (`gpt-5.6-terra`) are first-class peers behind one `Provider` protocol.
+3. **Provider parity.** Anthropic Claude (`claude-opus-5-5`) and OpenAI
+   GPT (`gpt-6-sol`) are first-class peers behind one `Provider` protocol.
    All tools — connectors, MCP-discovered, RAG, citations — surface as
    plain function tools to both SDKs; no provider-native MCP path.
 4. **Sub-agent runtime.** Orchestrator fans out via `run_skill`; each

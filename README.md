@@ -486,9 +486,8 @@ re-measures the boxes around it, rather than scaling the drawing and leaving the
 behind. Mermaid stays as an authoring syntax and as the raster renderer; `d2` is there for
 the one arrangement Graphviz does not match, nested containers.
 
-**Provider parity.** One `Provider` protocol over Anthropic (`claude-opus-5`, also
-`claude-opus-4-8` / `4-7`; fast tier `claude-haiku-4-5`) and OpenAI (`gpt-5.6-terra` or
-`-sol`, fast tier `gpt-5.6-luna`). Streaming, tool calls, reasoning traces, prompt caching,
+**Provider parity.** One `Provider` protocol over Anthropic (`claude-opus-5-5`; fast tier
+`claude-sonnet-5`) and OpenAI (`gpt-6-sol`; fast tier `gpt-6-luna`). Streaming, tool calls, reasoning traces, prompt caching,
 and hosted web search all reach parity, and `tests/test_provider_parity.py` asserts the tool
 surfaces match.
 
@@ -620,8 +619,8 @@ default_language: zh              # user-facing default; follows the user at run
 citation_style: gb_t_7714         # gb_t_7714 | bluebook | oscola
 active_domain_packs: []           # e.g. [aviation]
 
-anthropic_model: claude-opus-5
-openai_model: gpt-5.6-terra       # never the bare "gpt-5.6" alias — it routes to Sol
+anthropic_model: claude-opus-5-5
+openai_model: gpt-6-sol           # always a named variant; there is no bare "gpt-6" alias
 max_iterations: 12                # tool-loop ceiling per agent
 external_skill_max_iterations: 80 # ceiling for an external procedural skill;
                                   # a procedure cannot reach its export step in 8

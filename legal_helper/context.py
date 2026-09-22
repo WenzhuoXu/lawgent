@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # avoid an import cycle (chat_models has no heavy deps, but k
 # to ``_DEFAULT_WINDOW``. Opus/Sonnet 4.x are 1M; Haiku 200K; gpt-5.x treated
 # conservatively. These bound the *compaction trigger*, not the per-turn digest.
 _WINDOWS = {
+    "claude-opus-5-5": 1_000_000,
     "claude-opus-5": 1_000_000,
     "claude-opus-4-8": 1_000_000,
     "claude-opus-4-7": 1_000_000,
@@ -41,6 +42,9 @@ _WINDOWS = {
     "claude-sonnet-4-6": 1_000_000,
     "claude-sonnet-5": 1_000_000,
     "claude-haiku-4-5": 200_000,
+    "gpt-6-astra": 1_050_000,
+    "gpt-6-sol": 1_050_000,
+    "gpt-6-luna": 1_050_000,
     "gpt-5.6-terra": 1_000_000,
     "gpt-5.6-sol": 1_000_000,
     "gpt-5.6-luna": 1_000_000,
@@ -365,6 +369,7 @@ _FAST_TIER_MODELS = frozenset(
     {
         "claude-haiku-4-5",
         "claude-haiku-3-5",
+        "gpt-6-luna",
         "gpt-5.6-luna",
         "gpt-5.4-mini",
         "gpt-5.4-nano",

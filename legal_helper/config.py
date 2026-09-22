@@ -16,18 +16,13 @@ from pydantic import BaseModel, Field
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _API_KEY_FILENAME = Path("legal_helper") / "api_key"
-ANTHROPIC_HIGH_EFFORT_MODELS = (
-    "claude-opus-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-sonnet-5",
-)
-# gpt-5.6 ships only as named variants; the bare "gpt-5.6" alias routes to Sol,
-# so always spell out "-terra" / "-sol" / "-luna".
-# gpt-5.5 is deliberately absent: it is a legacy tier at 5.00/30.00 against
-# terra's 2.00/12.00 for the same work, and it dominated the 2026-09 bill at
-# 5.7% of requests and 55% of spend. Kept priced in usage.py for ledger replay.
-OPENAI_HIGH_EFFORT_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol")
+# claude-sonnet-5 is the Anthropic fast tier, so it is offered through
+# ``anthropic_fast_model`` rather than listed here.
+ANTHROPIC_HIGH_EFFORT_MODELS = ("claude-opus-5-5",)
+# gpt-6 ships only as named variants (astra / sol / luna); there is no bare
+# "gpt-6" alias, so always spell out the variant. Every retired model stays
+# priced in usage.py so historical ledger months still replay.
+OPENAI_HIGH_EFFORT_MODELS = ("gpt-6-sol",)
 
 # Why a model stopped being offered, for the log line when a stored selection is
 # migrated off it. Retirement must be enforced at *load*, not only at selection:
@@ -38,6 +33,13 @@ OPENAI_HIGH_EFFORT_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol")
 # ``offered_models_for_provider`` — this map only explains the substitution.
 RETIRED_MODELS: dict[str, str] = {
     "gpt-5.5": "retired 2026-09-11: $5.00/$30.00 against gpt-5.6-terra's $2.00/$12.00 for the same work",
+    "gpt-5.6-terra": "retired 2026-09-22: superseded by gpt-6-sol ($2.00/$10.00 against $2.00/$12.00)",
+    "gpt-5.6-sol": "retired 2026-09-22: superseded by gpt-6-sol ($2.00/$10.00 against $4.00/$20.00)",
+    "gpt-5.6-luna": "retired 2026-09-22: fast tier superseded by gpt-6-luna ($0.10/$0.50 against $0.20/$1.20)",
+    "claude-opus-5": "retired 2026-09-22: superseded by claude-opus-5-5 ($4.00/$20.00 against $5.00/$25.00)",
+    "claude-opus-4-8": "retired 2026-09-22: superseded by claude-opus-5-5 ($4.00/$20.00 against $5.00/$25.00)",
+    "claude-opus-4-7": "retired 2026-09-22: superseded by claude-opus-5-5 ($4.00/$20.00 against $5.00/$25.00)",
+    "claude-haiku-4-5": "retired 2026-09-22: fast tier moved to claude-sonnet-5",
 }
 
 
@@ -89,12 +91,12 @@ class Settings(BaseModel):
     active_domain_packs: list[str] = Field(default_factory=list)
 
     anthropic_api_key: Optional[str] = None
-    anthropic_model: str = "claude-opus-4-8"
-    anthropic_fast_model: str = "claude-haiku-4-5"
+    anthropic_model: str = "claude-opus-5-5"
+    anthropic_fast_model: str = "claude-sonnet-5"
 
     openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-5.6-terra"
-    openai_fast_model: str = "gpt-5.6-luna"
+    openai_model: str = "gpt-6-sol"
+    openai_fast_model: str = "gpt-6-luna"
     openai_reasoning_effort: str = "medium"
     openai_enable_file_search: bool = False
     openai_file_search_vector_store_ids: list[str] = Field(default_factory=list)
@@ -256,13 +258,13 @@ def load_settings(*, refresh: bool = False) -> Settings:
     s = Settings(
         provider=provider,  # type: ignore[arg-type]
         anthropic_api_key=_api_key_value("ANTHROPIC_API_KEY"),
-        anthropic_model=os.getenv("ANTHROPIC_MODEL", cfg.get("anthropic_model", "claude-opus-4-8")),
+        anthropic_model=os.getenv("ANTHROPIC_MODEL", cfg.get("anthropic_model", "claude-opus-5-5")),
         anthropic_fast_model=os.getenv(
-            "ANTHROPIC_FAST_MODEL", cfg.get("anthropic_fast_model", "claude-haiku-4-5")
+            "ANTHROPIC_FAST_MODEL", cfg.get("anthropic_fast_model", "claude-sonnet-5")
         ),
         openai_api_key=_api_key_value("OPENAI_API_KEY"),
-        openai_model=os.getenv("OPENAI_MODEL", cfg.get("openai_model", "gpt-5.6-terra")),
-        openai_fast_model=os.getenv("OPENAI_FAST_MODEL", cfg.get("openai_fast_model", "gpt-5.6-luna")),
+        openai_model=os.getenv("OPENAI_MODEL", cfg.get("openai_model", "gpt-6-sol")),
+        openai_fast_model=os.getenv("OPENAI_FAST_MODEL", cfg.get("openai_fast_model", "gpt-6-luna")),
         openai_reasoning_effort=os.getenv(
             "OPENAI_REASONING_EFFORT", cfg.get("openai_reasoning_effort", "medium")
         ),

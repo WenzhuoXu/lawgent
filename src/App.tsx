@@ -35,7 +35,7 @@ import type { ChatSettings, ChatSummary, RuntimeOptions } from "@/types/chat";
 
 const DEFAULT_SETTINGS: ChatSettings = {
   provider: "openai",
-  model: "gpt-5.6-terra",
+  model: "gpt-6-sol",
   reasoning_effort: "medium",
   enable_web_search: true,
   enable_web_fetch: true,
@@ -70,7 +70,7 @@ export default function App() {
   useEffect(() => {
     client.runtimeOptions().then((r) => {
       setRuntime(r);
-      // Backend defaults (e.g. gpt-5.6-terra) win over the hardcoded frontend
+      // Backend defaults (e.g. gpt-6-sol) win over the hardcoded frontend
       // fallback; this runs once on mount before any user change.
       setSettings((s) => ({ ...DEFAULT_SETTINGS, ...s, ...r.defaults }));
     });

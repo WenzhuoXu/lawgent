@@ -22,28 +22,32 @@ from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
 
 
-# Extended-thinking token budgets keyed by the shared reasoning-effort dial.
-# "none" disables thinking entirely.
-THINKING_BUDGETS: dict[str, int] = {
-    "none": 0,
-    "low": 2048,
-    "medium": 8192,
-    "high": 16384,
-    "xhigh": 32768,
+# The shared reasoning-effort dial mapped onto Anthropic's ``output_config.effort``.
+# Every offered Claude model (Opus 4.7+, Sonnet 5) rejects manual
+# ``thinking: {type: "enabled", budget_tokens}`` with a 400, so depth is set by
+# adaptive thinking plus effort. "none" has no Anthropic equivalent — Opus 5.5
+# cannot disable thinking at all — so it maps to the lowest effort instead.
+ANTHROPIC_EFFORTS: dict[str, str] = {
+    "none": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+    "max": "max",
 }
 
 
-def _thinking_kwarg(effort: str, max_tokens: int) -> Optional[dict[str, Any]]:
-    """Build the Anthropic ``thinking`` param from the reasoning-effort dial.
+def _thinking_kwargs(effort: str) -> dict[str, Any]:
+    """Build the Anthropic ``thinking`` / ``output_config`` params from the dial.
 
-    Returns None when disabled. Enforces ``budget < max_tokens`` (the API
-    requires headroom for the answer after thinking).
+    Adaptive thinking is requested for every level except "none", which omits
+    ``thinking`` (the model's own default) and runs at low effort.
     """
-    budget = THINKING_BUDGETS.get((effort or "none").lower(), 0)
-    if budget <= 0:
-        return None
-    budget = min(budget, max(1024, max_tokens - 1024))
-    return {"type": "enabled", "budget_tokens": budget}
+    level = (effort or "none").lower()
+    kwargs: dict[str, Any] = {"output_config": {"effort": ANTHROPIC_EFFORTS.get(level, "medium")}}
+    if level != "none":
+        kwargs["thinking"] = {"type": "adaptive"}
+    return kwargs
 
 
 WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
@@ -592,11 +596,7 @@ class AnthropicProvider:
                 betas.append(CONTEXT_MANAGEMENT_BETA)
         if betas:
             kwargs["betas"] = betas
-        thinking = _thinking_kwarg(
-            getattr(self.settings, "openai_reasoning_effort", "none"), self.settings.max_tokens
-        )
-        if thinking is not None:
-            kwargs["thinking"] = thinking
+        kwargs.update(_thinking_kwargs(getattr(self.settings, "openai_reasoning_effort", "none")))
 
         log_workflow_event(
             "provider_turn_started",

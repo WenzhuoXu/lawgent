@@ -12,8 +12,8 @@ from anthropic.lib.tools import beta_tool
 import legal_helper.logging_setup as ls
 from legal_helper.providers.anthropic_provider import (
     _instrument_local_tools,
-    _thinking_kwarg,
-    THINKING_BUDGETS,
+    _thinking_kwargs,
+    ANTHROPIC_EFFORTS,
 )
 
 
@@ -33,7 +33,7 @@ def test_instrumented_tool_emits_started_and_finished():
             "Add two integers."
             return str(a + b)
 
-        wrapped = _instrument_local_tools([add], provider="anthropic", model="claude-opus-4-8")
+        wrapped = _instrument_local_tools([add], provider="anthropic", model="claude-opus-5-5")
         result = wrapped[0].call({"a": 2, "b": 3})
     finally:
         ls.workflow_event_sink_var.reset(tok)
@@ -63,7 +63,7 @@ def test_instrumented_tool_emits_error_shape_on_exception():
             "Always fails."
             raise ValueError("nope")
 
-        wrapped = _instrument_local_tools([boom], provider="anthropic", model="claude-opus-4-8")
+        wrapped = _instrument_local_tools([boom], provider="anthropic", model="claude-opus-5-5")
         try:
             wrapped[0].call({"x": 1})
         except ValueError:
@@ -78,14 +78,18 @@ def test_instrumented_tool_emits_error_shape_on_exception():
 
 def test_dict_tool_defs_pass_through_untouched():
     hosted = {"type": "web_search_20250305", "name": "web_search"}
-    out = _instrument_local_tools([hosted], provider="anthropic", model="claude-opus-4-8")
+    out = _instrument_local_tools([hosted], provider="anthropic", model="claude-opus-5-5")
     assert out == [hosted]
 
 
-def test_thinking_budget_mapping():
-    assert _thinking_kwarg("none", 32000) is None
-    assert _thinking_kwarg("low", 32000) == {"type": "enabled", "budget_tokens": 2048}
-    # budget must stay below max_tokens with headroom
-    k = _thinking_kwarg("xhigh", 4096)
-    assert k is not None and k["budget_tokens"] < 4096
-    assert set(THINKING_BUDGETS) == {"none", "low", "medium", "high", "xhigh"}
+def test_thinking_uses_adaptive_mode_and_effort():
+    # Opus 4.7+ and Sonnet 5 reject manual budget_tokens with a 400.
+    assert _thinking_kwargs("medium") == {
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "medium"},
+    }
+    assert _thinking_kwargs("xhigh")["output_config"] == {"effort": "xhigh"}
+    # Opus 5.5 cannot disable thinking, so "none" omits it and runs at low effort.
+    assert _thinking_kwargs("none") == {"output_config": {"effort": "low"}}
+    for level in ANTHROPIC_EFFORTS:
+        assert _thinking_kwargs(level).get("thinking", {}).get("type") in (None, "adaptive")

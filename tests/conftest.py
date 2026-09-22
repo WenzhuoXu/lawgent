@@ -24,11 +24,11 @@ def _isolated_dirs(tmp_path, monkeypatch):
     # Default-on dummy keys; live tests override before importing the provider.
     monkeypatch.setenv("ANTHROPIC_API_KEY", os.getenv("ANTHROPIC_API_KEY", "test-anthropic-key"))
     monkeypatch.setenv("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "test-openai-key"))
-    # Default model for the whole test suite is gpt-5.6-terra (OpenAI). Tests that
+    # Default model for the whole test suite is gpt-6-sol (OpenAI). Tests that
     # need a specific provider/model still override these explicitly; a real env
-    # var wins. (Never use the bare "gpt-5.6" alias — it routes to Sol.)
+    # var wins. (There is no bare "gpt-6" alias — always name the variant.)
     monkeypatch.setenv("MODEL_PROVIDER", os.getenv("MODEL_PROVIDER", "openai"))
-    monkeypatch.setenv("OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.6-terra"))
+    monkeypatch.setenv("OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-6-sol"))
     # Refresh the settings cache between tests.
     from legal_helper import config as cfg_mod
 

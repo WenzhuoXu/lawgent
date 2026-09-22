@@ -63,20 +63,12 @@ def test_primary_and_internal_fast_models_are_routed_by_provider(monkeypatch):
     anthropic = load_settings(refresh=True).model_copy(update={"provider": "anthropic"})
     assert anthropic.model_for_provider() == "claude-sonnet-4-6"
     assert anthropic.model_for_provider(fast=True) == "claude-haiku-4-5"
-    assert anthropic.high_effort_models_for_provider("anthropic") == [
-        "claude-opus-5",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-sonnet-5",
-    ]
+    assert anthropic.high_effort_models_for_provider("anthropic") == ["claude-opus-5-5"]
 
     openai = anthropic.model_copy(update={"provider": "openai"})
     assert openai.model_for_provider() == "gpt-5.4"
     assert openai.model_for_provider(fast=True) == "gpt-5.4-mini"
-    assert openai.high_effort_models_for_provider("openai") == [
-        "gpt-5.6-terra",
-        "gpt-5.6-sol",
-    ]
+    assert openai.high_effort_models_for_provider("openai") == ["gpt-6-sol"]
 
 
 def test_max_concurrent_agents_is_configurable_and_clamped(monkeypatch):

@@ -236,7 +236,7 @@ explicitly asks for restructuring.
   touch the pricing math, keep this term.
 - `GET /api/usage` serves the month summary (`?month=YYYY-MM` for history);
   the webui settings bar renders it (`CostCenter` in `src/main.jsx`).
-- Pricing table: `DEFAULT_PRICING` in `usage.py`, **verified 2026-09-11**
+- Pricing table: `DEFAULT_PRICING` in `usage.py`, **verified 2026-09-22**
   against the official Anthropic and OpenAI pricing pages; override with the
   `LEGAL_HELPER_PRICING_JSON` env var (same shape) when list prices change.
   Re-verify at each monthly review — the whole gpt-5.6 family moved between
@@ -439,8 +439,10 @@ is the right-answer-wrong-reason case, and summing them would hide it.
 
 ## Provider parity contract
 
-- Both `claude-opus-5` (primary; `claude-opus-4-8` / `claude-opus-4-7` still supported) and `gpt-5.6-terra` (primary; `gpt-5.6-sol` still supported) paths must work end-to-end on every change.
-- Fast/lightweight tier: `claude-haiku-4-5` and `gpt-5.6-luna`. Note: the bare `gpt-5.6` alias routes to **Sol**, not Terra — always use the full `gpt-5.6-terra` ID.
+- Both `claude-opus-5-5` and `gpt-6-sol` (the primaries, and the only high-effort models offered) must work end-to-end on every change.
+- Fast/lightweight tier: `claude-sonnet-5` and `gpt-6-luna`. There is no bare `gpt-6` alias — always name the variant.
+- **Retired 2026-09-22:** `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-haiku-4-5`, and the whole `gpt-5.6` family (terra / sol / luna). The reasons are in `config.RETIRED_MODELS`. They stay priced in `usage.DEFAULT_PRICING` and windowed in `context._WINDOWS` so historical ledger months still replay.
+- **Anthropic thinking is adaptive, never `budget_tokens`.** Every offered Claude model rejects `thinking: {type: "enabled"}` with a 400. `anthropic_provider._thinking_kwargs` maps the shared effort dial onto `thinking: {type: "adaptive"}` + `output_config.effort`. `none` maps to `low` effort because Opus 5.5 cannot disable thinking at all. `claude-sonnet-5` is the fast *model* but not the fast *compaction tier*: it has a 1M window and frontier-class quality, so `is_fast_tier` deliberately excludes it.
 - `gpt-5.5` is **retired from the high-effort list** (2026-09-11): at verified list prices it is $5.00/$30.00 against Terra's $2.00/$12.00 for the same work, and it was 5.7% of September requests but 55% of real spend. It stays in `usage.DEFAULT_PRICING` so historical ledger months still replay — do not put it back in `OPENAI_HIGH_EFFORT_MODELS`.
 - **Retirement is enforced at load, not only at selection.** A chat freezes its
   model at creation (`ChatStore.default_settings`) and re-applies it on every

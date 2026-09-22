@@ -106,8 +106,31 @@ def test_gpt_55_never_bills_cache_writes(tmp_path):
     assert summary["estimated_cost_usd"] == pytest.approx(0.5)
 
 
-def test_openai_fallback_pricing_is_terra():
-    assert usage_mod.PROVIDER_FALLBACK_PRICING["openai"] is usage_mod.DEFAULT_PRICING["gpt-5.6-terra"]
+def test_fallback_pricing_is_the_current_default():
+    assert usage_mod.PROVIDER_FALLBACK_PRICING["openai"] is usage_mod.DEFAULT_PRICING["gpt-6-sol"]
+    assert (
+        usage_mod.PROVIDER_FALLBACK_PRICING["anthropic"]
+        is usage_mod.DEFAULT_PRICING["claude-opus-5-5"]
+    )
+
+
+def test_new_default_models_are_priced_windowed_and_tiered():
+    """CLAUDE.md: every new model ID goes into pricing, windows and the tuples."""
+    from legal_helper.config import ANTHROPIC_HIGH_EFFORT_MODELS, OPENAI_HIGH_EFFORT_MODELS, Settings
+    from legal_helper.context import _WINDOWS, is_fast_tier
+
+    s = Settings()
+    models = {
+        *ANTHROPIC_HIGH_EFFORT_MODELS,
+        *OPENAI_HIGH_EFFORT_MODELS,
+        s.anthropic_fast_model,
+        s.openai_fast_model,
+    }
+    for model in models:
+        assert model in usage_mod.DEFAULT_PRICING, model
+        assert model in _WINDOWS, model
+    assert is_fast_tier("gpt-6-luna")
+    assert not is_fast_tier("claude-sonnet-5")
 
 
 def test_unknown_model_falls_back_to_provider_rates(tmp_path):
