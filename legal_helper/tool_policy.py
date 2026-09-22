@@ -10,9 +10,11 @@ Two properties are declared here, both of which this harness actually acts on:
 - **mutating** — the tool changes a document or produces a new deliverable.
   An auditing agent must not hold one; reviewing a draft and rewriting it are
   different jobs, and an auditor that can edit will eventually edit.
-- **read-only** — everything else, including the `render_*` family. Rendering
-  writes a PNG, but it exists so the model can *look* at a page to confirm a
-  pinpoint, which is exactly what an auditor needs.
+- **read-only** — everything else, including the page-render family
+  (`render_pptx_slides`, `render_pdf_pages`, …). Rendering writes a PNG, but it
+  exists so the model can *look* at a page to confirm a pinpoint, which is
+  exactly what an auditor needs. `render_flowchart_image` is the exception: it
+  authors a diagram rather than viewing a document, so it is mutating.
 
 Dropping the mutating tools from an audit agent also removes ~3K tokens of
 schemas it never uses, which is the same budget the tool-result limits protect.
@@ -27,6 +29,11 @@ from typing import Any, Iterable
 # prefix rule would quietly capture the next one added.
 MUTATING_TOOLS = frozenset(
     {
+        # Authors a text artifact, and runs a skill's own scripts (which write
+        # files). Both are production rather than inspection, so an auditing
+        # skill must not hold either.
+        "write_text_file",
+        "run_skill_script",
         "write_docx",
         "write_pdf",
         "write_pptx",
@@ -45,6 +52,9 @@ MUTATING_TOOLS = frozenset(
         "rotate_pdf_pages",
         "fetch_url_to_artifact",
         "project_memory_write",
+        # The one render_* that is not a page render: it authors a diagram, so
+        # it produces a deliverable rather than a view of an existing one.
+        "render_flowchart_image",
     }
 )
 

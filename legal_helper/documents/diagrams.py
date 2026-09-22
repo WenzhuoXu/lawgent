@@ -1,28 +1,37 @@
 """Flowchart / diagram helpers.
 
-Wraps the ``@mermaid-js/mermaid-cli`` (``mmdc``) binary so the rest of the
-codebase can:
+Mermaid is an authoring syntax here, not a layout engine. It is parsed for
+node kinds, labels and edges (``parse_mermaid_flowchart``) and it is still
+rendered to a picture when a picture is what the caller wants
+(``render_mermaid_to_file``), but the geometry that reaches a slide comes from
+:mod:`legal_helper.documents.graph_layout`, which asks Graphviz.
 
-* render a Mermaid string to a PNG/SVG image (``render_mermaid_to_file``),
-* extract node positions from a Mermaid-rendered SVG and project them onto
-  a PowerPoint slide's bounding box (``autolayout_flowchart``),
-* be invoked once per ``write_pptx`` call as a pre-processing step
-  (``prepare_flowchart_slides``).
+The old path rendered a Mermaid SVG with headless Chromium in order to scrape
+node centres back out of it. It cost a browser per diagram and it recovered
+only the centres, so arrows were drawn corner-to-corner and the two axes were
+scaled independently — which is how fixed-size nodes ended up overlapping.
 
-The Node binary lives at ``node_modules/.bin/mmdc`` (preferred) or on
-PATH. ``PUPPETEER_EXECUTABLE_PATH`` is auto-set to ``/usr/bin/google-chrome``
-when present so first-run Chromium downloads aren't needed on this box.
+``mmdc`` is a JavaScript file with a ``#!/usr/bin/env node`` shebang, so the
+launching process's PATH decides whether it runs at all. The server is started
+by an absolute interpreter path and its PATH has no conda ``bin``, which made
+every Mermaid render fail with exit 127. ``resolve_mermaid_cli`` runs it as
+``node <cli.js>`` through the same ``find_node`` the PPTX writer uses.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
+
+from . import graph_layout
+from .writers._node import find_node, node_diagnostic
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,20 +41,52 @@ class MermaidNotInstalled(RuntimeError):
     """Raised when ``mmdc`` cannot be located."""
 
 
-def find_mmdc() -> Path:
-    """Return the path to the ``mmdc`` binary.
+@dataclass(frozen=True)
+class MermaidCli:
+    """How to launch mmdc: an argv prefix plus the PATH the child needs."""
 
-    Search order: project-local ``node_modules/.bin/mmdc`` first
-    (matches the package.json devDependency the repo ships with), then
-    ``$PATH``. Raise ``MermaidNotInstalled`` with an actionable hint when
-    nothing resolves.
+    argv: list[str]
+    env_path: str
+
+
+def _path_with(directory: Path) -> str:
+    """Prepend ``directory`` to PATH so a shebang script finds its interpreter."""
+    existing = os.environ.get("PATH", "")
+    return f"{directory}{os.pathsep}{existing}" if existing else str(directory)
+
+
+def resolve_mermaid_cli() -> MermaidCli:
+    """Locate mmdc and the Node interpreter that has to run it.
+
+    The in-tree package is resolved from its ``package.json`` ``bin`` entry
+    rather than from ``node_modules/.bin/mmdc``, so a version bump that moves
+    the file is a clear failure instead of a stale symlink. Raises
+    :class:`MermaidNotInstalled` when either half is missing.
     """
-    local = _REPO_ROOT / "node_modules" / ".bin" / "mmdc"
-    if local.is_file():
-        return local
+    pkg = _REPO_ROOT / "node_modules" / "@mermaid-js" / "mermaid-cli"
+    manifest = pkg / "package.json"
+    if manifest.is_file():
+        try:
+            entry = str(json.loads(manifest.read_text(encoding="utf-8"))["bin"]["mmdc"])
+        except (ValueError, KeyError, TypeError):
+            entry = "./src/cli.js"
+        script = (pkg / entry.lstrip("./")).resolve()
+        if script.is_file():
+            node = find_node()
+            if not node:
+                raise MermaidNotInstalled(
+                    f"mermaid-cli is installed at {script} but Node is not. {node_diagnostic()}"
+                )
+            return MermaidCli(argv=[node, str(script)], env_path=_path_with(Path(node).parent))
+
     found = shutil.which("mmdc")
     if found:
-        return Path(found)
+        node = find_node()
+        return MermaidCli(
+            argv=[found],
+            env_path=_path_with(Path(node).parent) if node else os.environ.get("PATH", ""),
+        )
+
     raise MermaidNotInstalled(
         "mmdc (mermaid-cli) is not installed. Run "
         "`conda run -n llm npm i @mermaid-js/mermaid-cli --save-dev` "
@@ -97,11 +138,11 @@ def render_mermaid_to_file(
     Returns the absolute output path. Raises ``MermaidNotInstalled`` if
     ``mmdc`` is missing, ``RuntimeError`` if the render fails.
     """
-    mmdc = find_mmdc()
+    cli = resolve_mermaid_cli()
     output_path = Path(output_path).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     args = [
-        str(mmdc),
+        *cli.argv,
         "-i", "-",
         "-o", str(output_path),
         "-t", theme,
@@ -110,11 +151,10 @@ def render_mermaid_to_file(
     pup_cfg = _puppeteer_config_file()
     if pup_cfg is not None:
         args.extend(["--puppeteerConfigFile", str(pup_cfg)])
-    env = None
+    env = dict(os.environ)
+    env["PATH"] = cli.env_path
     chrome = _chrome_executable()
     if chrome:
-        import os
-        env = dict(os.environ)
         env.setdefault("PUPPETEER_EXECUTABLE_PATH", chrome)
     try:
         subprocess.run(
@@ -127,9 +167,15 @@ def render_mermaid_to_file(
             env=env,
         )
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"mmdc failed (exit {exc.returncode}): {exc.stderr.strip()[:500]}"
-        ) from exc
+        stderr = (exc.stderr or "").strip()
+        # A missing interpreter is not a render failure. Reporting it as one is
+        # what made the degraded layout path unreachable: callers catch
+        # MermaidNotInstalled, and this raised RuntimeError.
+        if exc.returncode == 127 or "No such file or directory" in stderr:
+            raise MermaidNotInstalled(
+                f"mmdc could not start (exit {exc.returncode}): {stderr[:300]}. {node_diagnostic()}"
+            ) from exc
+        raise RuntimeError(f"mmdc failed (exit {exc.returncode}): {stderr[:500]}") from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"mmdc timed out after {timeout}s") from exc
     if not output_path.is_file():
@@ -179,11 +225,19 @@ _SHAPE_OPT = (
     r"\[.+?\]|\{.+?\}|\(.+?\)|>.+?\])?"
 )
 
+# Mermaid writes an edge label two ways and both are common: the piped form
+# ``A -->|yes| B`` and the inline form ``A -- yes --> B``. Only the piped form
+# was matched, so every labelled decision branch was dropped without a word —
+# a process map would render with its yes/no arms simply missing.
 _EDGE_RE = re.compile(
-    r"(?P<from>[A-Za-z_][A-Za-z0-9_]*)" + _SHAPE_OPT +
-    r"\s*(?P<arrow>-\.->|\.\.>|==>|-->|---)\s*"
-    r"(?:\|(?P<label>[^|]*)\|\s*)?"
-    r"(?P<to>[A-Za-z_][A-Za-z0-9_]*)" + _SHAPE_OPT
+    r"(?P<from>[A-Za-z_][A-Za-z0-9_]*)" + _SHAPE_OPT + r"\s*"
+    r"(?:"
+    r"--\s*(?P<ilabel>[^>|\-][^>|]*?)\s*(?P<iarrow>-->|---)"      # A -- yes --> B
+    r"|-\.\s*(?P<dlabel>[^>|.][^>|]*?)\s*(?P<darrow>\.->|\.-)"    # A -. yes .-> B
+    r"|==\s*(?P<tlabel>[^>|=][^>|]*?)\s*(?P<tarrow>==>|===)"       # A == yes ==> B
+    r"|(?P<arrow>-\.->|\.\.>|==>|-->|---)\s*(?:\|(?P<label>[^|]*)\|)?"
+    r")"
+    r"\s*(?P<to>[A-Za-z_][A-Za-z0-9_]*)" + _SHAPE_OPT
 )
 
 
@@ -199,12 +253,33 @@ _RESERVED_TOKENS = {
 
 def _strip_constructs(line: str) -> str:
     """Remove shape constructors and edge labels from a line so the
-    bare-identifier scan won't pick up label text as new node IDs."""
-    # Strip pipe-delimited edge labels first.
-    cleaned = re.sub(r"\|[^|]*\|", " ", line)
-    # Then strip shape bodies (the brackets themselves and their content).
+    bare-identifier scan won't pick up label text as new node IDs.
+
+    Both halves of this had a bug that produced phantom nodes:
+
+    * only the pipe form ``A -->|yes| B`` was stripped, so a label in the
+      inline form survived as a bare identifier;
+    * the asymmetric-shape alternative ``>.+?\]`` matched across an arrow —
+      in ``A{X} -- yes --> B[Accept]`` it consumed ``> B[Accept]``, leaving
+      ``A -- yes --`` with no arrow and no target. The edge regex then failed
+      to match the stripped line, so the caller's edge-collapsing pass became
+      a no-op and ``yes`` was promoted to a process box.
+
+    Net effect on a four-node decision tree: six nodes, two of them the words
+    "yes" and "no". ASCII labels only — CJK never reached the scan, which is
+    why it survived a Chinese-language test suite.
+    """
+    # Inline edge labels first, keeping the arrow so the edge stays parseable.
+    cleaned = re.sub(r"--\s*[^>|\-][^>|]*?\s*(-->|---)", r"\1", line)
+    cleaned = re.sub(r"-\.\s*[^>|.][^>|]*?\s*(\.->|\.-)", r"\1", cleaned)
+    cleaned = re.sub(r"==\s*[^>|=][^>|]*?\s*(==>|===)", r"\1", cleaned)
+    # Then pipe-delimited edge labels.
+    cleaned = re.sub(r"\|[^|]*\|", " ", cleaned)
+    # Then shape bodies. The asymmetric form must not start at an arrowhead,
+    # and must not span past its own closing bracket.
     cleaned = re.sub(r"\[\[.+?\]\]|\[\/.+?\/\]|\(\[.+?\]\)|\(\(.+?\)\)|"
-                     r"\[.+?\]|\{.+?\}|\(.+?\)|>.+?\]", " ", cleaned)
+                     r"\[.+?\]|\{.+?\}|\(.+?\)|(?<![-=.>])>[^\]]*?\]",
+                     " ", cleaned)
     return cleaned
 
 
@@ -260,9 +335,11 @@ def parse_mermaid_flowchart(source: str) -> tuple[list[_ParsedNode], list[_Parse
                 _record_node(node_id, "data", m.group("note"))
         # 2) Edges
         for m in _EDGE_RE.finditer(line):
-            arrow = m.group("arrow")
+            arrow = (m.group("arrow") or m.group("iarrow") or m.group("darrow")
+                     or m.group("tarrow") or "-->")
             style = "dashed" if "." in arrow else "solid"
-            label = (m.group("label") or "").strip()
+            label = (m.group("label") or m.group("ilabel") or m.group("dlabel")
+                     or m.group("tlabel") or "").strip()
             edges.append(_ParsedEdge(
                 from_id=m.group("from"),
                 to_id=m.group("to"),
@@ -274,6 +351,9 @@ def parse_mermaid_flowchart(source: str) -> tuple[list[_ParsedNode], list[_Parse
         bare_line = _strip_constructs(line)
         # Also remove arrows so the surrounding identifiers don't double-count
         # already-handled edges.
+        bare_line = _EDGE_RE.sub(
+            lambda m: f" {m.group('from')} {m.group('to')} ", bare_line
+        )
         bare_line = re.sub(r"-\.->|\.\.>|==>|-->|---", " ", bare_line)
         for token in re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", bare_line):
             if token in _RESERVED_TOKENS:
@@ -284,109 +364,31 @@ def parse_mermaid_flowchart(source: str) -> tuple[list[_ParsedNode], list[_Parse
     return list(nodes.values()), edges
 
 
-def synthesize_mermaid(nodes: Iterable[dict[str, Any]], edges: Iterable[dict[str, Any]],
-                      direction: str = "TB") -> str:
-    """Build a mermaid flowchart string from explicit node/edge dicts."""
-    def _shape(kind: str, text: str) -> str:
-        t = (text or "").replace("\n", " ").replace("\"", "&quot;")
-        if kind == "decision":
-            return f"{{{t}}}"
-        if kind == "terminator":
-            return f"(({t}))"
-        if kind == "io":
-            return f"[/{t}/]"
-        if kind == "data":
-            return f">{t}]"
-        if kind == "subprocess":
-            return f"[[{t}]]"
-        return f"[{t}]"
-
-    lines = [f"flowchart {direction}"]
-    for n in nodes:
-        lines.append(f"  {n['id']}{_shape(n.get('kind', 'process'), n.get('text', ''))}")
-    for e in edges:
-        arrow = "-.->" if e.get("style") == "dashed" else "-->"
-        label = (e.get("label") or "").strip()
-        if label:
-            lines.append(f"  {e['from_id']} {arrow}|{label}| {e['to_id']}")
-        else:
-            lines.append(f"  {e['from_id']} {arrow} {e['to_id']}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# SVG -> positions
-# ---------------------------------------------------------------------------
-
-
-_VIEWBOX_RE = re.compile(r'viewBox="([^"]+)"')
-_NODE_GROUP_RE = re.compile(
-    r'<g[^>]*class="node[^"]*"[^>]*id="(?P<svg_id>[^"]+)"[^>]*transform="translate\((?P<cx>[\-\d.]+)\s*,\s*(?P<cy>[\-\d.]+)\)"'
-)
-
-
-@dataclass
-class _SvgPos:
-    user_id: str
-    cx: float
-    cy: float
-
-
-def parse_mermaid_svg_positions(svg_text: str) -> tuple[float, float, list[_SvgPos]]:
-    """Extract (svg_width, svg_height, [_SvgPos…]) from a mermaid SVG.
-
-    Node ``id`` in mermaid SVG looks like ``<svg-id>-flowchart-<USER_ID>-<n>``.
-    We split off the trailing ``-<n>`` and the leading ``-flowchart-`` to
-    recover the user's original node ID.
-    """
-    viewbox = _VIEWBOX_RE.search(svg_text)
-    if not viewbox:
-        raise RuntimeError("SVG has no viewBox; cannot scale coordinates")
-    parts = viewbox.group(1).split()
-    if len(parts) != 4:
-        raise RuntimeError(f"Unexpected viewBox: {viewbox.group(1)!r}")
-    svg_w = float(parts[2])
-    svg_h = float(parts[3])
-
-    positions: list[_SvgPos] = []
-    for m in _NODE_GROUP_RE.finditer(svg_text):
-        svg_id = m.group("svg_id")
-        # Strip "<svg-id>-flowchart-" prefix and "-<digits>" suffix to get user ID.
-        user_id = svg_id
-        # Suffix: remove trailing "-<digits>"
-        user_id = re.sub(r"-\d+$", "", user_id)
-        # Prefix: keep everything after the LAST "-flowchart-" marker
-        if "-flowchart-" in user_id:
-            user_id = user_id.rsplit("-flowchart-", 1)[1]
-        positions.append(_SvgPos(
-            user_id=user_id,
-            cx=float(m.group("cx")),
-            cy=float(m.group("cy")),
-        ))
-    return svg_w, svg_h, positions
-
-
 # ---------------------------------------------------------------------------
 # Public auto-layout entrypoint
 # ---------------------------------------------------------------------------
 
 
 def autolayout_flowchart(fc: dict[str, Any]) -> dict[str, Any]:
-    """Mutate ``fc`` in place: fill node x/y/w/h (inches) using mermaid layout.
+    """Fill a flowchart block's geometry in place. Returns the same dict.
 
-    Accepts the flat dict form (``Slide.flowchart.model_dump()``). When
-    ``mermaid`` is set, parses the string for kinds/labels/edges; when
-    ``nodes``/``edges`` are set, synthesizes a mermaid string for layout.
-    Skips work if layout="manual" and every node already has x/y/w/h.
+    Accepts the flat dict form (``Slide.flowchart.model_dump()``). A ``mermaid``
+    string is parsed for kinds, labels and edges; explicit ``nodes``/``edges``
+    are used as given. ``layout="manual"`` with every node positioned is left
+    alone.
 
-    Returns the same dict.
+    Beyond ``x``/``y``/``w``/``h`` per node this injects three computed keys the
+    emitter needs and the tool schema deliberately does not carry, so the model
+    never tries to author them: ``points`` (the routed polyline, ending at the
+    arrowhead), ``label_x``/``label_y`` per edge, and ``font_pt`` on the block.
+    They are documented in ``skills/flowchart/references/flowchart_authoring.md``.
     """
     if not fc:
         return fc
 
     layout_mode = fc.get("layout", "auto")
-    direction = fc.get("direction", "TB")
-    bbox = (
+    direction = str(fc.get("direction") or "auto").upper()
+    slot = (
         float(fc.get("x", 0.55)),
         float(fc.get("y", 1.25)),
         float(fc.get("w", 12.2)),
@@ -395,24 +397,42 @@ def autolayout_flowchart(fc: dict[str, Any]) -> dict[str, Any]:
     default_w = float(fc.get("node_w", 2.2))
     default_h = float(fc.get("node_h", 0.9))
 
+    kind = str(fc.get("kind") or "flow").lower()
+    outline = (fc.get("outline") or "").strip()
     mermaid_source = (fc.get("mermaid") or "").strip()
     nodes: list[dict[str, Any]] = list(fc.get("nodes") or [])
     edges: list[dict[str, Any]] = list(fc.get("edges") or [])
 
+    # A mindmap and a structure chart are the same geometry problem as a flow
+    # with a different reading convention, so they share the engine and differ
+    # only in rank direction and whether the connectors carry arrowheads.
+    if outline and kind in ("mindmap", "structure"):
+        geometry = (
+            graph_layout.layout_mindmap(outline, box=slot)
+            if kind == "mindmap"
+            else graph_layout.layout_structure(outline, box=slot)
+        )
+        laid_nodes, laid_edges = geometry.as_slide_dicts()
+        fc["nodes"] = laid_nodes
+        fc["edges"] = laid_edges
+        fc["font_pt"] = round(geometry.font_pt, 1)
+        fc["direction"] = geometry.rankdir
+        fc["engine"] = geometry.engine
+        return fc
+
     if not nodes and mermaid_source:
         parsed_nodes, parsed_edges = parse_mermaid_flowchart(mermaid_source)
-        nodes = [{
-            "id": n.id, "kind": n.kind, "text": n.text,
-            "x": None, "y": None, "w": None, "h": None,
-            "fill": "", "stroke": "",
-        } for n in parsed_nodes]
-        edges = [{
-            "from_id": e.from_id, "to_id": e.to_id,
-            "label": e.label, "style": e.style, "arrow": "end",
-        } for e in parsed_edges]
+        nodes = [
+            {"id": n.id, "kind": n.kind, "text": n.text, "fill": "", "stroke": ""}
+            for n in parsed_nodes
+        ]
+        edges = [
+            {"from_id": e.from_id, "to_id": e.to_id, "label": e.label,
+             "style": e.style, "arrow": "end"}
+            for e in parsed_edges
+        ]
 
     if not nodes:
-        # Nothing to lay out — leave fc alone so the JS writer skips it.
         fc["nodes"] = []
         fc["edges"] = []
         return fc
@@ -421,131 +441,87 @@ def autolayout_flowchart(fc: dict[str, Any]) -> dict[str, Any]:
         n.get("x") is not None and n.get("y") is not None for n in nodes
     ):
         for n in nodes:
-            n.setdefault("w", default_w)
-            n.setdefault("h", default_h)
-            if n.get("w") is None:
-                n["w"] = default_w
-            if n.get("h") is None:
-                n["h"] = default_h
+            n["w"] = float(n.get("w") or default_w)
+            n["h"] = float(n.get("h") or default_h)
         fc["nodes"] = nodes
         fc["edges"] = edges
         return fc
-
-    # Build a mermaid string we control (either user-provided or synthesized).
-    layout_source = mermaid_source if mermaid_source else synthesize_mermaid(
-        nodes, edges, direction=direction,
-    )
-    # Ensure the direction is honoured even when user supplied mermaid that
-    # uses a different one — append a fresh header only if mermaid_source is
-    # missing the flowchart/graph directive.
-    if not re.search(r"^\s*(flowchart|graph)\b", layout_source, flags=re.MULTILINE | re.IGNORECASE):
-        layout_source = f"flowchart {direction}\n" + layout_source
-
-    # Render to a temp SVG.
-    tmp_svg = Path(tempfile.gettempdir()) / f"legal_helper_fc_{abs(hash(layout_source)) % (10**8)}.svg"
-    try:
-        render_mermaid_to_file(layout_source, tmp_svg, background="white")
-        svg_text = tmp_svg.read_text(encoding="utf-8")
-    except MermaidNotInstalled:
-        # Fall back to a vertical stack so the deck is still useful.
-        _fallback_stack_layout(nodes, bbox, default_w, default_h)
-        fc["nodes"] = nodes
-        fc["edges"] = edges
-        return fc
-    finally:
-        try:
-            tmp_svg.unlink(missing_ok=True)
-        except Exception:
-            pass
 
     try:
-        svg_w, svg_h, positions = parse_mermaid_svg_positions(svg_text)
-    except Exception:
-        _fallback_stack_layout(nodes, bbox, default_w, default_h)
-        fc["nodes"] = nodes
-        fc["edges"] = edges
-        return fc
+        geometry = graph_layout.layout_graph(
+            nodes, edges, box=slot,
+            rankdir=None if direction == "AUTO" else direction,
+        )
+    except graph_layout.GraphvizNotInstalled:
+        geometry = graph_layout.stack_layout(nodes, edges, box=slot)
+    except RuntimeError:
+        # A layout engine that fails should cost this diagram its routing, not
+        # the slide it sits on.
+        geometry = graph_layout.stack_layout(nodes, edges, box=slot)
 
-    by_id = {p.user_id: p for p in positions}
-
-    bx, by, bw, bh = bbox
-    # Inset so node bounding boxes don't clip the bbox edge.
-    inset_w = default_w / 2.0
-    inset_h = default_h / 2.0
-    avail_w = max(bw - default_w, 0.1)
-    avail_h = max(bh - default_h, 0.1)
-
-    for n in nodes:
-        pos = by_id.get(n["id"])
-        nw = float(n.get("w") or default_w)
-        nh = float(n.get("h") or default_h)
-        if pos is None:
-            # Mermaid couldn't lay this node out — drop it into the corner;
-            # the user will still see it and can move it.
-            n["x"] = bx
-            n["y"] = by
-            n["w"] = nw
-            n["h"] = nh
-            continue
-        # Scale center coordinates into the available area, then convert
-        # center -> top-left for pptxgenjs.
-        cx_in = bx + inset_w + (pos.cx / max(svg_w, 1e-6)) * avail_w
-        cy_in = by + inset_h + (pos.cy / max(svg_h, 1e-6)) * avail_h
-        n["x"] = round(cx_in - nw / 2.0, 3)
-        n["y"] = round(cy_in - nh / 2.0, 3)
-        n["w"] = round(nw, 3)
-        n["h"] = round(nh, 3)
-
-    fc["nodes"] = nodes
-    fc["edges"] = edges
+    laid_nodes, laid_edges = geometry.as_slide_dicts()
+    fc["nodes"] = laid_nodes
+    fc["edges"] = laid_edges
+    fc["font_pt"] = round(geometry.font_pt, 1)
+    fc["direction"] = geometry.rankdir
+    fc["engine"] = geometry.engine
     return fc
 
 
-def _fallback_stack_layout(
-    nodes: list[dict[str, Any]],
-    bbox: tuple[float, float, float, float],
-    default_w: float,
-    default_h: float,
-) -> None:
-    """Stack nodes vertically inside ``bbox`` when mmdc isn't available.
-
-    Better than the historical "naked text boxes" failure mode because the
-    nodes are still real flowChart* shapes — just on a regular grid.
-    """
-    bx, by, bw, bh = bbox
-    n = len(nodes)
-    if n == 0:
-        return
-    gap = max((bh - n * default_h) / max(n + 1, 1), 0.1)
-    cx = bx + bw / 2.0 - default_w / 2.0
-    y = by + gap
-    for node in nodes:
-        node["x"] = round(cx, 3)
-        node["y"] = round(y, 3)
-        node["w"] = round(default_w, 3)
-        node["h"] = round(default_h, 3)
-        y += default_h + gap
+#: The emitter's content area. Duplicated here because the layout has to know
+#: the box before the emitter draws anything, and the emitter derives the
+#: bullet rail back from the box this sets — so the box is the single source.
+_BODY = (0.6, 1.52, 12.133, 5.40)
+_RAIL_SHARE = 0.38
+_RAIL_GAP = 0.35
 
 
-def prepare_flowchart_slides(slides: list[dict[str, Any]]) -> None:
+def prepare_flowchart_slides(slides: list[dict[str, Any]]) -> list[str]:
     """Iterate ``slides`` (already-dumped Pydantic dicts) and auto-layout
-    every flowchart block in place. Safe to call on slides without
-    flowcharts — they're left untouched.
+    every diagram block in place. Safe to call on slides without one — they
+    are left untouched.
+
+    A slide carrying both bullets and a diagram gets the diagram laid out in
+    the right-hand column, because a chain is inherently a band and the space
+    beside it is where the takeaways belong. The emitter reads the resulting
+    ``x`` back to size the bullet rail.
+
+    Returns one string per slide whose diagram could not be laid out, empty
+    when everything succeeded. **The guard is per slide on purpose**: a single
+    ``try`` around the whole loop let one unlayoutable diagram abort every
+    later slide's layout too, and the caller still reported success — so a
+    ten-slide deck could come back with nine silently diagram-less slides.
+    A slide that fails is emptied of nodes and edges rather than left holding
+    half-computed geometry.
     """
-    for slide in slides:
+    failures: list[str] = []
+    for index, slide in enumerate(slides, start=1):
         fc = slide.get("flowchart") if isinstance(slide, dict) else None
         if not fc:
             continue
-        autolayout_flowchart(fc)
+        bullets = [b for b in (slide.get("bullets") or []) if b]
+        if bullets and str(slide.get("layout") or "bullets") not in ("title", "section", "chart"):
+            bx, by, bw, bh = _BODY
+            rail = bw * _RAIL_SHARE
+            fc["x"] = round(bx + rail + _RAIL_GAP, 3)
+            fc["w"] = round(bw - rail - _RAIL_GAP, 3)
+            fc["y"] = by
+            fc["h"] = bh
+        try:
+            autolayout_flowchart(fc)
+        except Exception as exc:  # noqa: BLE001 — one slide must not cost the rest
+            fc["nodes"] = []
+            fc["edges"] = []
+            failures.append(f"slide {index}: {type(exc).__name__}: {exc}")
+    return failures
 
 
 __all__ = [
+    "MermaidCli",
     "MermaidNotInstalled",
     "autolayout_flowchart",
-    "find_mmdc",
     "parse_mermaid_flowchart",
-    "parse_mermaid_svg_positions",
     "prepare_flowchart_slides",
     "render_mermaid_to_file",
-    "synthesize_mermaid",
+    "resolve_mermaid_cli",
 ]

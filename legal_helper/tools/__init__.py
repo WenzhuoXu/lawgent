@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ..skills import SKILL_NAMES, load_skill_frontmatter
+from ..skills import SKILL_NAMES, is_external_skill, load_skill_frontmatter
 from ..tool_policy import apply_skill_tool_policy
 from .aviation_search import aviation_source_search
 from .citations import (
@@ -58,6 +58,11 @@ from .documents import (
     write_xlsx,
 )
 from .fetch_attach import fetch_url_to_artifact
+from .skill_runtime import (
+    list_skill_dir,
+    run_skill_script,
+    write_text_file,
+)
 from .format_recipes import list_format_recipes, read_format_recipe
 from .legal_search import (
     courtlistener_search,
@@ -169,6 +174,9 @@ def orchestrator_tools() -> list[Any]:
     """Tools available to the parent orchestrator."""
     return [
         run_skill,
+        write_text_file,
+        run_skill_script,
+        list_skill_dir,
         render_flowchart_image,
         write_docx,
         write_pdf,
@@ -214,6 +222,28 @@ def skill_tools(skill_name: str) -> list[Any]:
     return skill_tools_for_task(skill_name)
 
 
+#: Tools an external procedural skill needs: author text, run its own gates,
+#: read its own tree, and look at what it produced. Deliberately excludes the
+#: legal research surface — a deck procedure has no use for statute search,
+#: and every unused schema is budget the tool-result limits are protecting.
+def _external_skill_tools() -> list[Any]:
+    return [
+        write_text_file,
+        run_skill_script,
+        list_skill_dir,
+        read_document,
+        render_pptx_slides,
+        render_pdf_pages,
+        render_docx_pages,
+        view_image,
+        inspect_pptx,
+        list_skill_sections,
+        read_skill_section,
+        list_skill_references,
+        read_skill_reference,
+    ]
+
+
 def skill_tools_for_task(
     skill_name: str,
     task: str = "",
@@ -225,7 +255,13 @@ def skill_tools_for_task(
     Every specialist can lazily inspect its own skill and the playbook. Other
     tools are exposed only when the task shape and active config imply they
     are useful, keeping provider tool schemas small.
+
+    An *external* skill is a procedure rather than a legal methodology, so it
+    gets the authoring runtime instead of the research surface.
     """
+    if is_external_skill(skill_name):
+        return apply_skill_tool_policy(_external_skill_tools(), skill_name)
+
     base: list[Any] = [
         list_skill_sections,
         read_skill_section,
@@ -329,6 +365,9 @@ def skill_tools_for_task(
 
 __all__ = [
     "all_connector_tools",
+    "list_skill_dir",
+    "run_skill_script",
+    "write_text_file",
     "aviation_source_search",
     "cite_check_report_tool",
     "copy_xlsx_sheet",

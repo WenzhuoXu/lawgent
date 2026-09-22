@@ -50,13 +50,8 @@ def render_pdf_to_images(
     *,
     first_page: int | None = None,
     last_page: int | None = None,
-    pdftoppm: str | None = None,
 ) -> dict[str, Any]:
-    """Render PDF pages to JPEGs via in-process pypdfium2.
-
-    ``pdftoppm`` kwarg is retained for back-compat with call sites; it is no
-    longer used.
-    """
+    """Render PDF pages to JPEGs via in-process pypdfium2."""
     import pypdfium2 as pdfium
 
     dpi_value = max(72, min(int(dpi), 200))
@@ -68,7 +63,8 @@ def render_pdf_to_images(
         start = max(1, int(first_page)) if first_page is not None else 1
         end = min(total, int(last_page)) if last_page is not None else total
         outputs: list[str] = []
-        # pdftoppm uses 1-based numeric suffixes padded to the page count width.
+        # 1-based numeric suffixes padded to the page count width, matching what
+        # pdftoppm produced before this moved in-process, so every glob still works.
         width = max(1, len(str(total)))
         for page_num in range(start, end + 1):
             page = pdf[page_num - 1]

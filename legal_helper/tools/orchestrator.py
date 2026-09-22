@@ -4,22 +4,13 @@ from typing import Literal
 
 from anthropic import beta_tool
 
+from ..skills import SKILL_NAMES as _DISCOVERED
 
-SKILL_NAMES = Literal[
-    "brief",
-    "cite-check",
-    "compliance-check",
-    "draft-agreement",
-    "legal-response",
-    "legal-risk-assessment",
-    "litigation-analysis",
-    "meeting-briefing",
-    "review-contract",
-    "signature-request",
-    "tabular-review",
-    "triage-nda",
-    "vendor-check",
-]
+# The dispatch enum is the discovered skill set, not a second hand-maintained
+# list. The two had already drifted: `docx-redline` and `flowchart` shipped on
+# disk and were missing here, so the orchestrator could not dispatch to its own
+# diagram skill. `Literal[tuple]` expands to one `enum` in the tool schema.
+SKILL_NAMES = Literal[_DISCOVERED]  # type: ignore[valid-type]
 
 
 @beta_tool
@@ -50,7 +41,12 @@ def run_skill(skill_name: SKILL_NAMES, task: str) -> str:
             ``tabular-review`` for reviewing a document set as a grid
             (docs as rows, questions as columns, per-cell pinpoints),
             ``vendor-check`` for third-party diligence, ``cite-check`` for
-            extracting and validating citations in a draft.
+            extracting and validating citations in a draft. A name not in
+            that list is an external procedural skill discovered from the
+            configured skill roots — ``ppt-master`` produces an editable
+            PPTX deck. Those carry their own multi-step workflow and their
+            own quality gates, and the sub-agent drives them from their
+            SKILL_DIR instead of being handed legal methodology.
         task: A self-contained instruction for the sub-agent (include file
             paths to load, parties, deadlines, language preference, source
             requirements, any focus areas, and specific skill/playbook topics

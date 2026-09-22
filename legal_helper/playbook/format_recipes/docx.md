@@ -39,6 +39,29 @@ the same text in the same place.
 5. Re-inspect the output before declaring done. A render you did not read is
    not visual QA.
 
+## Tables
+
+- **Column widths come from the content, not from dividing by the column
+  count.** `write_docx` measures each column's longest cell with a CJK-aware
+  width (a Han glyph is one em, Latin about half), pulls that toward the
+  column's typical cell so one outlier does not starve its neighbours, and
+  normalises the result to the page's text width. Equal columns are what wrapped
+  `《民用航空法》第九十二条` across two lines while the `60日` column sat three
+  times wider than it needed to be.
+- **A cell paragraph never carries the body's first-line indent.** The 2-character
+  首行缩进 belongs to prose. A cell is one short field, so the indent pushes its
+  first line right and the wrap resumes at the cell edge — a statute title
+  broken mid-name. The writer suppresses it as *direct* paragraph formatting,
+  because a table style resolves before paragraph styles and cannot override
+  `Normal`.
+- **Edit cells with `reshape_docx`, not by assigning `cell.text`.** Assigning
+  replaces the cell's `w:p` and drops its `w:pPr`, which reintroduces the
+  indent and loses the cell's alignment on the next edit.
+- **Check the result.** `documents.quality.lint_docx` reports
+  `table_columns_unweighted` and `cell_first_line_indent`, resolving the style
+  chain rather than reading direct formatting — the defect usually lives on
+  `Normal` and reaches the cell through `basedOn`.
+
 ## `reshape_docx` operations
 
 Each entry is `{"op": "<kind>", ...}`; ops apply in order.

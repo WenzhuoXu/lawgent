@@ -38,25 +38,45 @@ def render_flowchart_image(
     filename: str,
     source: str,
     format: Literal["png", "svg"] = "png",
+    engine: Literal["mermaid", "d2"] = "mermaid",
     theme: Literal["default", "neutral", "dark", "forest"] = "default",
     background: str = "white",
 ) -> str:
-    """Render a Mermaid diagram to an image under outputs/. Returns the absolute path.
+    """Render a diagram to a standalone image under outputs/. Returns the path.
 
-    Use this for standalone flowcharts/process maps that should go into a
-    DOCX, be embedded as an image on a slide via SlideImage, or be sent to
-    the user as a PNG. For native PPTX shapes (editable boxes + arrows),
-    prefer ``write_pptx`` with a ``flowchart`` block on the slide.
+    For a diagram that belongs on a slide, prefer ``write_pptx`` with a
+    ``flowchart`` block: that path produces editable native shapes with routed
+    arrows, and a picture cannot be edited by whoever receives the deck. Use
+    this when the diagram is going into a DOCX, is being sent as a PNG, or
+    needs something the shape emitter has no equivalent for.
+
+    Two engines. ``mermaid`` covers flowcharts, sequence, class, state, ER, pie
+    and mindmap diagrams. ``d2`` is the one to reach for when the diagram has
+    **nested containers** — a system or 结构图 where boxes live inside boxes —
+    which is what it lays out better than anything else available here.
 
     Args:
         filename: Desired filename (with or without extension).
-        source: Mermaid diagram source, e.g. "flowchart TB\\n  A[Step 1] --> B{OK?}".
+        source: Diagram source in the chosen engine's syntax, e.g. Mermaid
+            "flowchart TB\n  A[Step 1] --> B{OK?}" or D2
+            "direction: down\n  CAAC: 民航局 { 运输司 }\n  CAAC -> Operator".
         format: Output format — png (default, raster) or svg (vector).
-        theme: Mermaid theme — default, neutral, dark, or forest.
-        background: Background color (e.g. 'white', 'transparent', or '#FFF8E7').
+        engine: mermaid (default) or d2.
+        theme: Mermaid theme — default, neutral, dark, or forest. Ignored by d2.
+        background: Background color. Ignored by d2, which uses its own theme.
     """
     fmt = "png" if format not in ("png", "svg") else format
     out = _resolve_output(filename, fmt)
+    if engine == "d2":
+        from ..documents.graph_layout import GraphvizNotInstalled, render_d2_to_file
+
+        try:
+            render_d2_to_file(source, out)
+        except GraphvizNotInstalled as exc:
+            return f"ERROR: {exc}"
+        except RuntimeError as exc:
+            return f"ERROR rendering d2: {exc}"
+        return str(out.resolve())
     try:
         render_mermaid_to_file(source, out, theme=theme, background=background)
     except MermaidNotInstalled as exc:

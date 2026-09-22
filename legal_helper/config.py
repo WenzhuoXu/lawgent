@@ -102,6 +102,15 @@ class Settings(BaseModel):
     max_iterations: int = 12
     parent_max_iterations: int = 8
     sub_agent_max_iterations: int = 8
+    # An external procedural skill is not a research dispatch, and the budget
+    # above is tuned for one: 8 iterations was trimmed for latency and cost on
+    # a specialist that fetches a few sources and writes prose. A multi-step
+    # authoring procedure spends its iterations differently — reading its own
+    # workflow and references, authoring one artifact per page, running its
+    # gate, repairing what the gate returns, then exporting — and simply
+    # cannot reach its own export step in 8. Under-budgeting it does not make
+    # it cheaper, it makes it fail after paying for most of the work.
+    external_skill_max_iterations: int = 80
     max_concurrent_agents: int | Literal["auto"] = "auto"
     # Per-turn within-chat context digest (rolling summary + recent transcript)
     # fed to the planner/answer. The effective budget is
@@ -267,6 +276,12 @@ def load_settings(*, refresh: bool = False) -> Settings:
         max_iterations=int(os.getenv("LEGAL_HELPER_MAX_ITERATIONS", cfg.get("max_iterations", 12))),
         parent_max_iterations=int(cfg.get("parent_max_iterations", 8)),
         sub_agent_max_iterations=int(cfg.get("sub_agent_max_iterations", 12)),
+        external_skill_max_iterations=int(
+            os.getenv(
+                "LEGAL_HELPER_EXTERNAL_SKILL_MAX_ITERATIONS",
+                cfg.get("external_skill_max_iterations", 80),
+            )
+        ),
         max_concurrent_agents=_max_concurrent_agents_value(
             os.getenv(
                 "LEGAL_HELPER_MAX_CONCURRENT_AGENTS",
@@ -287,6 +302,15 @@ def load_settings(*, refresh: bool = False) -> Settings:
         enable_web_search=_bool_env("LEGAL_HELPER_ENABLE_WEB_SEARCH", bool(cfg.get("enable_web_search", True))),
         enable_web_fetch=_bool_env("LEGAL_HELPER_ENABLE_WEB_FETCH", bool(cfg.get("enable_web_fetch", True))),
         enable_cite_check=_bool_env("LEGAL_HELPER_ENABLE_CITE_CHECK", bool(cfg.get("enable_cite_check", True))),
+        # These three were declared as fields and documented in config.yaml but
+        # never read from it, so editing the file changed nothing and the values
+        # only happened to match the defaults.
+        verify_before_reveal=_bool_env(
+            "LEGAL_HELPER_VERIFY_BEFORE_REVEAL", bool(cfg.get("verify_before_reveal", True))
+        ),
+        max_repair_rounds=int(
+            os.getenv("LEGAL_HELPER_MAX_REPAIR_ROUNDS", cfg.get("max_repair_rounds", 1))
+        ),
         default_jurisdiction=cfg.get("default_jurisdiction", "CN"),
         secondary_jurisdictions=list(cfg.get("secondary_jurisdictions", ["US", "EU"]) or []),
         default_language=cfg.get("default_language", "zh"),

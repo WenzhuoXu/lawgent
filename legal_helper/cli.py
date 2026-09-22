@@ -260,8 +260,15 @@ def _cmd_chat(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
+    from .documents.graph_layout import unresolvable_render_binaries
+
     settings = _apply_overrides(load_settings(), args)
     setup_logging(settings)
+    # A missing render binary is silent at author time and shows up much later
+    # as a diagram that simply never appeared, so say so while someone is
+    # watching the log.
+    for problem in unresolvable_render_binaries():
+        print(f"warning: {problem}", flush=True)
     uvicorn.run(
         "legal_helper.server:app",
         host=args.host,

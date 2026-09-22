@@ -1,3 +1,23 @@
+## Computed keys — do not author these
+
+The layout engine injects three keys into a `flowchart` block that the tool
+schema deliberately does not carry, so nothing tries to write them by hand:
+
+| key | on | what it is |
+|---|---|---|
+| `points` | each edge | the routed polyline in slide inches, ending at the arrowhead tip |
+| `label_x` / `label_y` | each edge | where Graphviz reserved room for the edge label |
+| `font_pt` | the block | the type size the node boxes were measured at; the emitter must draw labels at exactly this size or they will not fit |
+
+Author `mermaid` (or `outline` for `kind: mindmap` / `structure`) and leave the
+geometry alone. `direction: "auto"` is the default and is almost always right:
+it tries both rank directions and keeps whichever fills the box, which is how a
+long chain ends up on its side on a 16:9 slide instead of drawn down a column
+of dead canvas. Pin a direction only when reading order matters more than fit.
+
+Labelled branches work in both Mermaid forms — `B -- 是 --> C` and
+`B -->|是| C`.
+
 # Flowchart authoring — Mermaid → native PPTX shapes
 
 This file is the **deep reference** for the `/flowchart` skill. SKILL.md

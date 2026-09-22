@@ -2,11 +2,18 @@
 
 CJK-native typography: when the content is Chinese (auto-detected, or forced
 via ``lang="zh-CN"``), styles get ``w:eastAsia`` fonts (黑体-class headings,
-宋体/仿宋-class body), black headings, a 2-character first-line indent, and
-CJK line-break/punctuation rules. ``layout="gbt9704"`` applies a GB/T
-9704-style official-document layout (仿宋 三号 body, GB margins, fixed line
-pitch). Word / LibreOffice substitute Noto CJK SC when the named font is not
-installed.
+宋体/仿宋-class body), black headings, CJK line-break/punctuation rules, and a
+2-character first-line indent **on body prose only** — headings sit 顶格,
+table cells and centred lines carry no indent at all, because an indent inside
+a one-field cell wraps the field and an indent on a centred line pushes it off
+centre by half of itself. ``layout="gbt9704"`` applies a GB/T 9704-style
+official-document layout (仿宋 三号 body, GB margins, fixed line pitch) and
+keeps its headings 空两格, which is what that standard asks for.
+
+Markdown tables are emitted with a fixed layout and content-weighted column
+widths that sum to the section text width, so a 条号 citation gets the room it
+needs and a two-character code does not hoard it. Word / LibreOffice
+substitute Noto CJK SC when the named font is not installed.
 """
 
 from __future__ import annotations
@@ -19,17 +26,15 @@ from docx import Document
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-from docx.shared import Cm, Inches, Pt, RGBColor
+from docx.shared import Cm, Emu, Inches, Pt, RGBColor, Twips
 
+from ..graph_layout import display_width
 
-_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
-_ITALIC_RE = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
-_INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 
 # Han ideographs, CJK punctuation, fullwidth forms, compatibility ideographs.
 _CJK_RE = re.compile(
-    "[\u2e80-\u2eff\u3000-\u303f\u31c0-\u31ef\u3400-\u4dbf"
-    "\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]"
+    "[⺀-⻿　-〿㇀-㇯㐀-䶿"
+    "一-鿿豈-﫿︰-﹏＀-￯]"
 )
 
 _EA_BODY_FONT = "宋体"          # SimSun-class default body
@@ -85,12 +90,48 @@ def _enable_cjk_paragraph_rules(style) -> None:
             ppr.insert_element_before(OxmlElement(tag), *_CJK_TOGGLE_SUCCESSORS)
 
 
-def _set_first_line_chars(style, chars: int, char_size_pt: float) -> None:
-    """首行缩进 in characters (``w:firstLineChars``), twips as fallback."""
-    ppr = style.element.get_or_add_pPr()
-    ind = ppr.get_or_add_ind()
+def _set_first_line_indent(el, chars: int, char_size_pt: float) -> None:
+    """首行缩进 in characters (``w:firstLineChars``), twips as fallback.
+
+    ``el`` is a ``w:style`` or a ``w:p``: the indent belongs on ``Normal`` so
+    that prose typed into the finished document inherits it, which means every
+    construct that is not prose has to cancel it — at style level where a style
+    exists to carry the exception, directly on the paragraph where none does.
+    Both attributes go in every time because LibreOffice honours ``w:firstLine``
+    and Word honours ``w:firstLineChars``.
+    """
+    ind = el.get_or_add_pPr().get_or_add_ind()
     ind.set(qn("w:firstLineChars"), str(chars * 100))
     ind.set(qn("w:firstLine"), str(int(chars * char_size_pt * 20)))
+
+
+def _suppress_first_line_indent(el) -> None:
+    """Cancel an inherited 首行缩进 on one style or paragraph.
+
+    Centred text must not carry a first-line indent: the indent comes off the
+    line box before the remainder is centred, so the line lands half the indent
+    to the right of the page centre. A table cell must not carry one either —
+    it holds one short field, and the indent buys a second line for it.
+
+    ``List Bullet`` / ``List Number`` are deliberately not suppressed:
+    ``w:firstLine`` and ``w:hanging`` are mutually exclusive in one ``w:ind``,
+    so zeroing the first line here would cancel the numbering's hanging indent.
+    Those styles already escape ``Normal`` because the numbering level's own
+    ``w:ind`` wins.
+    """
+    _set_first_line_indent(el, 0, 0.0)
+
+
+def _body_size_pt(*, cjk: bool, gbt9704: bool) -> float:
+    """三号 for GB/T 9704, 小四 for other CJK, 11pt for Latin.
+
+    The one place the body size is decided, because the table columns convert
+    ems to twips with the same number and ``Normal.font.size`` is ``None``
+    until ``_set_default_style`` has run.
+    """
+    if gbt9704:
+        return 16.0
+    return 12.0 if cjk else 11.0
 
 
 def _iter_heading_styles(doc: Document):
@@ -101,12 +142,12 @@ def _iter_heading_styles(doc: Document):
 def _apply_cjk_typography(doc: Document, *, gbt9704: bool) -> None:
     body_font = _EA_GBT_BODY_FONT if gbt9704 else _EA_BODY_FONT
     normal = doc.styles["Normal"]
-    body_size = Pt(16) if gbt9704 else Pt(12)  # 三号 for GB/T, 小四 otherwise
+    body_size = Pt(_body_size_pt(cjk=True, gbt9704=gbt9704))
     normal.font.size = body_size
     normal.font.color.rgb = RGBColor(0, 0, 0)
     _set_east_asia_font(normal, body_font)
     _enable_cjk_paragraph_rules(normal)
-    _set_first_line_chars(normal, 2, body_size.pt)
+    _set_first_line_indent(normal.element, 2, body_size.pt)
     if gbt9704:
         pf = normal.paragraph_format
         pf.line_spacing = Pt(28)  # GB/T 9704-style fixed line pitch
@@ -127,6 +168,11 @@ def _apply_cjk_typography(doc: Document, *, gbt9704: bool) -> None:
             ea = _EA_HEADING_FONT
         _set_east_asia_font(style, ea)
         style.font.color.rgb = RGBColor(0, 0, 0)
+        if not gbt9704:
+            # 顶格 headings: the 首行缩进 is a body-prose rule, and a heading
+            # that inherits it reads as one more paragraph. GB/T 9704 headings
+            # are 空两格, so that layout keeps the inheritance.
+            _suppress_first_line_indent(style.element)
 
     title_style = doc.styles["Title"]
     _set_east_asia_font(title_style, _EA_TITLE_FONT)
@@ -134,16 +180,13 @@ def _apply_cjk_typography(doc: Document, *, gbt9704: bool) -> None:
     title_style.font.bold = True
     if gbt9704:
         title_style.font.size = Pt(22)  # 二号
-    # Centered titles must not inherit the body first-line indent.
-    ind = title_style.element.get_or_add_pPr().get_or_add_ind()
-    ind.set(qn("w:firstLineChars"), "0")
-    ind.set(qn("w:firstLine"), "0")
+    _suppress_first_line_indent(title_style.element)
 
 
 def _set_default_style(doc: Document) -> None:
     style = doc.styles["Normal"]
     style.font.name = "Times New Roman"
-    style.font.size = Pt(11)
+    style.font.size = Pt(_body_size_pt(cjk=False, gbt9704=False))
     pf = style.paragraph_format
     pf.line_spacing = 1.15
     pf.space_after = Pt(6)
@@ -181,6 +224,8 @@ def _apply_watermark(doc: Document, text: str, *, cjk: bool) -> None:
         hp.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
         # Clear any inherited runs, then add the watermark run.
         hp.text = ""
+        if cjk:
+            _suppress_first_line_indent(hp._p)
         run = hp.add_run(text)
         run.bold = True
         run.font.size = Pt(12)
@@ -229,7 +274,91 @@ def _parse_table(lines: list[str], start: int) -> tuple[list[list[str]], int]:
     return rows, i
 
 
-def _render_body_markdown(doc: Document, body: str, *, cjk: bool = False) -> None:
+_CELL_PAD_TWIPS = 216       # Word's default 108-twip left + right cell margin
+_MIN_CELL_EM = 3.0          # a column narrower than three ems cannot hold 条号
+_MARKUP_RE = re.compile(r"[*`]")
+
+
+def _measured_width(text: str) -> float:
+    """Cell width in ems, with the inline markdown markers taken back off."""
+    return display_width(_MARKUP_RE.sub("", text or ""))
+
+
+def _text_width_twips(doc: Document) -> int:
+    # Length arithmetic degrades to int, so re-wrap before asking for twips.
+    section = doc.sections[0]
+    return Emu(section.page_width - section.left_margin - section.right_margin).twips
+
+
+def _column_widths(
+    rows: list[list[str]], ncols: int, total_twips: int, char_size_pt: float
+) -> list[int]:
+    """Column widths in twips, summing to exactly ``total_twips``.
+
+    A column's ideal width is its longest cell, pulled towards the column's
+    typical cell so that one outlier does not starve its neighbours. When the
+    ideals fit, the slack is shared out proportionally, because a table that
+    stops short of the text width reads as a mistake; when they do not, the
+    overflow is taken only from the columns that are above the floor.
+    """
+    em = char_size_pt * 20
+    ideal: list[float] = []
+    for c in range(ncols):
+        widths = [_measured_width(r[c]) for r in rows if c < len(r) and r[c].strip()]
+        longest = max(widths, default=1.0)
+        typical = sum(widths) / len(widths) if widths else 1.0
+        ideal.append((0.65 * longest + 0.35 * typical) * em + _CELL_PAD_TWIPS)
+
+    floor = min(_MIN_CELL_EM * em + _CELL_PAD_TWIPS, total_twips / ncols)
+    if sum(ideal) <= total_twips:
+        slack = total_twips - sum(ideal)
+        weight = sum(ideal)
+        widths = [w + slack * w / weight for w in ideal]
+    else:
+        widths = [max(floor, w) for w in ideal]
+        for _ in range(ncols):
+            excess = sum(widths) - total_twips
+            if excess <= 0:
+                break
+            head = [i for i, w in enumerate(widths) if w > floor]
+            room = sum(widths[i] - floor for i in head)
+            if room <= 0:
+                break
+            for i in head:
+                widths[i] -= excess * (widths[i] - floor) / room
+
+    out = [int(w) for w in widths]
+    out[out.index(max(out))] += total_twips - sum(out)
+    return out
+
+
+def _fit_table(
+    table, rows: list[list[str]], *, total_twips: int, char_size_pt: float, cjk: bool
+) -> None:
+    """Fixed layout, content-weighted columns, and no inherited 首行缩进.
+
+    Both ``w:gridCol`` and every cell's ``w:tcW`` are written: ``add_table``
+    stamps an equal ``tcW`` on each cell, and a stale one overrides the grid.
+    """
+    widths = _column_widths(rows, len(table.columns), total_twips, char_size_pt)
+    table.autofit = False  # emits w:tblLayout w:type="fixed" in schema order
+    tbl_w = table._tbl.tblPr.find(qn("w:tblW"))
+    tbl_w.set(qn("w:type"), "dxa")
+    tbl_w.set(qn("w:w"), str(total_twips))
+    grid_cols = table._tbl.find(qn("w:tblGrid")).findall(qn("w:gridCol"))
+    for grid_col, width in zip(grid_cols, widths):
+        grid_col.set(qn("w:w"), str(width))
+    for row in table.rows:
+        for cell, width in zip(row.cells, widths):
+            cell.width = Twips(width)
+            if cjk:
+                for paragraph in cell.paragraphs:
+                    _suppress_first_line_indent(paragraph._p)
+
+
+def _render_body_markdown(
+    doc: Document, body: str, *, cjk: bool, char_size_pt: float
+) -> None:
     lines = body.splitlines()
     i = 0
     while i < len(lines):
@@ -242,19 +371,25 @@ def _render_body_markdown(doc: Document, body: str, *, cjk: bool = False) -> Non
         if line.lstrip().startswith("|") and "|" in line[1:]:
             rows, next_i = _parse_table(lines, i)
             if rows:
-                table = doc.add_table(rows=len(rows), cols=max(len(r) for r in rows))
+                ncols = max(len(r) for r in rows)
+                table = doc.add_table(rows=len(rows), cols=ncols)
                 # Plain black grid for CJK docs (GB-style), accent grid otherwise.
                 table.style = "Table Grid" if cjk else "Light Grid Accent 1"
                 for r_idx, row in enumerate(rows):
                     for c_idx, cell_text in enumerate(row):
-                        if c_idx < len(table.rows[r_idx].cells):
-                            cell = table.rows[r_idx].cells[c_idx]
-                            cell.text = ""
-                            p = cell.paragraphs[0]
+                        if c_idx < ncols:
+                            p = table.rows[r_idx].cells[c_idx].paragraphs[0]
                             _add_runs_with_markdown_inline(p, cell_text)
                             if r_idx == 0:
                                 for run in p.runs:
                                     run.bold = True
+                _fit_table(
+                    table,
+                    rows,
+                    total_twips=_text_width_twips(doc),
+                    char_size_pt=char_size_pt,
+                    cjk=cjk,
+                )
                 i = next_i
                 continue
         # Headings
@@ -278,12 +413,16 @@ def _render_body_markdown(doc: Document, body: str, *, cjk: bool = False) -> Non
         elif line.startswith("> "):
             p = doc.add_paragraph()
             p.paragraph_format.left_indent = Inches(0.4)
+            if cjk:
+                _suppress_first_line_indent(p._p)
             r = p.add_run(line[2:])
             r.italic = True
         # Horizontal rule
         elif re.match(r"^\s*-{3,}\s*$", line):
             p = doc.add_paragraph()
             p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+            if cjk:
+                _suppress_first_line_indent(p._p)
             p.add_run("* * *")
         # Regular paragraph
         else:
@@ -329,6 +468,7 @@ def write_docx_document(
         cjk = gbt9704 or _detect_cjk(title, section_pairs, subtitle)
     else:
         cjk = lang.lower().startswith("zh")
+    char_size_pt = _body_size_pt(cjk=cjk, gbt9704=gbt9704)
 
     doc = Document()
     _set_default_style(doc)
@@ -341,6 +481,8 @@ def write_docx_document(
         _apply_watermark(doc, watermark, cjk=cjk)
         banner = doc.add_paragraph()
         banner.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        if cjk:
+            _suppress_first_line_indent(banner._p)
         br = banner.add_run(watermark)
         br.bold = True
         br.font.size = Pt(16)
@@ -353,6 +495,8 @@ def write_docx_document(
     if subtitle:
         sub = doc.add_paragraph()
         sub.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+        if cjk:
+            _suppress_first_line_indent(sub._p)
         r = sub.add_run(subtitle)
         if cjk:
             _set_run_east_asia_font(r, _EA_SUBTITLE_FONT)
@@ -370,7 +514,7 @@ def write_docx_document(
     for heading, body in section_pairs:
         if heading:
             doc.add_heading(heading, level=2)
-        _render_body_markdown(doc, body, cjk=cjk)
+        _render_body_markdown(doc, body, cjk=cjk, char_size_pt=char_size_pt)
 
     doc.save(str(output_path))
     return output_path

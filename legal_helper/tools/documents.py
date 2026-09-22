@@ -11,6 +11,7 @@ from anthropic import beta_tool
 from pydantic import BaseModel, Field
 
 from ..config import current_settings
+from ..logging_setup import log_workflow_event
 from ..documents import (
     copy_xlsx_worksheet as copy_xlsx_worksheet_in_package,
     edit_docx_text_document,
@@ -240,6 +241,20 @@ class FlowNode(BaseModel):
         ),
     )
     text: str = Field(default="", description="Label drawn inside the shape.")
+    role: str = Field(
+        default="",
+        description=(
+            "The actor or category this node belongs to. It drives a stable fill "
+            "colour, so the same actor is the same colour on every slide of the deck."
+        ),
+    )
+    sub: str = Field(
+        default="",
+        description=(
+            "Optional second tier set smaller beneath the label — the deliverable the step "
+            "produces, e.g. '可行性评估结论'. This is what ties a step to its output."
+        ),
+    )
     x: float | None = Field(default=None, description="Left position in inches; required when layout='manual'.")
     y: float | None = Field(default=None, description="Top position in inches; required when layout='manual'.")
     w: float | None = Field(default=None, description="Width in inches; defaults to SlideFlowchart.node_w.")
@@ -259,13 +274,36 @@ class FlowEdge(BaseModel):
 
 
 class SlideFlowchart(BaseModel):
-    """A flowchart block rendered as editable pptxgenjs shapes.
+    """A diagram block rendered as editable native shapes, laid out by Graphviz.
 
-    Provide EITHER ``mermaid`` (LLM authors a small Mermaid string and the
-    auto-layout helper extracts nodes/edges + positions) OR ``nodes`` +
-    ``edges`` directly. When both are given, ``nodes``/``edges`` win.
+    Three shapes of diagram, chosen with ``kind``:
+
+    * ``flow`` (default) — a process map or decision tree. Give ``mermaid``
+      (preferred: the helper parses kinds, labels and edges) or ``nodes`` +
+      ``edges`` directly; when both are given ``nodes``/``edges`` win.
+    * ``mindmap`` — 思维导图. Give ``outline``; it fans left-to-right.
+    * ``structure`` — 结构图 / org chart. Give ``outline``; it hangs top-down
+      with plain connectors rather than arrows.
+
+    Node boxes are sized to their labels (CJK-aware) and the type size is
+    fitted to the space, so the block fills the box it is given without any
+    label outrunning its shape.
     """
 
+    kind: Literal["flow", "mindmap", "structure"] = Field(
+        default="flow",
+        description=(
+            "flow = process map / decision tree; mindmap = 思维导图; "
+            "structure = 结构图 / org chart."
+        ),
+    )
+    outline: str = Field(
+        default="",
+        description=(
+            "Indented outline for kind='mindmap' or 'structure'. Markdown headings "
+            "('# Root') or two-space-indented '-' bullets; nesting becomes the hierarchy."
+        ),
+    )
     mermaid: str = Field(
         default="",
         description=(
@@ -289,9 +327,13 @@ class SlideFlowchart(BaseModel):
             "auto = run mermaid+dagre layout and overwrite the coordinates."
         ),
     )
-    direction: Literal["TB", "BT", "LR", "RL"] = Field(
-        default="TB",
-        description="Auto-layout flow direction: TB=top-to-bottom, LR=left-to-right, etc.",
+    direction: Literal["auto", "TB", "BT", "LR", "RL"] = Field(
+        default="auto",
+        description=(
+            "Flow direction. 'auto' tries top-to-bottom and left-to-right and keeps "
+            "whichever fills the box better — a long chain on a 16:9 slide belongs on "
+            "its side. Pin it only when the reading order matters more than the fit."
+        ),
     )
     x: float = Field(default=0.55, description="Bounding-box left in inches for auto layout.")
     y: float = Field(default=1.25, description="Bounding-box top in inches for auto layout.")
@@ -503,6 +545,7 @@ def render_docx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150)
         out_dir,
         safe_prefix,
         label="Page",
+        source=source,
     )
 
 
@@ -549,6 +592,7 @@ def _visual_result(
     *,
     label: str = "Page",
     authored: bool = True,
+    source: Path | None = None,
 ) -> str:
     """Attach a labeled contact sheet to a render result so the model SEES it.
 
@@ -556,6 +600,12 @@ def _visual_result(
     back inline rather than as a path list the model cannot open. Full-size
     per-page JPEGs stay on disk; ``view_image`` reads one when fine detail
     matters.
+
+    For a file the model authored, the pages are also *measured*
+    (:mod:`legal_helper.documents.quality`) and the findings travel with them.
+    The prose this replaced asked the model to check for overflow, blank pages,
+    overlaps and inconsistent margins — every one of which is now arithmetic,
+    and none of which an instruction could guarantee was actually performed.
     """
     from ..documents.contact_sheet import build_contact_sheets
     from .multimodal import image_result
@@ -566,26 +616,22 @@ def _visual_result(
     except Exception as exc:
         payload = {**payload, "contact_sheet_error": f"{type(exc).__name__}: {exc}"}
         sheets = []
-    body = {
-        **payload,
-        "contact_sheets": [str(p.resolve()) for p in sheets],
-        "visual_qa": (
-            (
-                f"The images below are the rendered {label.lower()}s of a file you "
-                "authored. Check each for text overflowing its box, blank or "
-                "near-empty pages, overlapping elements, clipped tables, and "
-                "inconsistent margins. Fix and re-render before reporting the "
-                "file as done."
-            )
-            if authored
-            else (
-                f"The images below are the rendered {label.lower()}s. This is a "
-                "source document you are reading, not one you produced — read "
-                "what you need and move on. For fine detail on a single "
-                f"{label.lower()}, call `view_image` rather than re-rendering."
-            )
-        ),
-    }
+    body: dict[str, Any] = {**payload, "contact_sheets": [str(p.resolve()) for p in sheets]}
+    if authored:
+        from ..documents.quality import lint_artifact
+
+        report = lint_artifact(source or Path(), paths, render_label=label.lower())
+        body["lint"] = report.to_payload()
+        body["next_step"] = (
+            "Fix every critical finding and re-render; a deck with none is done."
+            if report.findings
+            else "Nothing measured as wrong. Look once for anything the checks cannot see."
+        )
+    else:
+        body["reading"] = (
+            f"A source document you are reading, not one you produced. Read what you need and "
+            f"move on; call `view_image` for fine detail on a single {label.lower()}."
+        )
     return image_result(body, sheets or paths)
 
 
@@ -787,7 +833,15 @@ def write_pptx(
 
     out = _output_path(filename, "pptx")
     payload = [s.model_dump() for s in slides]
-    prepare_flowchart_slides(payload)
+    warnings: list[str] = []
+    diagram_failures: list[str] = []
+    try:
+        # Guarded per slide inside: one unlayoutable diagram costs its own
+        # slide its arrows, not the caller the other nine slides it already
+        # paid to compose.
+        diagram_failures = prepare_flowchart_slides(payload)
+    except Exception as exc:  # noqa: BLE001 — backstop for a whole-call fault
+        diagram_failures = [f"all slides: {type(exc).__name__}: {exc}"]
     result = write_pptx_deck(
         out,
         payload,
@@ -811,6 +865,32 @@ def write_pptx(
             f"Renderer error: {result.get('renderer_error', '')}. "
             "Install it with `npm i pptxgenjs` in the repo root and write the deck "
             "again. Do not present this file to the user as finished."
+        )
+    # A success returns the path and NOTHING else. Appending anything to it
+    # produced `"<path> REVIEW: [...]"`, which the callers that chain this
+    # straight into render_pptx_slides / inspect_pptx passed to open() —
+    # `OSError: File name too long`. Non-critical findings reach the model
+    # through the lint payload on the next render instead.
+    for note in warnings:
+        log_workflow_event("deck_write_degraded", {"path": str(out.resolve()), "reason": note})
+    # A requested diagram that is missing from the written deck is not a
+    # non-critical finding: the slide the caller asked for does not exist. It
+    # used to be logged and the bare success path returned, so the model was
+    # told a deck was written and could not tell that a slide had lost its
+    # entire diagram. Report it the same way the renderer fallback is
+    # reported — path included, so the file is still findable.
+    if diagram_failures:
+        for note in diagram_failures:
+            log_workflow_event(
+                "deck_write_degraded",
+                {"path": str(out.resolve()), "reason": f"flowchart layout failed: {note}"},
+            )
+        detail = "; ".join(diagram_failures)
+        return (
+            f"ERROR: deck written to {out.resolve()} but DEGRADED — a requested "
+            f"diagram could not be laid out, so that slide has no nodes or edges: "
+            f"{detail}. Fix the diagram input and write the deck again. Do not "
+            "present this file to the user as finished."
         )
     return str(out.resolve())
 
@@ -852,7 +932,6 @@ def write_pptx_from_html(
     margin. Mark SVG/gradient/chart blocks with ``data-raster`` so they are
     captured as pictures instead of being rebuilt as shapes.
 
-    Always call ``render_pptx_slides`` afterwards and look at the result.
 
     Args:
         filename: Desired filename (with or without .pptx extension).
@@ -863,22 +942,26 @@ def write_pptx_from_html(
     from ..documents.writers.html_pptx import write_pptx_from_html as _render
 
     out = _output_path(filename, "pptx")
-    try:
-        report = _render(
-            out,
-            html,
-            title=title,
-            lang="zh-CN" if re.search(r"[一-鿿]", html) else "en-US",
-            raster_selectors=raster_selectors or [],
+    lang = "zh-CN" if re.search(r"[一-鿿]", html) else "en-US"
+
+    def render(markup: str) -> dict[str, Any]:
+        return _render(
+            out, markup, title=title, lang=lang, raster_selectors=raster_selectors or []
         )
+
+    try:
+        report = render(html)
     except Exception as e:
         return (
             f"ERROR: html2pptx failed: {e}\n\n"
             "Fall back to write_pptx with the fixed layouts, or fix the HTML "
             "and retry. Every slide must be an element with class=\"slide\"."
         )
+
     report["path"] = str(out.resolve())
-    report["next_step"] = "Call render_pptx_slides on this path and inspect the slides before reporting done."
+    report["next_step"] = (
+        "Call render_pptx_slides on this path, look at the slides, and fix what you see."
+    )
     return json.dumps(report, ensure_ascii=False, indent=2)
 
 
@@ -963,18 +1046,19 @@ def render_pptx_slides(path: str, filename_prefix: str = "slides", dpi: int = 15
             if not candidates:
                 return f"ERROR: soffice did not produce a PDF in {out_dir}"
             pdf = candidates[0]
-        render_pdf_to_images(pdf, out_dir, safe_prefix, dpi)
+        rendered = render_pdf_to_images(pdf, out_dir, safe_prefix, dpi)
     except subprocess.CalledProcessError as e:
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
-    images = sorted(str(p.resolve()) for p in out_dir.glob(f"{safe_prefix}-*.jpg"))
+    images = [str(Path(p).resolve()) for p in (rendered.get("images") or [])]
     return _visual_result(
         {"pdf": str(pdf.resolve()), "images": images, "count": len(images)},
         images,
         out_dir,
         safe_prefix,
         label="Slide",
+        source=source,
     )
 
 
@@ -1252,7 +1336,9 @@ def render_xlsx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150)
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
-    return _visual_result(rendered, rendered.get("images", []), out_dir, safe_prefix, label="Page")
+    return _visual_result(
+        rendered, rendered.get("images", []), out_dir, safe_prefix, label="Page", source=source
+    )
 
 
 @beta_tool

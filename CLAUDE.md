@@ -23,17 +23,49 @@ conda run -n llm pip install -r requirements.txt
 conda run -n llm npx -y eurlex-mcp-server   # node MCPs
 ```
 
-Flowchart rendering depends on `@mermaid-js/mermaid-cli` (the `mmdc`
-binary) — installed locally under `node_modules/.bin/mmdc`. If it goes
-missing rerun:
+**Diagram layout is Graphviz, not a browser.** `dot` (≥2.43, `/usr/bin/dot`)
+computes every diagram that reaches a slide, resolved through
+`documents/graph_layout.find_engine()`. Mermaid survives as an *authoring
+syntax* — parsed for node kinds, labels and edges — and as the raster renderer
+behind `render_flowchart_image`, so `mmdc` and Chrome are optional and a
+missing one degrades one tool instead of every deck.
+
+Optional: `d2` (MPL-2.0, `conda install -n llm d2`) for structure charts with
+nested containers, which is the one arrangement Graphviz clusters do not match
+for readability. `graph_layout.unresolvable_render_binaries()` names whatever is
+missing, and `serve` prints it at startup — a missing render binary is
+otherwise silent until a diagram simply never appears.
 
 ```
 conda run -n llm npm i @mermaid-js/mermaid-cli mcp-mermaid --save-dev --ignore-scripts
 ```
 
-`mmdc` needs Chrome; we auto-detect `/usr/bin/google-chrome`. The
-`render_flowchart_image` tool and the `Slide.flowchart` block in
-`write_pptx` both depend on this binary.
+**Never invoke a Node CLI by its shebang.** `node_modules/.bin/mmdc` is a JS
+file with `#!/usr/bin/env node`, so the *launching* process's PATH decides
+whether it runs. A server started by an absolute interpreter path never gets
+the env's `bin/` on PATH, and every Mermaid render in the running server failed
+with exit 127 for that reason. `writers/_node.find_node()` exists for exactly
+this; `diagrams.resolve_mermaid_cli()` now applies it, invoking
+`node <mermaid-cli/src/cli.js>` with Node's directory prepended to the child's
+PATH. A missing interpreter raises `MermaidNotInstalled`, not `RuntimeError`,
+because callers fall back on the former and the latter made the degraded path
+unreachable.
+
+**`ppt-master` is an external skill, not a package.** It is driven from a
+configured skill root — `~/.claude/skills/ppt-master` by default — and is
+deliberately **not vendored** (124 MB / 13k files, and its
+`attribution_guard.py` fails closed on any modification, so it must stay an
+intact official distribution):
+
+```
+git clone https://github.com/hugohe3/ppt-master ~/.claude/skills/ppt-master
+# optional: its visual-review stage wants a browser
+conda run -n llm pip install playwright && conda run -n llm python -m playwright install chromium
+```
+
+`LEGAL_HELPER_SKILL_ROOTS` (`os.pathsep`-separated) replaces the external
+roots only; this package is always searched first. See **External procedural
+skills**.
 
 US sources (CourtListener, eCFR, Federal Register, GovInfo) are served by **direct-API connectors** in `legal_helper/connectors/`, not MCP servers — no install needed beyond `requirements.txt`.
 
@@ -56,6 +88,7 @@ instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
 - `legal_helper/connectors/` — in-process tool functions over httpx / WebFetch. The primary call path for both providers.
 - `legal_helper/mcp/` — external MCP boundary. Only used for MCPs we don't maintain in-tree (CourtListener, GovInfo, EDGAR, EUR-Lex, PKULaw) and the one in-tree MCP we ship (`ccar_aviation`).
 - `legal_helper/citations/` — `audit_citations` (legacy, preserved), eyecite-backed `extract` / `validate`, PRC regex, format conversion.
+- `legal_helper/documents/` — the deliverable layer. `office.py` (inspect / extract / guarded edit), `redline.py` (w:ins/w:del), `pdf.py`, `graph_layout.py` (Graphviz geometry), `diagrams.py` (Mermaid authoring + raster), `quality.py` (deterministic output checks), `contact_sheet.py`, and `writers/` — one module per output format plus `writers/scripts/` (the Node renderers and `deck.css`).
 - `legal_helper/rag/` — local bge-m3 embeddings + Qdrant (embedded) + legal-aware hierarchical chunker.
 
 ## Authoring rules
@@ -65,7 +98,105 @@ instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
 - **No aviation strings outside `domains/aviation/`.** If you find yourself writing FAA/EASA/ICAO/IDERA/Cape Town/MRO/AD/SB inside `skills/` or `playbook/`, stop and put it in `domains/aviation/overlays/<skill>.md` instead.
 - **PRC primary, comparative second.** Generic skills should reference 法律 → 行政法规 → 部门规章 → 规范性文件 → 司法解释 → 指导案例 first; US/EU when relevant.
 
-## Excel / workbook operations
+## Document, deck and diagram production
+
+**Every deliverable is written, measured, looked at, and repaired before it is
+reported as done.** This is the Excel loop below, generalised: inspect →
+guarded edit → diff → re-inspect became write → lint → render → repair →
+re-lint. The deterministic layer comes first because it costs nothing.
+
+- **`documents/quality.py` is a conformance floor, and only that.** Shapes off
+  the canvas, pairwise overlap past 2% of the smaller shape, text that cannot
+  fit its box (CJK-aware, reading the frame's real insets rather than assuming
+  PowerPoint's defaults), runs under the 11pt body / 9pt label floor, WCAG
+  contrast, empty placeholders big in both dimensions. Findings carry `slide`
+  and `shape` indices, not prose, so a finding names a location the model can
+  go and look at rather than a sentence it has to interpret.
+- **A check belongs here only when a pass means "nothing is provably broken".**
+  It loses its place the moment a pass could be read as "this is good".
+  Coverage, overfill and dead-band were all deleted on that test: measured over
+  89 slides of real reference work plus 9 generated ones, `canvas_underfilled`
+  ranked the emptiest generated slide (three cards holding ~45 characters, 0.81)
+  *above* the reference set's densest statutory slide (ten articles with a
+  holding each, 0.66) — because a pale card is ink. Every page
+  `canvas_overfilled` ever flagged was correct work. All three could be passed
+  by padding, and padding produced the deck that got rejected. **Do not add a
+  density metric either**: the best process map in the reference set measures
+  13 em, because its labels live inside grouped graphics.
+- **Style is not in the code.** Whether a title should assert or name, whether
+  load should vary, whether a deck needs an ask — those differ between an
+  internal 汇报, a training 宣贯, a seminar talk and a pitch, and none of it is
+  derivable from a corpus. Guide the model and let the model decide; an
+  earlier attempt encoded one genre's conventions as a schema of roles,
+  exhibit floors and profile flags, and it was deleted. When the user supplies
+  a reference deck or template, that governs — and when they supply a mature
+  external skill, drive it rather than reimplementing its judgement (see
+  **External procedural skills**).
+- **The advisory prose is gone.** `_visual_result` used to ask the model to
+  "check each for text overflowing its box, blank or near-empty pages,
+  overlapping elements…". Every clause of that is now arithmetic, and nothing
+  could tell whether the instruction had been followed.
+- **Rendering an authored file measures it and shows it, in one call.**
+  `tools/documents._visual_result` builds a contact sheet, runs
+  `quality.lint_artifact` over the pages, and returns both as an image result,
+  so the pages arrive as image blocks the model actually sees with the
+  findings and a `next_step` beside them. `authored=False` for a file the
+  model is *reading* (`render_pdf_pages`) — telling it to repair a source PDF
+  it never wrote drove repeat single-page renders.
+- **Looking is opt-in; measuring is not.** Nothing forces a `render_*` call,
+  but once one happens the lint is attached whether the model asked for it or
+  not. There is no enforced write→review→repair loop in the tree: an earlier
+  `review.py` / `wireframe.py` pair implemented one and was reverted. Do not
+  cite it as if it exists, and if it returns, wire it through
+  `max_repair_rounds` so it shares the existing cost dial.
+- **HTML is the default deck path.** `write_pptx_from_html` authors in real
+  CSS, renders in Chromium, and maps the computed geometry onto native
+  PowerPoint objects — text stays text, `<table>` stays a table. Measured
+  Reach for `write_pptx` when the enum genuinely fits; reach for HTML whenever
+  the arrangement matters. A `<div data-diagram="name">` in the HTML reserves a
+  box that the diagram is drawn into as native shapes, which is how a dense CSS
+  layout and an editable diagram share one slide.
+- **One canvas: 13.333 × 7.5in.** `writers/pptx.py` wrote 10 × 5.625 for its
+  fallback while every other path and every `SlideFlowchart` default assumed
+  the wide canvas — a `w: 12.2` default does not fit on a 10in slide. Do not
+  reintroduce a second canvas size.
+- **`write_pptx` returns a bare absolute path on success** and an
+  `ERROR:`-prefixed string on failure, including `ERROR: … DEGRADED …` naming
+  every dropped feature when the fallback writer ran. Returning JSON there
+  would break every caller that chains the result straight into
+  `render_pptx_slides` / `inspect_pptx`. `write_pptx_from_html` returns JSON
+  and the per-slide geometry it mapped.
+- **Diagrams are geometry, not pictures.** `documents/graph_layout.py` asks
+  Graphviz for node boxes, routed edge polylines, arrowhead tips and edge-label
+  positions, in slide inches, and the emitter turns them into native shapes.
+  Four kinds on a slide's `flowchart` block: `flow` (process map, from a Mermaid
+  string), `mindmap` (思维导图) and `structure` (结构图, plain connectors
+  because a reporting line is not a step). A `swimlane` kind existed and was
+  reverted; its dispatch branch and its `kind` / `lane_order` schema entries
+  are removed, because a schema that advertises a kind the code cannot build
+  is worse than a missing feature — `write_pptx` returned a bare success path
+  and a slide with no diagram on it at all. `direction: "auto"` tries both rank directions and keeps
+  whichever fills the box. A node's `role` names its lane and drives a stable
+  colour; `sub` hangs its deliverable underneath; an edge `label` carries the
+  condition or the statutory period. `quality.diagram_encoding` reports which of
+  those dimensions a drawing actually uses — reported, never graded.
+- **The fit adjusts type, never geometry alone.** Scaling a drawing down
+  shrinks its boxes and leaves the text at its original size; scaling it up
+  leaves a legible diagram in a corner. `layout_graph` re-measures the boxes at
+  a new font size instead, bounded by `MIN_DIAGRAM_FONT_PT` (9) and
+  `MAX_DIAGRAM_FONT_PT` (22). The previous path scaled x and y independently,
+  which is why fixed-size nodes collided on one axis.
+- **Edges are routed polylines with one arrowhead on the last segment.** The
+  previous emitter drew a single line between node *centres*, so every
+  arrowhead was buried inside the shape it pointed at. A pptxgenjs line is a
+  bounding box plus `flipH`/`flipV`, and flipping carries the arrowheads with
+  it, so direction survives the flip.
+- **Mermaid's inline edge-label form is supported.** `A -- yes --> B` as well as
+  `A -->|yes| B`; only the piped form used to match, so every labelled decision
+  branch was dropped in silence and process maps rendered with their yes/no
+  arms missing.
+
+### Excel / workbook operations
 
 Excel work is a general document-tool capability, not a legal specialist
 skill. Route ordinary spreadsheet edits through the `general-answer` path with
@@ -152,6 +283,13 @@ explicitly asks for restructuring.
   `cite_check_report_tool`, the grounding tools — is never cut, because
   truncating it shortens the memo rather than the evidence. Both providers
   apply this at their tool-execution sites; keep them in step.
+  **The image exemption is a hole, not an entry in `EXEMPT_TOOLS`.** Both
+  providers skip `apply_result_budget` entirely for any image-carrying result
+  (`openai_provider.py` and its Anthropic twin, at each tool-execution site),
+  so text riding along with a render — the lint payload, for instance — is
+  un-budgeted. Keep such payloads small, structured and self-capping;
+  `quality.QualityReport.to_payload` enforces its own character ceiling and
+  groups repeated checks rather than listing them per slide.
 - **A turn's cumulative tool output is capped too** (`turn_result_budget`,
   entered by both providers around their tool loops). Past the cap a tool
   returns a notice telling the model to answer from what it has, rather than
@@ -212,8 +350,81 @@ explicitly asks for restructuring.
   best-effort: durability must never be able to fail a turn.
 - **An auditing skill cannot rewrite what it audits.** `tool_policy.py` declares
   which tools mutate a document and drops them for `READ_ONLY_SKILLS`
-  (`cite-check`). `render_*` stays — it writes a PNG so the model can *look* at
-  a page to confirm a pinpoint. Classification is by explicit name, not prefix.
+  (`cite-check`). The distinction is authoring versus inspection, not the name:
+  the page-render family stays, because it writes a PNG so the model can *look*
+  at a page to confirm a pinpoint, while `render_flowchart_image` is mutating —
+  it authors a diagram rather than viewing a document. Classification is by
+  explicit name, never by prefix, for exactly that reason.
+
+### Visual review
+
+- **A deliverable is measured on every render, and the model is shown it.**
+  There is no separate review module: `tools/documents._visual_result` is the
+  whole mechanism — contact sheet plus `quality.lint_artifact` findings plus a
+  `next_step`, returned as an image result so the pages reach the model as
+  pixels. `authored=False` marks a file the model is reading rather than one it
+  wrote. Whether it *looks* is still the model's choice; whether the file is
+  *measured* is not.
+- **`review_artifacts_before_reveal` does not exist.** Neither does
+  `documents/review.py` or `documents/wireframe.py`. An enforced
+  lint → wireframe → pixel repair loop was built and reverted; earlier
+  revisions of this file described it as shipped, which is how a documented
+  setting came to be read from a `config.yaml` that never defined it. If the
+  loop returns, bound it with `max_repair_rounds` so it shares the audit's
+  cost dial, and forbid deleting content to make a slide fit — cutting the
+  substance to satisfy a layout check trades away the wrong thing.
+
+## External procedural skills
+
+- **Two kinds of skill, distinguished by where the directory is.** An in-tree
+  skill under `legal_helper/skills/` is legal methodology, so its `SKILL.md`
+  body is inlined into the sub-agent with the PRC playbook and the citation
+  contract. A skill discovered under an external root is a *procedure*: it
+  carries its own workflow, references, artifact contracts and gate scripts,
+  and it is **driven**, not inlined. `ppt-master` is the motivating case.
+- **Discovery is `skills.skill_roots()`, and this package is always first.**
+  It cannot be configured away — the in-tree legal skills are the product, and
+  a mistyped `LEGAL_HELPER_SKILL_ROOTS` must not be able to delete them. That
+  variable replaces the *external* roots only (default `~/.claude/skills`), and
+  an earlier root shadows a later one so a third party cannot silently replace
+  a methodology. **Nothing hardcodes a skill name any more**: the previous two
+  allowlists — a tuple in `skills/__init__.py` and a separate `Literal` in
+  `tools/orchestrator.py` — had already drifted, leaving `flowchart` and
+  `docx-redline` on disk and undispatchable by `run_skill`.
+- **Three tools make driving possible** (`tools/skill_runtime.py`), and the
+  containment is the point. `write_text_file` writes only under `outputs_dir`,
+  **not** `project_root`, which holds the source tree. `run_skill_script` runs
+  only a `.py` that resolves *inside* a discovered skill's directory, with
+  `argv` as a list so there is no shell to inject into; a non-zero exit is
+  returned as data, because that is how a skill's own gate reaches the model.
+  `list_skill_dir` exists so reference paths are read rather than guessed.
+  The trust boundary is the skill root: a script under a configured root runs
+  with the harness's privileges, so never point a root at a directory the
+  model can write to — the two tools compose into arbitrary code execution.
+- **An external skill gets a host runtime contract, never the playbook.**
+  `agent._external_skill_prompt` supplies the resolved absolute `SKILL_DIR`
+  (such a skill is typically told never to guess it), the call mapping, and the
+  two assumptions that fail here: there is no interactive channel, so a
+  blocking user gate runs under the skill's own explicit-delegation provision
+  and the decision is reported rather than fabricated; and there are no
+  background processes, so a preview server is never started. Handing it the
+  PRC playbook would be a conflicting instruction, not extra context.
+- **A procedure needs its own tool-loop budget.**
+  `external_skill_max_iterations` (default 80) versus
+  `sub_agent_max_iterations` (8). The 8 was trimmed for latency and cost on a
+  specialist that fetches a few sources and writes prose; a procedure spends
+  iterations reading its own workflow, authoring one artifact per page,
+  running its gate, repairing, then exporting, and **cannot reach its export
+  step in 8**. Under-budgeting it does not make it cheaper, it makes it fail
+  after paying for most of the work.
+- **The in-tree authoring contract does not apply to external skills.** Under
+  100 lines, a not-legal-advice line, a reference to the general playbook —
+  those are contracts about methodology we maintain. Contract tests iterate
+  `skills.internal_skill_names()`; `list_skills()` reports every discovered
+  skill and flags which are external.
+- **Never vendor a large external skill.** `ppt-master` is 124 MB / 13k files
+  and its `attribution_guard.py` fails closed on any modification, so it must
+  remain an intact official distribution at a configured root.
 
 ## Workflow failure taxonomy
 
@@ -293,6 +504,8 @@ python -m legal_helper.rag.ingest --collection aviation --source caac_ccar
 python -m pytest -q                      # always `python -m`: bare `pytest` resolves
                                          # to base's interpreter and dies at collection
 python -m pytest -q tests/test_pptx_flowchart.py   # native flowchart shape contract
+dot -V && d2 --version                   # diagram engines; d2 is optional
+python -c "from legal_helper.skills import list_skills; print([s['name'] for s in list_skills()])"
 ```
 
 ## Testing
@@ -301,6 +514,8 @@ python -m pytest -q tests/test_pptx_flowchart.py   # native flowchart shape cont
 - `python -m pytest -q tests/test_provider_parity.py` — Anthropic and OpenAI see identical tool surface and equivalent results.
 - `python -m pytest -q tests/test_tool_budget.py tests/test_context.py` — the token budgets below.
 - `python -m pytest -q tests/test_verified_synthesis.py tests/test_runs.py` — audit-then-reveal, the clarify gates, and the durable run record.
-- The baseline is **3 failed / 504 passed / 2 skipped**; the three failures are
+- `python -m pytest -q tests/test_graph_layout.py tests/test_document_quality.py tests/test_docx_layout.py` — diagram geometry, the output linter, and the DOCX table/indent contract.
+- `python -m pytest -q tests/test_skill_runtime.py` — skill discovery and, more importantly, the containment of `write_text_file` / `run_skill_script`: escapes out of `outputs/` and out of a skill directory are asserted, not assumed.
+- The baseline is **3 failed / 616 passed / 2 skipped**; the three failures are
   `tests/test_caac_local_connector.py` (staged CAAC corpus absent). Anything else is a regression.
 - Live smoke once per provider per major change: `MODEL_PROVIDER=anthropic` then `MODEL_PROVIDER=openai`.

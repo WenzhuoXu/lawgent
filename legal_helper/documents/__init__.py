@@ -5,11 +5,21 @@ Implementation code for Office/PDF files lives here. Provider-facing tools in
 
 Layout:
 
-- ``office.py`` — DOCX / PPTX / XLSX inspect, extract, and edit.
-- ``redline.py``— Native Word tracked changes (w:ins/w:del) + comments.
-- ``pdf.py``    — PDF inspect, render, merge, split, rotate primitives.
-- ``writers/``  — Polished artifact writers, one module per output format
-  (docx, pdf, pptx, xlsx).
+- ``office.py``      — DOCX / PPTX / XLSX inspect, extract, and edit.
+- ``redline.py``     — Native Word tracked changes (w:ins/w:del) + comments.
+- ``pdf.py``         — PDF inspect, render, merge, split, rotate primitives.
+- ``writers/``       — Polished artifact writers, one module per output format
+  (docx, pdf, pptx, xlsx), plus the HTML→PPTX converter and its design system.
+- ``graph_layout.py``— Diagram geometry from Graphviz: flows, mindmaps and
+  structure charts as node boxes and routed edge polylines, in slide inches.
+- ``diagrams.py``    — Mermaid as an authoring syntax and a raster renderer,
+  adapting ``graph_layout`` onto a slide's flowchart block.
+- ``quality.py``     — Deterministic quality checks over a written file and its
+  renders: geometry, typography, contrast, canvas coverage.
+- ``wireframe.py``   — Slide geometry drawn as a labelled picture, with lint
+  findings coloured in, so a reviewer judges arrangement visually.
+- ``review.py``      — The bounded lint → critique → repair loop that runs
+  before a deck's path is handed back.
 """
 
 from .office import (

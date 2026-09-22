@@ -45,3 +45,8 @@ enable_web_fetch: true
 enable_cite_check: false
 verify_before_reveal: true              # audit (and repair) before the answer is shown
 max_repair_rounds: 1                    # repair passes a failed audit may trigger; 0 = advisory
+
+# Tool-loop ceiling for an external procedural skill (ppt-master and the like).
+# Deliberately far above sub_agent_max_iterations: such a skill reads its own
+# workflow, authors one artifact per page, runs its gate, repairs, then exports.
+external_skill_max_iterations: 80

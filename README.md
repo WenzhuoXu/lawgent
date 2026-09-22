@@ -41,6 +41,7 @@ memo, redline, workbook, or deck.
 - [Quickstart](#quickstart)
 - [Multi-nation: one harness, many legal systems](#multi-nation-one-harness-many-legal-systems)
 - [Multi-area: skills and domain packs](#multi-area-skills-and-domain-packs)
+- [External procedural skills](#external-procedural-skills)
 - [The tool surface](#the-tool-surface)
 - [The grounding stack](#the-grounding-stack)
 - [Runtime internals](#runtime-internals)
@@ -237,6 +238,10 @@ sub-agent starts with), `references/` prose it pulls only when needed, `resource
 templates, and `scripts/` deterministic helpers. Context stays small until depth is actually
 required.
 
+These fifteen ship in-tree and are legal methodology. Skills discovered from a configured
+external root are a different kind — see [external procedural skills](#external-procedural-skills)
+— and the authoring contract above deliberately does not apply to them.
+
 | Skill | What it does |
 |---|---|
 | `review-contract` | Clause-by-clause review against a configurable playbook, with deviations, business impact, and redlines |
@@ -281,6 +286,54 @@ lives inside that directory — the core stays domain-agnostic, and an anatomy t
 Adding a pack (healthcare, fintech, employment, data protection) means creating a directory
 with the same four pieces; it is auto-discovered on the next process start. No core code
 changes.
+
+---
+
+## External procedural skills
+
+The fifteen in-tree skills are legal methodology: a `SKILL.md` body is inlined into a
+sub-agent along with the PRC playbook, because that *is* the skill's content. A second kind
+of skill lives outside the package and works the other way round — it carries its own
+multi-step workflow, reference tree, artifact contracts and gate scripts, and what it needs
+from a host is only the three things a host knows: where it lives on disk, which calls stand
+in for read/write/execute, and which of its interactive assumptions do not hold.
+
+[ppt-master](https://github.com/hugohe3/ppt-master) is the motivating case. It authors one
+SVG per page, compiles them to native DrawingML, and gates the result with its own quality
+checker. Lawgent drives the official distribution unmodified:
+
+```bash
+# install it under a skill root (Claude Code's user directory is scanned by default)
+git clone https://github.com/hugohe3/ppt-master ~/.claude/skills/ppt-master
+
+python -m legal_helper chat
+# > 用 ppt-master 做一份关于……的汇报 PPT
+```
+
+Discovery scans `skill_roots()`: **this package is always first and cannot be configured
+away**, so a mistyped root can never remove the legal skills. `LEGAL_HELPER_SKILL_ROOTS`
+(`os.pathsep`-separated) replaces the *external* roots only, and an earlier root shadows a
+later one so a third party cannot silently replace a methodology.
+
+Three capabilities make driving possible, and none of them existed before: `write_text_file`
+(sandboxed to `outputs/` — not the project root, which holds the source tree),
+`run_skill_script` (argv list, no shell, and the script must resolve *inside* a discovered
+skill's own directory), and `list_skill_dir`. A non-zero exit from a skill's script is
+returned as data, because that is how its gates reach the model.
+
+Such a skill is given a **host runtime contract** instead of legal methodology: its resolved
+`SKILL_DIR`, the call mapping, and the two assumptions that fail here — there is no
+interactive channel, so blocking user gates run under the skill's own explicit-delegation
+provision and the decision is reported; and there are no background processes, so a preview
+server is never started. It also gets its own tool-loop budget
+(`external_skill_max_iterations`, default 80): the research budget of 8 is tuned for a
+specialist that fetches a few sources and writes prose, and cannot reach a procedure's export
+step at all.
+
+> **Trust boundary.** A script under a configured root runs with the harness's privileges —
+> that is what "drive this skill" means. Roots are operator-configured; never point one at a
+> directory the model can write to, or `write_text_file` and `run_skill_script` compose into
+> arbitrary code execution.
 
 ---
 
@@ -345,7 +398,10 @@ and packs — never all at once, so provider tool schemas stay small.
 
 | Tool | Purpose |
 |---|---|
-| `run_skill` | Dispatch a task to a specialist sub-agent with a forked context |
+| `run_skill` | Dispatch a task to a specialist sub-agent with a forked context — an in-tree legal skill, or an [external procedural skill](#external-procedural-skills) |
+| `write_text_file` | Author a text artifact (SVG, Markdown, JSON) under `outputs/`; what lets a procedural skill build its own files |
+| `run_skill_script` | Run one of a skill's own Python scripts — its gates and exporters. Argv list, no shell, confined to that skill's directory |
+| `list_skill_dir` | List a skill's own tree so its reference paths are read rather than guessed |
 | `list_skill_sections` · `read_skill_section` · `list_skill_references` · `read_skill_reference` | Progressive disclosure of skill depth |
 | `read_playbook_section` | Pull the relevant playbook section only |
 | `project_memory_write` · `project_memory_search` · `project_brief_read` | Durable cross-chat matter memory |
@@ -396,6 +452,39 @@ never a fixed count.
 and pulls depth on demand. Only its final block returns to the orchestrator; its internal
 turns stay in the JSONL log under the same parent `run_id`. The orchestrator, not the
 specialist, authors the user-facing answer.
+
+**Deliverables are measured before they are handed over.** A legal deliverable is a
+document, and a document either reads well or it does not. The Excel path's discipline —
+write, measure, look, repair, re-measure — generalises to every generated deck and memo,
+with the deterministic layer first because it costs nothing:
+
+1. **Conformance** (`documents/quality.py`). Shapes off the canvas, overlap past 2% of the
+   smaller shape, text that cannot fit its box (CJK-aware, reading the frame's real insets),
+   runs under the 11pt body / 9pt label floor, WCAG contrast, empty placeholders. Findings
+   carry slide and shape indices, so a finding names a place to go and look. A check earns
+   its place here only when a pass means "nothing is provably broken" — the occupancy
+   measures that once lived here were deleted after testing them against 89 slides of real
+   work, where they ranked an empty generated slide above a dense statutory one and flagged
+   nothing but correct work. Style is never encoded; it is guided, and the model decides.
+2. **The pages, as pixels.** Rendering a file the model authored returns a contact sheet
+   *and* the lint findings *and* a next step, as an image result — so the pages arrive as
+   something the model sees rather than a path it has to choose to open. A file it is
+   merely reading is marked as such, because telling a model to repair a source PDF it
+   never wrote just produces repeat renders.
+
+Measuring is automatic once a render happens; whether to look is still the model's call.
+There is no enforced repair loop in the tree — one was built and reverted — so a deck is
+only as reviewed as the turn that produced it. For decks where that is not good enough,
+drive [ppt-master](#external-procedural-skills), whose own quality gate is a hard stop.
+
+**Diagrams are geometry, not pictures.** `documents/graph_layout.py` asks Graphviz for node
+boxes, routed edge polylines, arrowhead tips and edge-label positions in slide inches, and
+the emitter turns them into native PowerPoint shapes — editable boxes and arrows, not a
+PNG. Flowcharts (from a Mermaid string), 思维导图 and 结构图 (from an outline) are the same
+geometry problem with different reading conventions. The fit adjusts *type size* and
+re-measures the boxes around it, rather than scaling the drawing and leaving the text
+behind. Mermaid stays as an authoring syntax and as the raster renderer; `d2` is there for
+the one arrangement Graphviz does not match, nested containers.
 
 **Provider parity.** One `Provider` protocol over Anthropic (`claude-opus-5`, also
 `claude-opus-4-8` / `4-7`; fast tier `claude-haiku-4-5`) and OpenAI (`gpt-5.6-terra` or
@@ -534,6 +623,8 @@ active_domain_packs: []           # e.g. [aviation]
 anthropic_model: claude-opus-5
 openai_model: gpt-5.6-terra       # never the bare "gpt-5.6" alias — it routes to Sol
 max_iterations: 12                # tool-loop ceiling per agent
+external_skill_max_iterations: 80 # ceiling for an external procedural skill;
+                                  # a procedure cannot reach its export step in 8
 max_concurrent_agents: auto
 max_tokens: 32000                 # per-turn output ceiling
 chat_context_token_budget: 16000
@@ -601,8 +692,12 @@ legal_helper/
 ├── mcp/                # external MCP boundary: registry, manager, adapter, servers
 ├── citations/          # extract · validate · round-trip · ground · provenance · audit
 ├── rag/                # chunker · embeddings · store · hybrid retrieve · rerank · ingest
-├── documents/          # docx/pdf/xlsx/pptx writers, redline, diagrams
-└── tools/              # function-tool registry assembled per turn
+├── documents/          # the deliverable layer: writers, redline, Graphviz diagram
+│                       #   geometry, output lint, contact sheets
+├── tools/              # function-tool registry assembled per turn
+│   └── skill_runtime.py  # write_text_file / run_skill_script / list_skill_dir —
+│                         # the runtime an external procedural skill needs
+└── skills/__init__.py  # discovery over skill_roots(); in-tree always wins
 
 src/                    # React 19 + Vite web UI
 tests/                  # anatomy, parity, connectors, citations, RAG, workflow suites
@@ -637,7 +732,7 @@ The anatomy test is the architectural guardrail: it fails if a skill grows past 
 budget, if frontmatter is malformed, or if domain-specific vocabulary leaks out of a pack and
 into the generic core.
 
-The current baseline is 504 passed, 3 failed, 2 skipped. The three failures are all in
+The current baseline is 616 passed, 3 failed, 2 skipped. The three failures are all in
 `tests/test_caac_local_connector.py` and need the staged CAAC corpus
 (`scripts/fetch_caac_corpus.py`); anything beyond them is a regression.
 
@@ -677,6 +772,10 @@ this repo contributes is the assembly, the PRC-first framing, and the connector 
 | [sboghossian/master-claude-for-legal](https://github.com/sboghossian/master-claude-for-legal) | see repo | The citation-verifier skill — the two-mode (exists / supports) verification procedure and the verification-report format, extended here with PRC equivalents |
 | [anthropics/skills](https://github.com/anthropics/skills) | see repo | The Agent Skills `SKILL.md` format itself, and the document-skill script pattern behind `documents/writers/scripts/` |
 | [anthropics/claude-cookbooks](https://github.com/anthropics/claude-cookbooks) | MIT | Prompting patterns distilled into `skills/flowchart/references/cookbook_patterns.md` |
+| [Paper2Poster / PosterAgent](https://github.com/Paper2Poster/Paper2Poster) | MIT | The discipline of a **closed** critic vocabulary. Its Painter↔Commenter loop answers `overflow` / `too blank` / `good to go` and nothing else, and that bound is what keeps a repair round targeted. The closed-vocabulary principle survives in `documents/quality.py`, whose findings are named check names rather than prose |
+| [hugohe3/ppt-master](https://github.com/hugohe3/ppt-master) | MIT | **Driven, not adapted.** Lawgent runs the official distribution unmodified as an external procedural skill: it authors SVG pages and compiles them to native DrawingML, and its own `svg_quality_checker.py` is the gate the harness must pass before a deck is reported finished. Install it under a configured skill root (see [Configuration](#configuration)); it is deliberately not vendored, because `attribution_guard.py` fails closed on any modification |
+| [icip-cas/PPTAgent](https://github.com/icip-cas/PPTAgent) | MIT | PPTEval's three axes — content, design, coherence — as the shape of a deck judgement, and the argument that design is scoreable rather than a matter of taste |
+| [Textual-to-Visual Iterative Self-Verification](https://arxiv.org/abs/2502.15412) | paper | Review a layout as a *picture*, never as a coordinate list — why every authored render comes back to the model as image blocks with its lint findings attached, rather than as a path |
 | [vercel/ai-elements](https://github.com/vercel/ai-elements) + [shadcn/ui](https://github.com/shadcn-ui/ui) | see repos | The entire chat UI component layer — conversation, message, reasoning, plan, task, tool, sources, inline-citation |
 
 ### Shaped the design
@@ -695,6 +794,12 @@ Surveyed rather than copied, but each changed a decision here:
   [lexpath-project/LexPath](https://github.com/lexpath-project/LexPath)
 
 ### Built on
+
+**Documents & diagrams** — [Graphviz](https://graphviz.org/) (diagram layout, via
+`dot -Tjson`), [D2](https://github.com/terrastruct/d2) (nested-container structure charts),
+[pptxgenjs](https://github.com/gitbrent/PptxGenJS), [python-pptx](https://github.com/scanny/python-pptx),
+[python-docx](https://github.com/python-openxml/python-docx), [WeasyPrint](https://github.com/Kozea/WeasyPrint),
+[Mermaid](https://github.com/mermaid-js/mermaid) and [Pillow](https://github.com/python-pillow/Pillow)
 
 **Citations & case law** — [eyecite](https://github.com/freelawproject/eyecite),
 [reporters-db](https://github.com/freelawproject/reporters-db), and

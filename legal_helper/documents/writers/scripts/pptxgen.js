@@ -41,6 +41,22 @@ const CHART_TYPE_MAP = {
   radar: pptx.ChartType.radar,
 };
 
+/** Display width in em units, so a CJK edge label gets a plate that fits it. */
+function displayWidth(text) {
+  let total = 0;
+  for (const ch of String(text || "")) {
+    const cp = ch.codePointAt(0);
+    const wide =
+      (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0x303e) ||
+      (cp >= 0x3041 && cp <= 0x33ff) || (cp >= 0x3400 && cp <= 0x4dbf) ||
+      (cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe30 && cp <= 0xfe4f) ||
+      (cp >= 0xff00 && cp <= 0xff60);
+    total += wide ? 1 : 0.5;
+  }
+  return total;
+}
+
 function cleanHex(value, fallback) {
   const raw = String(value || "").replace("#", "").trim();
   return /^[0-9a-fA-F]{6}$/.test(raw) ? raw.toUpperCase() : fallback;
@@ -190,7 +206,9 @@ function addFlowchart(slide, fc, accent) {
   const nodes = fc.nodes;
   const edges = Array.isArray(fc.edges) ? fc.edges : [];
 
-  const nodeFontSize = fc.font_size || 12;
+  // font_pt is computed by the layout engine, which sized the boxes around it;
+  // drawing at any other size is how labels end up outside their shapes.
+  const nodeFontSize = fc.font_pt || fc.font_size || 12;
   const nodeIndex = {};
 
   // First pass: draw the node shapes.
@@ -226,51 +244,77 @@ function addFlowchart(slide, fc, accent) {
     nodeIndex[node.id] = node;
   }
 
-  // Second pass: draw edges as line shapes between node centers. Connector
-  // endpoints don't snap to nodes when the user drags shapes in PowerPoint;
-  // this is a known pptxgenjs limitation (see references/flowchart_authoring.md).
+  // Second pass: draw each edge as the routed polyline the layout engine
+  // produced. One line shape per segment, arrowhead on the last one only — its
+  // tip is the point Graphviz put on the target's boundary, so it is visible.
+  // Drawing a single line between node CENTRES buried every arrowhead inside
+  // the shape it pointed at.
+  //
+  // A pptxgenjs line is a bounding box plus flipH/flipV, and flipping carries
+  // its arrowheads with it, so direction survives the flip.
   for (const edge of edges) {
     if (!edge) continue;
     const from = nodeIndex[edge.from_id];
     const to = nodeIndex[edge.to_id];
     if (!from || !to) continue;
-    const x1 = Number(from.x) + Number(from.w) / 2;
-    const y1 = Number(from.y) + Number(from.h) / 2;
-    const x2 = Number(to.x) + Number(to.w) / 2;
-    const y2 = Number(to.y) + Number(to.h) / 2;
-    const left = Math.min(x1, x2);
-    const top = Math.min(y1, y2);
-    const w = Math.max(Math.abs(x2 - x1), 0.01);
-    const h = Math.max(Math.abs(y2 - y1), 0.01);
-    // We can't draw the *direction* of a 1D line shape; pptxgenjs assigns the
-    // arrow endpoint to (x+w, y+h). For TB / LR layouts that matches the
-    // source->target direction; for backward edges the user sees the arrow at
-    // the wrong end. Acceptable for v1 — the deck still reads as a flowchart.
     const arrow = String(edge.arrow || "end");
     const style = String(edge.style || "solid");
-    slide.addShape(pptx.ShapeType.line, {
-      x: left,
-      y: top,
-      w,
-      h,
-      line: {
-        color: accent,
-        width: 1.25,
-        dashType: style === "dashed" ? "dash" : "solid",
-        beginArrowType: arrow === "both" ? "triangle" : "none",
-        endArrowType: arrow === "none" ? "none" : "triangle",
-      },
-      flipH: x2 < x1,
-      flipV: y2 < y1,
+
+    let points = Array.isArray(edge.points)
+      ? edge.points.map((p) => [Number(p[0]), Number(p[1])])
+      : [];
+    if (points.length < 2) {
+      // Manual layouts carry no routing; fall back to centre-to-centre.
+      points = [
+        [Number(from.x) + Number(from.w) / 2, Number(from.y) + Number(from.h) / 2],
+        [Number(to.x) + Number(to.w) / 2, Number(to.y) + Number(to.h) / 2],
+      ];
+    }
+
+    const segments = [];
+    for (let i = 0; i < points.length - 1; i++) {
+      const [x1, y1] = points[i];
+      const [x2, y2] = points[i + 1];
+      if (Math.abs(x2 - x1) < 0.004 && Math.abs(y2 - y1) < 0.004) continue;
+      segments.push([x1, y1, x2, y2]);
+    }
+    if (!segments.length) continue;
+
+    segments.forEach(([x1, y1, x2, y2], i) => {
+      const last = i === segments.length - 1;
+      const first = i === 0;
+      slide.addShape(pptx.ShapeType.line, {
+        x: Math.min(x1, x2),
+        y: Math.min(y1, y2),
+        w: Math.max(Math.abs(x2 - x1), 0.004),
+        h: Math.max(Math.abs(y2 - y1), 0.004),
+        line: {
+          color: accent,
+          width: 1.25,
+          dashType: style === "dashed" ? "dash" : "solid",
+          beginArrowType: first && arrow === "both" ? "triangle" : "none",
+          endArrowType: last && arrow !== "none" ? "triangle" : "none",
+        },
+        flipH: x2 < x1,
+        flipV: y2 < y1,
+      });
     });
+
     if (edge.label) {
+      // Sized to its text: a fixed 0.9in plate with a white fill covered
+      // whatever node sat beside the label position and blanked out its text.
+      const mid = segments[Math.floor(segments.length / 2)];
+      const lx = edge.label_x != null ? Number(edge.label_x) : (mid[0] + mid[2]) / 2;
+      const ly = edge.label_y != null ? Number(edge.label_y) : (mid[1] + mid[3]) / 2;
+      const labelW = Math.max(displayWidth(edge.label) * (10 / 72) + 0.12, 0.28);
       slide.addText(String(edge.label), {
-        x: left + w / 2 - 0.5,
-        y: top + h / 2 - 0.18,
-        w: 1.0,
-        h: 0.32,
-        fontSize: 9,
+        x: lx - labelW / 2,
+        y: ly - 0.11,
+        w: labelW,
+        h: 0.22,
+        fontSize: 10,
         color: C.muted,
+        fill: { color: "FFFFFF" },
         align: "center",
         valign: "middle",
         margin: 0,

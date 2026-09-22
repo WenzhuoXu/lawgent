@@ -3,6 +3,10 @@
 Prefers a Node.js + pptxgenjs renderer (handles layouts, tables, stats,
 two-column, timeline, theme) and falls back to a minimal OOXML zip when
 Node is unavailable.
+
+Both paths draw on the same 13.333 x 7.5in canvas, to the EMU. The fallback
+can serve only the title-and-bullets layout, so it serves that one as a
+designed plain slide rather than as a downgrade that looks like a bug.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
+from ..graph_layout import wrap_label
 from ._node import find_node, node_diagnostic
 
 
@@ -27,6 +32,53 @@ _CJK_RE = re.compile(
     "\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef]"
 )
 _DEFAULT_EAST_ASIA_FONT = "微软雅黑"  # Microsoft YaHei-class deck font
+
+_EMU_PER_IN = 914400
+
+#: The wide canvas, in the exact EMU ``scripts/pptxgen.js`` writes for
+#: LAYOUT_WIDE (13.333 x 7.5in). Every default on the flowchart model is sized
+#: for it — a 12.2in content column, which a 10in canvas cannot hold at all.
+_CANVAS_W_IN = 12192000 / _EMU_PER_IN
+_CANVAS_H_IN = 6858000 / _EMU_PER_IN
+
+#: PowerPoint's portrait notes page. The notes box is derived from it rather
+#: than from the slide, which is how an 8.5in-wide notes box came to hang off
+#: a 7.5in page.
+_NOTES_W_IN = 6858000 / _EMU_PER_IN
+_NOTES_H_IN = 9144000 / _EMU_PER_IN
+
+#: Furniture as shares of the canvas, so moving the canvas moves the layout
+#: with it instead of stranding boxes at coordinates for the old one.
+#: ``_MARGIN_IN`` lands on the 0.55in margin pptxgen.js uses.
+_MARGIN_IN = _CANVAS_W_IN / 24
+_GUTTER_IN = _MARGIN_IN / 2
+_CONTENT_W_IN = _CANVAS_W_IN - 2 * _MARGIN_IN
+_TITLE_TOP_IN = _CANVAS_H_IN / 18
+_RULE_H_IN = _CANVAS_H_IN / 160
+
+#: Point sizes are absolute: type is read from the back of a room, not scaled
+#: to the canvas. A flat 18pt gave the title no authority over the body and
+#: was small body copy for a 13.33in canvas.
+_TITLE_PT = 36.0
+_TITLE_PT_LONG = 28.0
+_BODY_PT_LADDER = (28.0, 26.0, 24.0, 22.0, 20.0, 18.0, 16.0, 14.0)
+_FOOTER_PT = 10.0
+_NOTES_PT = 12.0
+
+#: The line-height multiplier of ``quality.LINE_HEIGHT``: the fit below and
+#: the linter's overflow check have to agree on how tall a line is.
+_LINE_H = 1.16
+
+#: Air below the last line of a block, in ems of its own type. Without it the
+#: descenders touch whatever the box sits above — the accent rule, the footer.
+_BLOCK_PAD_EM = 0.44
+_BULLET_INDENT_IN = 0.28
+_BULLET_GAP_MIN_EM = 0.4
+_BULLET_GAP_MAX_EM = 3.0
+
+_INK = "17202A"
+_MUTED = "5D6D7E"
+_ACCENT = "1F4E79"  # accent1 of the theme written below, and pptxgen.js's default
 
 # Slide-spec fields the minimal OOXML fallback cannot render.
 _FALLBACK_DROPPED_KEYS = (
@@ -42,29 +94,195 @@ _FALLBACK_DROPPED_KEYS = (
 )
 
 
-def _pptx_text_box_xml(
-    shape_id: int, name: str, x: int, y: int, cx: int, cy: int, lines: list[str], lang: str = "en-US"
+def _emu(inches: float) -> int:
+    return int(round(inches * _EMU_PER_IN))
+
+
+def _lines_at(text: str, pt: float, width_in: float) -> int:
+    """Wrapped line count for ``text`` set at ``pt`` across ``width_in``.
+
+    Shares ``graph_layout.wrap_label`` with the diagram layout and the quality
+    linter, so the box this writer sizes and the box the linter measures are
+    the same box.
+    """
+    return len(wrap_label(text, max(width_in / (pt / 72.0), 1.0)))
+
+
+def _one_line(text: str, pt: float, width_in: float) -> str:
+    """``text`` cut to a single line at ``pt``.
+
+    The footer box holds one line by construction; a footer that wraps both
+    overruns its box and reads as a mistake.
+    """
+    lines = wrap_label(text, max(width_in / (pt / 72.0), 1.0))
+    return lines[0] if len(lines) == 1 else lines[0].rstrip() + "…"
+
+
+def _fit_bullets(bullets: list[str], width_in: float, height_in: float) -> tuple[float, float]:
+    """``(point size, inter-bullet gap in points)`` for one plain slide.
+
+    Takes the largest size on the ladder whose wrapped block plus a minimum
+    gap still fits the body band, then spends the room left over on that gap.
+    A sparse slide therefore gets large type and generous leading instead of a
+    small block marooned under the title — which is the underfilled canvas and
+    the dead band the quality linter reports, and the most visible tell of a
+    generated deck.
+    """
+    text_w = max(width_in - _BULLET_INDENT_IN, 0.5)
+    gaps = max(len(bullets) - 1, 0)
+
+    def block_h(pt: float) -> float:
+        return sum(_lines_at(b, pt, text_w) for b in bullets) * pt * _LINE_H / 72.0
+
+    pt = _BODY_PT_LADDER[-1]
+    for candidate in _BODY_PT_LADDER:
+        if block_h(candidate) + gaps * _BULLET_GAP_MIN_EM * candidate / 72.0 <= height_in:
+            pt = candidate
+            break
+    if not gaps:
+        return pt, 0.0
+    # A quarter line held back: the gap is spent in whole points, and a block
+    # sized to the last EMU of its box spills on the renderer's rounding.
+    slack = max(height_in - block_h(pt) - pt * _LINE_H / 288.0, 0.0)
+    return pt, min(slack * 72.0 / gaps, _BULLET_GAP_MAX_EM * pt)
+
+
+def _pptx_para_xml(
+    text: str,
+    *,
+    pt: float,
+    colour: str,
+    lang: str,
+    bold: bool = False,
+    bullet: bool = False,
+    space_before_pt: float = 0.0,
 ) -> str:
-    paras = []
-    for line in lines or [""]:
-        paras.append(
-            f"<a:p><a:r><a:rPr lang=\"{escape(lang)}\" sz=\"1800\"/>"
-            f"<a:t>{escape(str(line))}</a:t></a:r><a:endParaRPr lang=\"{escape(lang)}\" sz=\"1800\"/></a:p>"
-        )
+    props = ""
+    if bullet:
+        indent = _emu(_BULLET_INDENT_IN)
+        props = f' marL="{indent}" indent="-{indent}"'
+    spc = (
+        f'<a:spcBef><a:spcPts val="{int(round(space_before_pt * 100))}"/></a:spcBef>'
+        if space_before_pt > 0
+        else ""
+    )
+    # A real bullet glyph with a hanging indent, rather than a "• " prefix
+    # baked into the text: a prefixed bullet wraps flush left on its second
+    # line, which is what makes a plain deck look unmade.
+    bu = '<a:buFont typeface="Arial"/><a:buChar char="&#8226;"/>' if bullet else "<a:buNone/>"
+    rpr = (
+        f'lang="{escape(lang)}" sz="{int(round(pt * 100))}"'
+        + (' b="1"' if bold else "")
+    )
+    fill = f'<a:solidFill><a:srgbClr val="{colour}"/></a:solidFill>'
+    return (
+        f"<a:p><a:pPr{props}>{spc}{bu}</a:pPr>"
+        f"<a:r><a:rPr {rpr}>{fill}</a:rPr><a:t>{escape(str(text))}</a:t></a:r>"
+        f"<a:endParaRPr {rpr}/></a:p>"
+    )
+
+
+def _pptx_text_box_xml(
+    shape_id: int,
+    name: str,
+    box: tuple[float, float, float, float],
+    paras: list[str],
+    anchor: str = "t",
+    placeholder: str = "",
+) -> str:
+    # ``placeholder`` is what makes a notes box the notes body: python-pptx
+    # resolves ``notes_text_frame`` through the ph element, and office.py's
+    # slide copy reads ``.text`` off it without checking for None.
+    ph = f'<p:ph type="{placeholder}" idx="1"/>' if placeholder else ""
+    x, y, cx, cy = box
     return f"""
 <p:sp>
-  <p:nvSpPr><p:cNvPr id="{shape_id}" name="{escape(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>
-  <p:spPr><a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>
-  <p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0"/><a:lstStyle/>{''.join(paras)}</p:txBody>
+  <p:nvSpPr><p:cNvPr id="{shape_id}" name="{escape(name)}"/><p:cNvSpPr txBox="1"/><p:nvPr>{ph}</p:nvPr></p:nvSpPr>
+  <p:spPr><a:xfrm><a:off x="{_emu(x)}" y="{_emu(y)}"/><a:ext cx="{_emu(cx)}" cy="{_emu(cy)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr>
+  <p:txBody><a:bodyPr wrap="square" lIns="0" tIns="0" rIns="0" bIns="0" anchor="{anchor}"/><a:lstStyle/>{''.join(paras)}</p:txBody>
 </p:sp>"""
 
 
-def _pptx_slide_xml(title: str, bullets: list[str], lang: str = "en-US") -> str:
-    body_lines = [f"• {bullet}" for bullet in bullets] if bullets else []
+def _pptx_rule_xml(shape_id: int, box: tuple[float, float, float, float]) -> str:
+    x, y, cx, cy = box
+    return f"""
+<p:sp>
+  <p:nvSpPr><p:cNvPr id="{shape_id}" name="Accent Rule"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+  <p:spPr><a:xfrm><a:off x="{_emu(x)}" y="{_emu(y)}"/><a:ext cx="{_emu(cx)}" cy="{_emu(cy)}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="{_ACCENT}"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr>
+  <p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>
+</p:sp>"""
+
+
+def _pptx_slide_xml(title: str, bullets: list[str], footer: str, lang: str = "en-US") -> str:
+    """One plain slide: title, accent rule under it, bullets, footer.
+
+    The fallback serves exactly one layout, so it serves that one on purpose —
+    a type scale, hanging bullet glyphs and furniture on both edges of the
+    canvas — instead of two boxes of identical type stacked at the top.
+    """
+    title_pt = _TITLE_PT
+    title_lines = _lines_at(title, title_pt, _CONTENT_W_IN)
+    if title_lines > 2:
+        title_pt = _TITLE_PT_LONG
+        title_lines = _lines_at(title, title_pt, _CONTENT_W_IN)
+    # A title long enough to need a third of the canvas is itself the defect;
+    # let it overflow its box so the linter says so, rather than eating the body.
+    title_h = min(
+        (title_lines * _LINE_H + _BLOCK_PAD_EM) * title_pt / 72.0, _CANVAS_H_IN / 3
+    )
+
+    rule_y = _TITLE_TOP_IN + title_h + _MARGIN_IN / 4
+    body_y = rule_y + _RULE_H_IN + _GUTTER_IN
+    footer_h = (_LINE_H + _BLOCK_PAD_EM) * _FOOTER_PT / 72.0
+    footer_y = _CANVAS_H_IN - _GUTTER_IN - footer_h
+    body_h = footer_y - _GUTTER_IN - body_y
+
     shapes = [
-        _pptx_text_box_xml(2, "Title", 685800, 457200, 7772400, 914400, [title], lang),
-        _pptx_text_box_xml(3, "Body", 914400, 1600200, 7315200, 4114800, body_lines, lang),
+        _pptx_text_box_xml(
+            2,
+            "Title",
+            (_MARGIN_IN, _TITLE_TOP_IN, _CONTENT_W_IN, title_h),
+            [_pptx_para_xml(title, pt=title_pt, colour=_INK, lang=lang, bold=True)],
+        ),
+        _pptx_rule_xml(3, (_MARGIN_IN, rule_y, _CONTENT_W_IN, _RULE_H_IN)),
     ]
+    if bullets:
+        body_pt, gap_pt = _fit_bullets(bullets, _CONTENT_W_IN, body_h)
+        shapes.append(
+            _pptx_text_box_xml(
+                4,
+                "Body",
+                (_MARGIN_IN, body_y, _CONTENT_W_IN, body_h),
+                [
+                    _pptx_para_xml(
+                        bullet,
+                        pt=body_pt,
+                        colour=_INK,
+                        lang=lang,
+                        bullet=True,
+                        space_before_pt=0.0 if index == 0 else gap_pt,
+                    )
+                    for index, bullet in enumerate(bullets)
+                ],
+                anchor="ctr",
+            )
+        )
+    if footer:
+        shapes.append(
+            _pptx_text_box_xml(
+                5,
+                "Footer",
+                (_MARGIN_IN, footer_y, _CONTENT_W_IN, footer_h),
+                [
+                    _pptx_para_xml(
+                        _one_line(footer, _FOOTER_PT, _CONTENT_W_IN),
+                        pt=_FOOTER_PT,
+                        colour=_MUTED,
+                        lang=lang,
+                    )
+                ],
+            )
+        )
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:a="{_A_NS}" xmlns:r="{_R_NS}" xmlns:p="{_P_NS}">
   <p:cSld><p:spTree>
@@ -76,12 +294,18 @@ def _pptx_slide_xml(title: str, bullets: list[str], lang: str = "en-US") -> str:
 
 
 def _pptx_notes_xml(notes: str, lang: str = "en-US") -> str:
+    margin = _NOTES_W_IN / 10
+    box = (margin, margin, _NOTES_W_IN - 2 * margin, _NOTES_H_IN - 2 * margin)
+    paras = [
+        _pptx_para_xml(line, pt=_NOTES_PT, colour=_INK, lang=lang)
+        for line in (notes.splitlines() or [notes])
+    ]
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:notes xmlns:a="{_A_NS}" xmlns:r="{_R_NS}" xmlns:p="{_P_NS}">
   <p:cSld><p:spTree>
     <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
     <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
-    {_pptx_text_box_xml(2, "Notes Placeholder", 685800, 685800, 7772400, 4114800, [notes] if notes else [], lang)}
+    {_pptx_text_box_xml(2, "Notes Placeholder", box, paras, placeholder="body")}
   </p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
 </p:notes>"""
 
@@ -259,7 +483,7 @@ def write_pptx_deck(
 <p:presentation xmlns:a="{_A_NS}" xmlns:r="{_R_NS}" xmlns:p="{_P_NS}">
 <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
 <p:sldIdLst>{sld_ids}</p:sldIdLst>
-<p:sldSz cx="9144000" cy="5143500" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/>
+<p:sldSz cx="{_emu(_CANVAS_W_IN)}" cy="{_emu(_CANVAS_H_IN)}" type="screen16x9"/><p:notesSz cx="{_emu(_NOTES_W_IN)}" cy="{_emu(_NOTES_H_IN)}"/>
 </p:presentation>""",
         )
         zf.writestr(
@@ -294,6 +518,7 @@ def write_pptx_deck(
                 _pptx_slide_xml(
                     str(slide.get("title") or f"Slide {i}"),
                     [str(b) for b in (slide.get("bullets") or [])],
+                    f"{title} · {i}/{len(safe_slides)}",
                     lang,
                 ),
             )

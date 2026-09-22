@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 import json
 from types import SimpleNamespace
 from typing import Any, Iterable, Iterator, Optional
@@ -98,11 +99,14 @@ def test_orchestrator_dispatches_through_both_providers(monkeypatch):
 def test_all_nine_skills_loadable_under_either_provider():
     """Skills are provider-agnostic and start from compact manifests."""
     from legal_helper.agent import SkillAgent
-    from legal_helper.skills import SKILL_NAMES
+    from legal_helper.skills import internal_skill_names
 
+    # In-tree skills only: this asserts the *legal specialist* contract
+    # (inlined methodology + PRC playbook). An external procedural skill is
+    # handed a host runtime contract instead — see the test below.
     settings = load_settings(refresh=True)
     for provider in (MockAnthropicProvider(), MockOpenAIProvider()):
-        for skill in SKILL_NAMES:
+        for skill in internal_skill_names():
             agent = SkillAgent(skill, provider, settings)
             sp = agent._system_prompt()
             assert f"name: {skill}" in sp
@@ -151,3 +155,34 @@ def test_runtime_model_lists_stay_consistent_with_defaults():
     assert "gpt-5.6" not in OPENAI_HIGH_EFFORT_MODELS
     assert s.high_effort_models_for_provider("openai") == list(OPENAI_HIGH_EFFORT_MODELS)
     assert s.high_effort_models_for_provider("anthropic") == list(ANTHROPIC_HIGH_EFFORT_MODELS)
+
+
+def test_external_procedural_skills_load_under_either_provider():
+    """An external skill gets the host runtime contract, not legal methodology.
+
+    Parity still applies: the same skill must be drivable from either
+    provider. What differs is the contract — a procedure needs its resolved
+    SKILL_DIR and the call mapping, and must NOT be handed the PRC playbook or
+    the citation framing, which would be a conflicting instruction.
+    """
+    from legal_helper.agent import SkillAgent
+    from legal_helper.skills import discover_skills, is_external_skill
+
+    external = [n for n in sorted(discover_skills()) if is_external_skill(n)]
+    if not external:
+        pytest.skip("no external skills discovered in this deployment")
+
+    settings = load_settings(refresh=True)
+    for provider in (MockAnthropicProvider(), MockOpenAIProvider()):
+        for skill in external:
+            sp = SkillAgent(skill, provider, settings)._system_prompt()
+            assert "# Host Runtime Contract" in sp
+            assert skill in sp
+            # The resolved absolute skill directory is the one thing only the
+            # host knows, and such a skill is told never to guess it.
+            assert str(discover_skills()[skill]) in sp
+            # Procedures are driven, not given legal methodology.
+            assert "# General legal playbook" not in sp
+            # The two capabilities that make driving possible must be named.
+            assert "write_text_file" in sp
+            assert "run_skill_script" in sp

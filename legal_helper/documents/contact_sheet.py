@@ -29,9 +29,17 @@ _CELL_BG = (255, 255, 255)
 
 
 def _font(size: int):
+    """A font with CJK coverage first.
+
+    DejaVu and Liberation have none, so a Chinese label rendered with them is a
+    row of tofu — and a wireframe of tofu reads as an empty slide, which sends
+    a reviewer chasing a layout defect that is really a font fallback.
+    """
     from PIL import ImageFont
 
     for candidate in (
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     ):

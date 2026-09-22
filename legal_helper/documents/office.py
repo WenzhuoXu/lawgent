@@ -347,11 +347,6 @@ def _extract_flowchart_payload(slide) -> dict[str, Any]:
     box. ``confidence`` on each edge is the inverse distance heuristic,
     so the LLM can tell mis-pairings from solid ones.
     """
-    try:
-        from pptx.enum.shapes import MSO_SHAPE
-    except Exception:  # pragma: no cover - python-pptx absent
-        MSO_SHAPE = None
-
     nodes: list[dict[str, Any]] = []
     raw_lines: list[dict[str, Any]] = []
 
@@ -1236,6 +1231,26 @@ def render_xlsx_to_images(
 # ---------------------------------------------------------------------------
 
 
+def _set_cell_text(cell: Any, text: str) -> None:
+    """Write a cell's text without discarding its paragraph properties.
+
+    ``cell.text = …`` replaces the cell's ``w:p`` wholesale, which drops the
+    ``w:pPr`` the writer put there — including the suppressed first-line indent
+    that keeps a statute title on one line inside its cell. Writing the run
+    text instead keeps the properties, so an edit does not silently undo the
+    layout the document was built with.
+    """
+    paragraph = cell.paragraphs[0]
+    for extra in list(cell.paragraphs[1:]):
+        extra._p.getparent().remove(extra._p)
+    if paragraph.runs:
+        paragraph.runs[0].text = str(text)
+        for run in list(paragraph.runs[1:]):
+            run._r.getparent().remove(run._r)
+    else:
+        paragraph.add_run(str(text))
+
+
 def reshape_docx_document(
     source_path: Path,
     output_path: Path,
@@ -1341,7 +1356,7 @@ def reshape_docx_document(
             if cells:
                 for col, value in enumerate(cells):
                     if col < len(new_row.cells):
-                        new_row.cells[col].text = value
+                        _set_cell_text(new_row.cells[col], value)
             if at != -1 and 0 <= at < len(table.rows) - 1:
                 tbl = table._tbl
                 tbl.remove(new_row._tr)
@@ -1372,8 +1387,8 @@ def reshape_docx_document(
                 raise ValueError(f"set_cell_text table_index={t_idx} out of range")
             table = tables[t_idx]
             if not (0 <= row < len(table.rows) and 0 <= col < len(table.rows[row].cells)):
-                raise ValueError(f"set_cell_text row/col out of range")
-            table.rows[row].cells[col].text = text
+                raise ValueError("set_cell_text row/col out of range")
+            _set_cell_text(table.rows[row].cells[col], text)
             entry.update({"table_index": t_idx, "row": row, "col": col})
         else:
             raise ValueError(f"Unknown structural op: {kind!r}")

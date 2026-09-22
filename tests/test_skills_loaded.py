@@ -7,7 +7,7 @@ are exercised through the aviation overlay files there.
 from __future__ import annotations
 
 from legal_helper.skills import (
-    SKILL_NAMES,
+    internal_skill_names,
     list_skills,
     load_playbook,
     load_skill_body,
@@ -36,11 +36,13 @@ _EXPECTED_SKILLS = {
 
 
 def test_skill_set_matches_registry():
-    assert set(SKILL_NAMES) == _EXPECTED_SKILLS
+    # The shipped legal skills are a fixed set; discovery may add external
+    # procedural skills on top, which this contract deliberately ignores.
+    assert set(internal_skill_names()) == _EXPECTED_SKILLS
 
 
 def test_each_skill_loads_with_frontmatter_and_disclaimer():
-    for name in SKILL_NAMES:
+    for name in internal_skill_names():
         text = load_skill_text(name)
         assert text.startswith("---\n"), f"{name} missing frontmatter"
         fm = load_skill_frontmatter(name)
@@ -56,7 +58,7 @@ def test_each_skill_loads_with_frontmatter_and_disclaimer():
 
 def test_skill_references_general_playbook():
     """Each generic skill points at the general playbook for citation + sanity rules."""
-    for name in SKILL_NAMES:
+    for name in internal_skill_names():
         body = load_skill_body(name).lower()
         assert "general_playbook" in body or "playbook/general_playbook" in body, (
             f"{name} should point at /playbook/general_playbook.md"
@@ -64,10 +66,20 @@ def test_skill_references_general_playbook():
 
 
 def test_list_skills_returns_dicts():
+    """`list_skills` reports every discovered skill, in-tree and external.
+
+    It is the catalogue a caller enumerates, so it is a superset of the
+    shipped legal skills rather than equal to them, and it says which entries
+    came from outside the package.
+    """
     items = list_skills()
-    assert len(items) == len(_EXPECTED_SKILLS)
+    names = {item["name"] for item in items}
+    assert _EXPECTED_SKILLS <= names
     for item in items:
         assert "name" in item and "description" in item
+        assert "external" in item
+    internal = {item["name"] for item in items if not item["external"]}
+    assert internal == _EXPECTED_SKILLS
 
 
 def test_playbook_loads():

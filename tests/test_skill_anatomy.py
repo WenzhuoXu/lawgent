@@ -8,7 +8,12 @@ from pathlib import Path
 import pytest
 import yaml
 
-from legal_helper.skills import SKILL_NAMES, skill_path
+from legal_helper.skills import internal_skill_names, skill_path
+
+# The anatomy contract governs the legal skills this package ships, not an
+# external procedural skill discovered from a configured root (ppt-master
+# carries its own conventions and is not ours to reshape).
+SKILL_NAMES = internal_skill_names()
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)

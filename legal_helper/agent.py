@@ -684,6 +684,94 @@ class OrchestratorAgent:
             agent_name_var.reset(token_agent)
 
 
+def _external_skill_prompt(skill_name: str, outputs_dir: Path) -> str:
+    """Host contract for an external procedural skill.
+
+    An in-tree legal skill is handed methodology because methodology is its
+    content. An external skill is a *procedure*: it already carries its own
+    workflow, reference tree, artifact contracts and gate scripts, and what it
+    needs from a host is the three things a host alone knows — where the skill
+    lives on disk, which calls stand in for reading/writing/executing, and
+    which of its interactive assumptions do not hold here.
+
+    Getting this wrong is the whole failure mode. Such a skill typically
+    opens with a mandatory load order keyed to an absolute directory it
+    expects the host to supply, and instructs the agent never to guess it. So
+    it is stated once, exactly, along with the prefix-rewriting rule its own
+    documentation depends on.
+    """
+    from .skills import load_skill_body, skill_dir
+
+    root = skill_dir(skill_name)
+    try:
+        body = load_skill_body(skill_name).strip()
+    except Exception:  # noqa: BLE001 — a missing body never breaks a run
+        body = ""
+
+    contract = f"""# Host Runtime Contract
+
+You are driving the external skill **{skill_name}**, whose own instructions
+follow. They are authoritative for *what* to do; this section is
+authoritative for *how* to act in this harness.
+
+## Paths
+
+- `SKILL_DIR` is exactly: `{root}`
+- Expand every `${{SKILL_DIR}}` to that path, and rewrite any documented
+  `skills/{skill_name}/...` prefix to `{root}/...`.
+- Never `cd`, never rely on a working directory, never search for the skill
+  directory, and never guess a path. Use `list_skill_dir` when you need to
+  see what a subdirectory actually contains.
+
+## Calls that stand in for the usual ones
+
+| The skill says | Use |
+|---|---|
+| read a file (any absolute path) | `read_document(path=...)` |
+| list a directory inside the skill | `list_skill_dir(skill="{skill_name}", subpath="...")` |
+| write/author a text file (.svg, .md, .json, .css) | `write_text_file(path=..., content=...)` |
+| run one of its scripts | `run_skill_script(skill="{skill_name}", script="scripts/x.py", args=[...])` |
+| look at a rendered page | `render_pptx_slides` / `render_pdf_pages` / `view_image` |
+
+`run_skill_script` returns JSON with `exit_code`, `stdout` and `stderr`. A
+non-zero `exit_code` is the script's verdict, not a tool error: read it and
+act on it. That is how the skill's own gates reach you, so run them where its
+procedure says to and treat a failure as blocking exactly as it instructs.
+
+## Where work goes
+
+`write_text_file` writes only under `{outputs_dir}`. Put the project under a
+named subdirectory of it — `<project-name>/` — and pass that absolute project
+path to the skill's scripts. Paths you pass to scripts must be absolute.
+
+## Interactive assumptions that do not hold here
+
+- **Gates are delegated.** There is no interactive channel in this run, so
+  you cannot wait for a user confirmation. Where the procedure defines a
+  blocking user gate, act under its own explicit-delegation provision: make
+  the decision yourself, record it in the artifact the gate governs, proceed,
+  and state in your final answer what you decided and why. Never fabricate a
+  user's submitted values or invent a confirmation receipt.
+- **No background processes.** `run_skill_script` captures output until the
+  process exits, so anything long-running (a preview or editor server) would
+  simply hang until its timeout. Do not start one. Where the procedure allows
+  recording that run instructions forbade starting it, do that and continue.
+- **Nothing is skipped for lack of a gate.** Delegation replaces who decides,
+  not whether the work is done. Run every deterministic check the procedure
+  requires and satisfy it before you report a deliverable as finished.
+
+## Reporting
+
+Finish with the absolute path of every artifact you produced, the verdict of
+the last gate you ran, and anything you decided under delegation. If you
+could not finish, say exactly which step stopped you and what its output was
+— do not present a partial deliverable as complete.
+"""
+    if body:
+        contract += f"\n---\n\n# {skill_name} — SKILL.md\n\n{body}\n"
+    return contract
+
+
 class SkillAgent:
     """Sub-agent: forked context, compact manifest + lazy skill resources."""
 
@@ -693,7 +781,14 @@ class SkillAgent:
         provider: Provider,
         settings: Optional[Settings] = None,
     ) -> None:
-        if skill_name not in SKILL_NAMES:
+        # Validate against live discovery, not the import-time snapshot in
+        # SKILL_NAMES: every other path here resolves a skill by scanning the
+        # roots, so a snapshot check rejects a skill the rest of the harness
+        # can already find (a root configured after import, or one installed
+        # while the process is up).
+        from .skills import discover_skills
+
+        if skill_name not in discover_skills():
             raise ValueError(f"Unknown skill: {skill_name}")
         setup_logging()
         self.skill_name = skill_name
@@ -704,6 +799,15 @@ class SkillAgent:
         return _load_active_packs(self.settings)
 
     def _system_prompt(self) -> str:
+        # An external skill is a procedure, not a methodology: hand it the
+        # host contract and its own instructions, and none of the PRC
+        # playbook / citation-audit framing, which would be noise at best and
+        # a conflicting instruction at worst.
+        from .skills import is_external_skill
+
+        if is_external_skill(self.skill_name):
+            return _external_skill_prompt(self.skill_name, self.settings.outputs_dir)
+
         manifest = skill_manifest(self.skill_name)
         active_packs = self._active_packs()
         pack_names = ", ".join(p.name for p in active_packs) or "(none)"
@@ -801,6 +905,17 @@ class SkillAgent:
         )
         return prompt
 
+    def _max_iterations(self) -> int:
+        """Tool-loop ceiling: a procedure needs a different budget than research.
+
+        Both the run path and the stream path read this, so they stay in step.
+        """
+        from .skills import is_external_skill
+
+        if is_external_skill(self.skill_name):
+            return self.settings.external_skill_max_iterations
+        return self.settings.sub_agent_max_iterations
+
     def _tools(self, task: str = "") -> list:
         tools = skill_tools_for_task(
             self.skill_name,
@@ -837,7 +952,7 @@ class SkillAgent:
                 system=self._system_prompt(),
                 messages=[{"role": "user", "content": user_content}],
                 tools=self._tools(task),
-                max_iterations=self.settings.sub_agent_max_iterations,
+                max_iterations=self._max_iterations(),
             )
             text = result.text or ""
             log_workflow_event(
@@ -887,7 +1002,7 @@ class SkillAgent:
                 system=self._system_prompt(),
                 messages=[{"role": "user", "content": user_content}],
                 tools=self._tools(task),
-                max_iterations=self.settings.sub_agent_max_iterations,
+                max_iterations=self._max_iterations(),
             ):
                 if ev.kind == "delta":
                     text_chunks.append(ev.data.get("text", ""))
