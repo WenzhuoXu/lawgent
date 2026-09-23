@@ -253,10 +253,11 @@ explicitly asks for restructuring.
   shared with the output) and the provider's pricing cliff
   (`cost_ceiling_for` = 272K − 13K buffer for OpenAI, None for Anthropic). The
   ceiling is then divided: ~21K measured fixed overhead (system prompt + tool
-  schemas), 30% to the transcript digest (`DIGEST_SHARE_OF_TURN_CEILING`), 45%
-  to tool results (`tool_budget.TURN_RESULT_SHARE`), the rest for the user's
-  message. **If you change one share, re-check that the sum still fits** — the
-  arithmetic is the whole point. A fraction of the window alone put the trigger
+  schemas), 30% to the transcript digest (`DIGEST_SHARE_OF_TURN_CEILING`), the
+  rest for tool results and the user's message — tool results get no fixed
+  share, because in-turn clearing (below) keeps them under the ceiling. **If you
+  change the digest share, re-check that the sum still fits** — the arithmetic
+  is the whole point. A fraction of the window alone put the trigger
   at 750K on a 1M model while OpenAI started surcharging at 272K, and that gap
   was ~55% of the 2026-09 bill.
 - **Compaction is tier-aware, not a constant.** `context.compaction_threshold_for`
@@ -290,10 +291,24 @@ explicitly asks for restructuring.
   un-budgeted. Keep such payloads small, structured and self-capping;
   `quality.QualityReport.to_payload` enforces its own character ceiling and
   groups repeated checks rather than listing them per slide.
-- **A turn's cumulative tool output is capped too** (`turn_result_budget`,
-  entered by both providers around their tool loops). Past the cap a tool
-  returns a notice telling the model to answer from what it has, rather than
-  the loop being cut — every `tool_use` still gets a well-formed result.
+- **Task completion outranks budget: nothing caps a turn's work.** Every
+  `*_max_iterations` defaults to 0 (= no round limit; a positive value is still
+  honoured), and the cumulative `turn_result_budget` is deleted. Both used to
+  stop work mid-task — the orchestrator's 8 rounds cut a workbook reshape at
+  ~33 calls with no answer written. **Do not reintroduce a cap on rounds or on
+  cumulative tool output**; solve growth with context management instead.
+- **Long loops are kept under the ceiling by clearing, not stopping**
+  (`legal_helper/turn_compaction.py`, both providers). Before each request the
+  projected input (provider's count for the last request + results appended
+  since) is checked against `turn_input_ceiling_for`; past it, the oldest tool
+  results are saved to `state/tool_results/` and replaced by a stub naming the
+  path for `read_document`, down to `CLEAR_TARGET_SHARE` (50%) of the ceiling
+  so the cache-busting pass is rare. Lossless by construction: a result that
+  cannot be saved is not cleared. The latest round is never touched;
+  `EXEMPT_TOOLS` deliverables go last. Anthropic hooks the SDK runner's
+  `_handle_request`; OpenAI keeps a local mirror of the conversation and, on a
+  clearing pass only, re-sends it (output items as `item_reference`) instead of
+  chaining `previous_response_id`, then resumes chaining.
 - **Model windows live in `context._WINDOWS`.** A model missing from that dict
   silently gets `_DEFAULT_WINDOW` (200K) — which is how a 1M-window model ends
   up compacting at ~120K. **Add every new model ID here, to
@@ -409,14 +424,12 @@ explicitly asks for restructuring.
   and the decision is reported rather than fabricated; and there are no
   background processes, so a preview server is never started. Handing it the
   PRC playbook would be a conflicting instruction, not extra context.
-- **A procedure needs its own tool-loop budget.**
-  `external_skill_max_iterations` (default 80) versus
-  `sub_agent_max_iterations` (8). The 8 was trimmed for latency and cost on a
-  specialist that fetches a few sources and writes prose; a procedure spends
-  iterations reading its own workflow, authoring one artifact per page,
-  running its gate, repairing, then exporting, and **cannot reach its export
-  step in 8**. Under-budgeting it does not make it cheaper, it makes it fail
-  after paying for most of the work.
+- **A procedure must never be round-capped.** It spends rounds reading its own
+  workflow, authoring one artifact per page, running its gate, repairing, then
+  exporting; the old 8-round research cap could not reach its export step at
+  all. `external_skill_max_iterations` and `sub_agent_max_iterations` both
+  default to 0 (unlimited) — under-budgeting a loop does not make it cheaper,
+  it makes it fail after paying for most of the work.
 - **The in-tree authoring contract does not apply to external skills.** Under
   100 lines, a not-legal-advice line, a reference to the general playbook —
   those are contracts about methodology we maintain. Contract tests iterate
@@ -514,10 +527,10 @@ python -c "from legal_helper.skills import list_skills; print([s['name'] for s i
 
 - `python -m pytest -q tests/test_skill_anatomy.py` — anatomy contract: each SKILL.md <100 lines, frontmatter valid, referenced files exist.
 - `python -m pytest -q tests/test_provider_parity.py` — Anthropic and OpenAI see identical tool surface and equivalent results.
-- `python -m pytest -q tests/test_tool_budget.py tests/test_context.py` — the token budgets below.
+- `python -m pytest -q tests/test_tool_budget.py tests/test_context.py tests/test_turn_compaction.py` — per-result budgets, the turn ceiling, and in-turn clearing (no caps).
 - `python -m pytest -q tests/test_verified_synthesis.py tests/test_runs.py` — audit-then-reveal, the clarify gates, and the durable run record.
 - `python -m pytest -q tests/test_graph_layout.py tests/test_document_quality.py tests/test_docx_layout.py` — diagram geometry, the output linter, and the DOCX table/indent contract.
 - `python -m pytest -q tests/test_skill_runtime.py` — skill discovery and, more importantly, the containment of `write_text_file` / `run_skill_script`: escapes out of `outputs/` and out of a skill directory are asserted, not assumed.
-- The baseline is **3 failed / 616 passed / 2 skipped**; the three failures are
+- The baseline is **3 failed / 625 passed / 2 skipped**; the three failures are
   `tests/test_caac_local_connector.py` (staged CAAC corpus absent). Anything else is a regression.
 - Live smoke once per provider per major change: `MODEL_PROVIDER=anthropic` then `MODEL_PROVIDER=openai`.

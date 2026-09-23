@@ -31,11 +31,9 @@ Two exemption rules matter more than the numbers:
 from __future__ import annotations
 
 import hashlib
-from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Literal, Optional
+from typing import Literal, Optional
 
 from .context import estimate_tokens, truncate_to_tokens
 
@@ -59,8 +57,9 @@ class BudgetedResult:
     applied: bool = False
 
 
-# Generous enough that an ordinary tool never notices it, low enough that a
-# 12-iteration tool loop cannot reach the long-context threshold on its own.
+# Generous enough that an ordinary tool never notices it. How many such results
+# a loop may accumulate is not capped: `turn_compaction` clears old ones when
+# the transcript nears the turn ceiling.
 DEFAULT_BUDGET = ResultBudget(max_tokens=16_000, strategy="truncate", preview="head")
 
 # Result *is* the deliverable, or is a structured payload another layer parses.
@@ -159,76 +158,6 @@ def _spill(tool_name: str, text: str) -> Optional[Path]:
         return None
 
 
-# Cumulative share of a turn's input ceiling that tool results may occupy. The
-# rest is the ~21K of measured fixed overhead (system prompt + tool schemas),
-# the transcript digest, and the user's own message; see the split documented on
-# ``context.DIGEST_SHARE_OF_TURN_CEILING``. Tool results are the term that grows
-# without bound during a research loop, so this is the one that needs a ceiling.
-TURN_RESULT_SHARE = 0.45
-
-TURN_BUDGET_EXHAUSTED_NOTICE = (
-    "[Tool-result budget for this turn is exhausted (~{spent:,} of ~{ceiling:,} tokens "
-    "already returned by tools). No further tool output will be delivered this turn. "
-    "Write the complete answer now from what you already have, and say plainly which "
-    "points you could not verify.]"
-)
-
-
-@dataclass
-class _TurnBudget:
-    ceiling: int
-    spent: int = 0
-
-
-_turn_budget: ContextVar[Optional[_TurnBudget]] = ContextVar(
-    "legal_helper_turn_tool_budget", default=None
-)
-
-
-@contextmanager
-def turn_result_budget(settings: object) -> Iterator[Optional[_TurnBudget]]:
-    """Bound the total tool-result tokens one provider turn may return.
-
-    Entered by both providers around their tool loops, so the limit is the same
-    whichever one serves the turn. Each sub-agent thread inherits its own copy
-    of the context, so sub-agents get their own budget rather than racing for a
-    shared one.
-    """
-    from .context import turn_input_ceiling_for
-
-    try:
-        ceiling = max(4_000, int(TURN_RESULT_SHARE * turn_input_ceiling_for(settings)))
-    except Exception:  # noqa: BLE001 — never let accounting break a turn
-        yield None
-        return
-    budget = _TurnBudget(ceiling=ceiling)
-    token = _turn_budget.set(budget)
-    try:
-        yield budget
-    finally:
-        _turn_budget.reset(token)
-
-
-def _turn_budget_exhausted() -> Optional[tuple[int, int]]:
-    """``(spent, ceiling)`` when this turn has no result budget left."""
-    budget = _turn_budget.get()
-    if budget is None or budget.spent < budget.ceiling:
-        return None
-    return (budget.spent, budget.ceiling)
-
-
-def _charge_turn_budget(tokens: int) -> None:
-    budget = _turn_budget.get()
-    if budget is not None:
-        budget.spent += max(0, int(tokens))
-
-
-def turn_budget_state() -> Optional[tuple[int, int]]:
-    """``(spent, ceiling)`` for the active turn, or None outside one."""
-    budget = _turn_budget.get()
-    return None if budget is None else (budget.spent, budget.ceiling)
-
-
 def apply_result_budget(tool_name: str, text: str) -> BudgetedResult:
     """Cut ``text`` down to the budget for ``tool_name``.
 
@@ -243,24 +172,7 @@ def apply_result_budget(tool_name: str, text: str) -> BudgetedResult:
     if budget is None:
         return BudgetedResult(text=text, original_tokens=original, kept_tokens=original)
 
-    exhausted = _turn_budget_exhausted()
-    if exhausted is not None:
-        spill_path = _spill(tool_name, text)
-        notice = TURN_BUDGET_EXHAUSTED_NOTICE.format(
-            spent=exhausted[0], ceiling=exhausted[1]
-        )
-        if spill_path is not None:
-            notice += f" The full result of this call is saved at {spill_path}."
-        return BudgetedResult(
-            text=notice,
-            original_tokens=original,
-            kept_tokens=estimate_tokens(notice),
-            spill_path=spill_path,
-            applied=True,
-        )
-
     if original <= budget.max_tokens:
-        _charge_turn_budget(original)
         return BudgetedResult(text=text, original_tokens=original, kept_tokens=original)
 
     spill_path = _spill(tool_name, text) if budget.strategy == "artifact" else None
@@ -280,7 +192,6 @@ def apply_result_budget(tool_name: str, text: str) -> BudgetedResult:
         )
     out = window + notice
     kept = estimate_tokens(out)
-    _charge_turn_budget(kept)
     return BudgetedResult(
         text=out,
         original_tokens=original,
@@ -316,7 +227,4 @@ __all__ = [
     "budget_for",
     "apply_result_budget",
     "budget_log_fields",
-    "turn_result_budget",
-    "turn_budget_state",
-    "TURN_RESULT_SHARE",
 ]

@@ -101,18 +101,19 @@ class Settings(BaseModel):
     openai_enable_file_search: bool = False
     openai_file_search_vector_store_ids: list[str] = Field(default_factory=list)
 
-    max_iterations: int = 12
-    parent_max_iterations: int = 8
-    sub_agent_max_iterations: int = 8
-    # An external procedural skill is not a research dispatch, and the budget
-    # above is tuned for one: 8 iterations was trimmed for latency and cost on
-    # a specialist that fetches a few sources and writes prose. A multi-step
-    # authoring procedure spends its iterations differently — reading its own
-    # workflow and references, authoring one artifact per page, running its
-    # gate, repairing what the gate returns, then exporting — and simply
-    # cannot reach its own export step in 8. Under-budgeting it does not make
-    # it cheaper, it makes it fail after paying for most of the work.
-    external_skill_max_iterations: int = 80
+    # Tool-loop round limits. 0 means none: a turn runs until the model stops
+    # asking for tools. Caps used to sit here (12 / 8 / 8 / 80) and every one of
+    # them traded task completion for cost — the orchestrator stopped a
+    # workbook reshape at ~33 calls with the edit half done and no answer
+    # written. What grows during a long loop is the tool results already in the
+    # transcript, and `turn_compaction` clears the old ones (saved to disk,
+    # reopenable) when a request nears the turn ceiling, so a long loop stays
+    # under the pricing cliff without being cut short. A positive value is
+    # still honoured for anyone who wants a hard stop.
+    max_iterations: int = 0
+    parent_max_iterations: int = 0
+    sub_agent_max_iterations: int = 0
+    external_skill_max_iterations: int = 0
     max_concurrent_agents: int | Literal["auto"] = "auto"
     # Per-turn within-chat context digest (rolling summary + recent transcript)
     # fed to the planner/answer. The effective budget is
@@ -275,13 +276,17 @@ def load_settings(*, refresh: bool = False) -> Settings:
             _list_env("OPENAI_FILE_SEARCH_VECTOR_STORE_IDS")
             or list(cfg.get("openai_file_search_vector_store_ids", []) or [])
         ),
-        max_iterations=int(os.getenv("LEGAL_HELPER_MAX_ITERATIONS", cfg.get("max_iterations", 12))),
-        parent_max_iterations=int(cfg.get("parent_max_iterations", 8)),
-        sub_agent_max_iterations=int(cfg.get("sub_agent_max_iterations", 12)),
+        max_iterations=int(os.getenv("LEGAL_HELPER_MAX_ITERATIONS", cfg.get("max_iterations", 0))),
+        parent_max_iterations=int(
+            os.getenv("LEGAL_HELPER_PARENT_MAX_ITERATIONS", cfg.get("parent_max_iterations", 0))
+        ),
+        sub_agent_max_iterations=int(
+            os.getenv("LEGAL_HELPER_SUB_AGENT_MAX_ITERATIONS", cfg.get("sub_agent_max_iterations", 0))
+        ),
         external_skill_max_iterations=int(
             os.getenv(
                 "LEGAL_HELPER_EXTERNAL_SKILL_MAX_ITERATIONS",
-                cfg.get("external_skill_max_iterations", 80),
+                cfg.get("external_skill_max_iterations", 0),
             )
         ),
         max_concurrent_agents=_max_concurrent_agents_value(

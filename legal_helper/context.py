@@ -74,9 +74,10 @@ COMPACTION_BUFFER_TOKENS = 13_000
 # agent's fixed overhead is ~21K tokens (5.6K system prompt + 15.4K of schemas
 # for 58 tools) and the orchestrator's is ~15K. Against a 259K ceiling that
 # leaves ~238K, and the split below reserves ~78K for the transcript digest and
-# ~117K for tool results (`tool_budget.TURN_RESULT_SHARE`), keeping ~40K for the
-# user's message and attachments. Most of a research turn's input is tool
-# results, not transcript, so the digest takes the smaller share.
+# the rest for tool results and the user's message. Tool results are not given
+# a fixed share: `turn_compaction` clears the oldest ones when a request nears
+# this ceiling. Most of a research turn's input is tool results, not
+# transcript, so the digest takes the smaller share.
 DIGEST_SHARE_OF_TURN_CEILING = 0.3
 # Per-message cap inside the digest, as a share of the budget: one message may
 # never eat more than this fraction, so a single giant paste cannot crowd out the
@@ -142,7 +143,7 @@ def turn_input_ceiling_for(settings: "Settings") -> int:
 
     The smaller of "a tier-appropriate share of the input window" and "below
     the provider's pricing cliff". This is the budget every other limit is
-    carved out of, and the ceiling the tool loop stops at.
+    carved out of, and the level at which the tool loop clears old results.
     """
     effective = effective_context_window_for(settings)
     ceiling = max(1_000, int(compaction_threshold_for(settings) * effective))

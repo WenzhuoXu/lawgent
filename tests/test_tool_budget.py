@@ -3,22 +3,19 @@
 The 2026-09 ledger: 40 of 667 requests crossed OpenAI's 272K long-context
 threshold at a mean input of 646K tokens and carried ~55% of the month's spend.
 The `[:1200]` slices in both providers were log previews, not budgets. These
-tests pin the three limits that replaced them: a per-tool result budget, a
-per-turn cumulative ceiling, and the exemptions that keep deliverables whole.
+tests pin what replaced them: a per-tool result budget and the exemptions that
+keep deliverables whole. There is deliberately no per-turn cumulative ceiling —
+it stopped work mid-task; `test_turn_compaction.py` covers what replaced it.
 """
 
 from __future__ import annotations
 
-from legal_helper.config import current_settings
 from legal_helper.context import estimate_tokens
 from legal_helper.tool_budget import (
     DEFAULT_BUDGET,
-    TURN_RESULT_SHARE,
     apply_result_budget,
     budget_for,
     budget_log_fields,
-    turn_budget_state,
-    turn_result_budget,
 )
 
 # CJK on purpose: a Chinese statute body is ~1 token per character, so it hits
@@ -71,45 +68,13 @@ def test_a_result_inside_its_budget_is_returned_untouched():
     assert result.spill_path is None
 
 
-def test_the_turn_ceiling_stops_further_tool_output():
-    settings = current_settings()
-    with turn_result_budget(settings):
-        state = turn_budget_state()
-        assert state is not None
-        spent, ceiling = state
-        assert spent == 0
-        assert ceiling == int(TURN_RESULT_SHARE * _turn_ceiling(settings))
-
-        exhausted_at = None
-        for call in range(1, 60):
-            result = apply_result_budget("legal_source_search", _STATUTE)
-            if "exhausted" in result.text:
-                exhausted_at = call
-                break
-        assert exhausted_at is not None, "the turn ceiling never engaged"
-        # The notice must tell the model to answer rather than retry.
-        assert "Write the complete answer now" in result.text
-        # Evidence is preserved even when the budget is spent.
-        assert result.spill_path is not None and result.spill_path.is_file()
-        spent_after, _ = turn_budget_state()
-        assert spent_after >= ceiling
-
-
-def test_the_turn_budget_does_not_leak_between_turns():
-    settings = current_settings()
-    with turn_result_budget(settings):
-        apply_result_budget("legal_source_search", _STATUTE)
-        assert turn_budget_state()[0] > 0
-    assert turn_budget_state() is None
-    with turn_result_budget(settings):
-        assert turn_budget_state()[0] == 0
-
-
-def test_no_turn_budget_means_per_call_limits_still_apply():
-    """A provider call outside a turn context still gets per-tool budgets."""
-    assert turn_budget_state() is None
-    result = apply_result_budget("legal_source_search", _STATUTE)
-    assert result.applied
+def test_many_results_are_never_replaced_by_a_stop_notice():
+    """No cumulative cap: the 60th result is budgeted like the first."""
+    for _ in range(60):
+        result = apply_result_budget("legal_source_search", _STATUTE)
+        assert result.applied
+        assert "exhausted" not in result.text
+        assert result.text.startswith(_STATUTE[:20])
 
 
 def test_budget_log_fields_are_empty_when_nothing_was_cut():
@@ -126,12 +91,6 @@ def test_budget_log_fields_are_empty_when_nothing_was_cut():
 def test_non_string_and_empty_results_are_safe():
     assert apply_result_budget("legal_source_search", "").text == ""
     assert apply_result_budget("legal_source_search", None).text is None  # type: ignore[arg-type]
-
-
-def _turn_ceiling(settings) -> int:
-    from legal_helper.context import turn_input_ceiling_for
-
-    return turn_input_ceiling_for(settings)
 
 
 def test_estimate_is_the_meter_not_bytes():

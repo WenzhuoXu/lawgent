@@ -288,8 +288,10 @@ def test_an_auditing_skill_never_gets_the_authoring_runtime():
     assert "run_skill_script" not in names
 
 
-def test_a_procedure_gets_a_larger_tool_loop_than_a_research_dispatch(proc_skill):
-    """8 iterations cannot reach a multi-step procedure's export step."""
+def test_no_skill_tool_loop_is_capped_by_default(proc_skill):
+    """A capped loop stops a procedure short of its export step; none is capped."""
+    from legal_helper.turn_compaction import iteration_limit
+
     from legal_helper.agent import SkillAgent
 
     settings = load_settings(refresh=True)
@@ -303,4 +305,5 @@ def test_a_procedure_gets_a_larger_tool_loop_than_a_research_dispatch(proc_skill
     assert SkillAgent("brief", _P(), settings)._max_iterations() == (
         settings.sub_agent_max_iterations
     )
-    assert settings.external_skill_max_iterations > settings.sub_agent_max_iterations
+    for value in (settings.external_skill_max_iterations, settings.sub_agent_max_iterations):
+        assert iteration_limit(value, settings) is None

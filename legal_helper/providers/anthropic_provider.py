@@ -16,7 +16,8 @@ from anthropic.lib.tools._beta_functions import (
 from ..attachments import needs_anthropic_files_beta
 from ..config import Settings
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
-from ..tool_budget import apply_result_budget, budget_log_fields, turn_result_budget
+from ..tool_budget import apply_result_budget, budget_log_fields
+from ..turn_compaction import InTurnContext, install_on_anthropic_runner, iteration_limit
 from ..tools.multimodal import split_inline_images, to_anthropic_tool_content
 from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
@@ -206,9 +207,10 @@ def _instrument_local_tools(tools: list[Any], *, provider: str, model: str) -> l
     return out
 
 
-# Parity with the OpenAI provider: when the tool loop is cut off by
-# `max_iterations` the model has the tool results but never got a turn in
-# which tools were unavailable, so the answer can come back empty.
+# Parity with the OpenAI provider: when a caller sets a positive
+# `max_iterations` (the defaults are unlimited) and the loop is cut off by it,
+# the model has the tool results but never got a turn in which tools were
+# unavailable, so the answer can come back empty.
 CEILING_SYNTHESIS_NUDGE = (
     "You have reached this turn's tool-call limit, so no further tools are "
     "available. Using only the information already gathered above, write the "
@@ -433,7 +435,7 @@ class AnthropicProvider:
                 _instrument_local_tools(tools_list, provider=self.name, model=self.model)
             ),
             system=_cached_system(system),
-            max_iterations=max_iterations,
+            max_iterations=iteration_limit(max_iterations, self.settings),
         )
         ctx_mgmt = _context_management_kwarg()
         if ctx_mgmt is not None:
@@ -459,8 +461,10 @@ class AnthropicProvider:
         tool_calls: list[ToolCallRecord] = []
         hosted_calls: list[ToolCallRecord] = []
         usage: dict[str, Any] = {}
-        with TurnTimer() as t, turn_result_budget(self.settings):
+        in_turn = InTurnContext.for_settings(self.settings, provider=self.name, model=self.model)
+        with TurnTimer() as t:
             runner = self.client.beta.messages.tool_runner(**kwargs)
+            install_on_anthropic_runner(runner, in_turn)
             # Iterate per model turn: `until_done()` alone exposes only the
             # final message, which undercounts usage on multi-tool turns and
             # drops every intermediate turn's tool_use blocks.
@@ -468,6 +472,8 @@ class AnthropicProvider:
             for message in runner:
                 final = message
                 _merge_usage(usage, getattr(message, "usage", None))
+                if in_turn is not None:
+                    in_turn.observe_anthropic(getattr(message, "usage", None))
                 _collect_tool_blocks(
                     message, tool_calls, hosted_calls, provider=self.name, model=self.model
                 )
@@ -586,7 +592,7 @@ class AnthropicProvider:
                 _instrument_local_tools(tools_list, provider=self.name, model=self.model)
             ),
             system=_cached_system(system),
-            max_iterations=max_iterations or self.settings.max_iterations,
+            max_iterations=iteration_limit(max_iterations, self.settings),
             stream=True,
         )
         ctx_mgmt = _context_management_kwarg()
@@ -611,11 +617,13 @@ class AnthropicProvider:
             },
         )
         runner = self.client.beta.messages.tool_runner(**kwargs)
+        in_turn = InTurnContext.for_settings(self.settings, provider=self.name, model=self.model)
+        install_on_anthropic_runner(runner, in_turn)
         final_text_chunks: list[str] = []
         tool_calls: list[ToolCallRecord] = []
         hosted_calls: list[ToolCallRecord] = []
         usage: dict[str, Any] = {}
-        with TurnTimer() as t, turn_result_budget(self.settings):
+        with TurnTimer() as t:
             # Anthropic's streaming tool runner yields a BetaMessageStream for each
             # model turn. The stream itself yields content_block_* events.
             for stream in runner:
@@ -688,7 +696,10 @@ class AnthropicProvider:
                 get_final = getattr(stream, "get_final_message", None)
                 if callable(get_final):
                     try:
-                        _merge_usage(usage, getattr(get_final(), "usage", None))
+                        turn_usage = getattr(get_final(), "usage", None)
+                        _merge_usage(usage, turn_usage)
+                        if in_turn is not None:
+                            in_turn.observe_anthropic(turn_usage)
                     except Exception:
                         pass
 
@@ -700,7 +711,7 @@ class AnthropicProvider:
                 {
                     "provider": self.name,
                     "model": self.model,
-                    "max_iterations": max_iterations or self.settings.max_iterations,
+                    "max_iterations": iteration_limit(max_iterations, self.settings),
                     "had_text": bool(text.strip()),
                     "stream": True,
                 },

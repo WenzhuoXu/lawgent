@@ -325,10 +325,9 @@ Such a skill is given a **host runtime contract** instead of legal methodology: 
 `SKILL_DIR`, the call mapping, and the two assumptions that fail here — there is no
 interactive channel, so blocking user gates run under the skill's own explicit-delegation
 provision and the decision is reported; and there are no background processes, so a preview
-server is never started. It also gets its own tool-loop budget
-(`external_skill_max_iterations`, default 80): the research budget of 8 is tuned for a
-specialist that fetches a few sources and writes prose, and cannot reach a procedure's export
-step at all.
+server is never started. Like every tool loop here it has no round limit
+(`external_skill_max_iterations`, default 0 = unlimited): a capped loop cannot reach a
+procedure's export step at all.
 
 > **Trust boundary.** A script under a configured root runs with the harness's privileges —
 > that is what "drive this skill" means. Roots are operator-configured; never point one at a
@@ -526,9 +525,11 @@ tokens rather than bytes — the same 50 KB is ~12 K tokens of English and ~50 K
 Over-budget results either truncate with the loss stated, or spill to `state/tool_results/`
 and hand back a path the model can page through with `read_document(path=…, offset=…,
 limit=…)`, so the evidence stays reachable without being resident. A 245 K-token statute
-becomes 12 K in context and one call away. A turn's cumulative tool output is capped as
-well; past the cap a tool returns a notice to answer from what is already gathered, so every
-tool call still gets a well-formed result. Two things are never cut: anything carrying inline
+becomes 12 K in context and one call away. A turn's *cumulative* tool output is not capped
+and neither is its number of rounds — task completion comes first. When a long loop nears
+the turn's input ceiling, the oldest tool results are saved to `state/tool_results/` and
+replaced in context by a stub naming the file (`turn_compaction.py`), so the loop keeps going
+under the pricing cliff and nothing is lost. Two things are never cut: anything carrying inline
 images, and anything that *is* the deliverable — a sub-agent's finished answer, a cite-check
 report — because truncating those shortens the memo instead of the evidence.
 
@@ -621,9 +622,8 @@ active_domain_packs: []           # e.g. [aviation]
 
 anthropic_model: claude-opus-5-5
 openai_model: gpt-6-sol           # always a named variant; there is no bare "gpt-6" alias
-max_iterations: 12                # tool-loop ceiling per agent
-external_skill_max_iterations: 80 # ceiling for an external procedural skill;
-                                  # a procedure cannot reach its export step in 8
+max_iterations: 0                 # tool-loop round limit; 0 = none (run until done)
+external_skill_max_iterations: 0  # same, for external procedural skills
 max_concurrent_agents: auto
 max_tokens: 32000                 # per-turn output ceiling
 chat_context_token_budget: 16000

@@ -9,13 +9,15 @@ from openai import OpenAI
 
 from ..config import Settings
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
-from ..tool_budget import apply_result_budget, budget_log_fields, turn_result_budget
+from ..tool_budget import apply_result_budget, budget_log_fields
+from ..turn_compaction import InTurnContext, iteration_limit
 from ..tools.multimodal import split_inline_images, to_openai_tool_content
 from ..usage import record_usage
 from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
 
 
-# Sent when the tool loop is cut off by `max_iterations`. The tool results are
+# Sent when the tool loop is cut off by a positive `max_iterations` (the
+# defaults are unlimited; a caller may still set one). The tool results are
 # already in the conversation, so the model has everything it needs; what it
 # lacks is a turn in which tools are not an option. Without this the turn
 # shipped an empty assistant message — 9 of them in a single month, every one
@@ -45,6 +47,23 @@ def _accumulate_usage(usage_total: dict[str, Any], u: Any) -> None:
     cached = getattr(details, "cached_tokens", None) if details is not None else None
     if cached:
         usage_total["cached_input_tokens"] = usage_total.get("cached_input_tokens", 0) + cached
+
+
+def _output_refs(resp: Any) -> list[dict[str, Any]]:
+    """A response's output items as references into the stored conversation.
+
+    Used only when an in-turn clearing pass re-sends the history instead of
+    chaining on ``previous_response_id``: referencing by id keeps reasoning
+    items intact without re-serialising them.
+    """
+    refs: list[dict[str, Any]] = []
+    for item in getattr(resp, "output", None) or []:
+        item_id = getattr(item, "id", None)
+        if item_id:
+            refs.append({"type": "item_reference", "id": item_id})
+        elif hasattr(item, "model_dump"):
+            refs.append(item.model_dump(exclude_none=True))
+    return refs
 
 
 def _tool_to_openai(tool: Any) -> dict[str, Any]:
@@ -237,6 +256,12 @@ class OpenAIProvider:
 
         iterations = 0
         ceiling_hit = False
+        limit = iteration_limit(max_iterations, self.settings)
+        in_turn = InTurnContext.for_settings(self.settings, provider=self.name, model=self.model)
+        # Local mirror of the server-side conversation, so a clearing pass can
+        # re-send it with old tool outputs stubbed out.
+        history: list[dict[str, Any]] = list(input_items)
+        call_names: dict[str, str] = {}
         log_workflow_event(
             "provider_turn_started",
             {
@@ -246,18 +271,22 @@ class OpenAIProvider:
                 "reasoning_effort": self.reasoning_effort,
             },
         )
-        with TurnTimer() as t, turn_result_budget(self.settings):
-            while iterations < max_iterations:
+        with TurnTimer() as t:
+            while limit is None or iterations < limit:
                 iterations += 1
                 kwargs = {k: v for k, v in kwargs_base.items() if v is not None}
-                if previous_response_id is None:
-                    kwargs["input"] = input_items
-                else:
-                    kwargs["previous_response_id"] = previous_response_id
-                    kwargs["input"] = input_items
+                kwargs["input"] = input_items
+                if previous_response_id is not None:
+                    if in_turn is not None and in_turn.before_openai_request(history, call_names):
+                        kwargs["input"] = history
+                    else:
+                        kwargs["previous_response_id"] = previous_response_id
 
                 resp = self.client.responses.create(**kwargs)
                 last_response_id = getattr(resp, "id", None)
+                history.extend(_output_refs(resp))
+                if in_turn is not None:
+                    in_turn.observe_openai(getattr(resp, "usage", None))
 
                 # Collect tool calls + hosted calls from output items
                 pending_function_calls: list[tuple[str, str, str]] = []  # (call_id, name, args)
@@ -268,6 +297,7 @@ class OpenAIProvider:
                         name = getattr(item, "name", "")
                         args = getattr(item, "arguments", "") or ""
                         pending_function_calls.append((call_id, name, args))
+                        call_names[str(call_id)] = name
                         all_tool_calls.append(
                             ToolCallRecord(
                                 name=name,
@@ -342,8 +372,9 @@ class OpenAIProvider:
                             ),
                         }
                     )
+                history.extend(input_items)
                 previous_response_id = last_response_id
-                if iterations >= max_iterations:
+                if limit is not None and iterations >= limit:
                     ceiling_hit = True
 
             if ceiling_hit:
@@ -353,7 +384,7 @@ class OpenAIProvider:
                         "provider": self.name,
                         "model": self.model,
                         "iterations": iterations,
-                        "max_iterations": max_iterations,
+                        "max_iterations": limit,
                         "had_text": bool(final_text.strip()),
                         "stream": False,
                     },
@@ -543,7 +574,10 @@ class OpenAIProvider:
         iterations = 0
         ceiling_hit = False
         usage_total: dict[str, Any] = {}
-        max_iter = max_iterations or self.settings.max_iterations
+        limit = iteration_limit(max_iterations, self.settings)
+        in_turn = InTurnContext.for_settings(self.settings, provider=self.name, model=self.model)
+        history: list[dict[str, Any]] = list(input_items)
+        call_names: dict[str, str] = {}
 
         log_workflow_event(
             "provider_turn_started",
@@ -555,8 +589,8 @@ class OpenAIProvider:
                 "stream": True,
             },
         )
-        with TurnTimer() as t, turn_result_budget(self.settings):
-            while iterations < max_iter:
+        with TurnTimer() as t:
+            while limit is None or iterations < limit:
                 iterations += 1
                 kwargs: dict[str, Any] = {
                     "model": self.model,
@@ -571,7 +605,10 @@ class OpenAIProvider:
                     # preview; degrades gracefully if the org lacks summary access.
                     kwargs["reasoning"] = {"effort": self.reasoning_effort, "summary": "auto"}
                 if previous_response_id is not None:
-                    kwargs["previous_response_id"] = previous_response_id
+                    if in_turn is not None and in_turn.before_openai_request(history, call_names):
+                        kwargs["input"] = history
+                    else:
+                        kwargs["previous_response_id"] = previous_response_id
                 kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
                 pending: list[tuple[str, str, str]] = []
@@ -597,6 +634,9 @@ class OpenAIProvider:
                                 truncated = True
                             last_response_id = getattr(final, "id", None)
                             _accumulate_usage(usage_total, getattr(final, "usage", None))
+                            history.extend(_output_refs(final))
+                            if in_turn is not None:
+                                in_turn.observe_openai(getattr(final, "usage", None))
                             for item in getattr(final, "output", []) or []:
                                 if getattr(item, "type", None) == "function_call":
                                     pending.append(
@@ -606,6 +646,7 @@ class OpenAIProvider:
                                             getattr(item, "arguments", "") or "",
                                         )
                                     )
+                                    call_names[str(pending[-1][0])] = pending[-1][1]
                                 elif getattr(item, "type", None) in {
                                     "web_search_call",
                                     "file_search_call",
@@ -675,11 +716,12 @@ class OpenAIProvider:
                             ),
                         }
                     )
+                history.extend(input_items)
                 previous_response_id = last_response_id
-                # Reaching here means the model asked for more tools. If that
-                # was the last permitted iteration the loop exits below with
-                # tool results in hand and, quite possibly, no prose at all.
-                if iterations >= max_iter:
+                # Reaching here means the model asked for more tools. If a
+                # caller set a round limit and this was the last round, the loop
+                # exits below with tool results in hand and possibly no prose.
+                if limit is not None and iterations >= limit:
                     ceiling_hit = True
 
             if ceiling_hit:
@@ -689,7 +731,7 @@ class OpenAIProvider:
                         "provider": self.name,
                         "model": self.model,
                         "iterations": iterations,
-                        "max_iterations": max_iter,
+                        "max_iterations": limit,
                         "had_text": bool("".join(text_buffer).strip()),
                         "stream": True,
                     },
