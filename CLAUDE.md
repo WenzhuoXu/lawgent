@@ -23,12 +23,18 @@ conda run -n llm pip install -r requirements.txt
 conda run -n llm npx -y eurlex-mcp-server   # node MCPs
 ```
 
-**Diagram layout is Graphviz, not a browser.** `dot` (≥2.43, `/usr/bin/dot`)
-computes every diagram that reaches a slide, resolved through
-`documents/graph_layout.find_engine()`. Mermaid survives as an *authoring
-syntax* — parsed for node kinds, labels and edges — and as the raster renderer
-behind `render_flowchart_image`, so `mmdc` and Chrome are optional and a
-missing one degrades one tool instead of every deck.
+**Every deck is made by ppt-master.** See **External procedural skills** and
+**Document, deck and diagram production**; there is no in-tree deck writer.
+
+**Diagrams outside a deck are drawn by Graphviz, not a browser.** `dot`
+(≥2.43, `/usr/bin/dot`, resolved through `documents/graph_layout.find_engine()`)
+draws every Mermaid `flowchart` / `graph` / `mindmap` picture that
+`render_flowchart_image` makes, in an installed CJK face
+(`graph_layout.cjk_font_family()`). Mermaid is the authoring syntax, parsed in
+`documents/diagrams.py`; mermaid-cli (`mmdc`, which needs Node and Chrome)
+draws only the other Mermaid types, so a missing one degrades sequence or gantt
+diagrams, never a process map. A diagram on a slide is not drawn here at all:
+ppt-master draws it inside the deck.
 
 Optional: `d2` (MPL-2.0, `conda install -n llm d2`) for structure charts with
 nested containers, which is the one arrangement Graphviz clusters do not match
@@ -45,23 +51,35 @@ file with `#!/usr/bin/env node`, so the *launching* process's PATH decides
 whether it runs. A server started by an absolute interpreter path never gets
 the env's `bin/` on PATH, and every Mermaid render in the running server failed
 with exit 127 for that reason. `writers/_node.find_node()` exists for exactly
-this; `diagrams.resolve_mermaid_cli()` now applies it, invoking
+this; `diagrams.resolve_mermaid_cli()` applies it, invoking
 `node <mermaid-cli/src/cli.js>` with Node's directory prepended to the child's
 PATH. A missing interpreter raises `MermaidNotInstalled`, not `RuntimeError`,
 because callers fall back on the former and the latter made the degraded path
 unreachable.
 
 **`ppt-master` is an external skill, not a package.** It is driven from a
-configured skill root — `~/.claude/skills/ppt-master` by default — and is
-deliberately **not vendored** (124 MB / 13k files, and its
-`attribution_guard.py` fails closed on any modification, so it must stay an
-intact official distribution):
+configured skill root (`~/.claude/skills` by default) and is deliberately **not
+vendored** (the skill folder is 83 MB / 13k files, ≈250 MB with history, and
+its `attribution_guard.py` fails closed on any modification, so it must stay an
+intact official distribution). The skill is the repository's
+`skills/ppt-master/` folder, not the repository root — cloning straight into
+`~/.claude/skills/ppt-master` puts the wrong directory at the discovery path.
+Clone it elsewhere, keep `.git` for updates, and link the skill folder in;
+discovery resolves the link:
 
 ```
-git clone https://github.com/hugohe3/ppt-master ~/.claude/skills/ppt-master
+git clone https://github.com/hugohe3/ppt-master ~/src/ppt-master
+ln -s ~/src/ppt-master/skills/ppt-master ~/.claude/skills/ppt-master
+conda run -n llm pip install --dry-run --report /tmp/r.json -r ~/src/ppt-master/requirements.txt  # install only what is additive
+conda run -n llm python ~/.claude/skills/ppt-master/scripts/attribution_guard.py              # exit 0 = intact
+# update: git -C ~/src/ppt-master pull, then re-run the guard
 # optional: its visual-review stage wants a browser
 conda run -n llm pip install playwright && conda run -n llm python -m playwright install chromium
 ```
+
+`google-genai` (its Gemini image backend only) is left out of the `llm` env:
+it would upgrade `pydantic`, `websockets` and `google-auth` under the harness.
+Its narration stage needs `ffmpeg`/`ffprobe`, which the host does not have.
 
 `LEGAL_HELPER_SKILL_ROOTS` (`os.pathsep`-separated) replaces the external
 roots only; this package is always searched first. See **External procedural
@@ -84,11 +102,12 @@ instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
 
 - `legal_helper/skills/<name>/` — generic, domain-agnostic skills. Each is `SKILL.md` (<100 lines) + `references/` (deep prose pulled on demand) + `resources/` (output templates) + `scripts/` (deterministic helpers).
 - `legal_helper/domains/<pack>/` — domain packs. Each is `pack.yaml` + `playbook.md` + `references/` + `overlays/<skill>.md` (per-skill aviation deltas).
-- `legal_helper/playbook/general_playbook.md` — PRC-first global defaults.
+- `legal_helper/playbook/general_playbook.md` — PRC-first global defaults, inlined for every legal author and specialist.
+- `legal_helper/workflow.py` — routing, planning, single-pass authoring, specialists, integration; `authoring.py` (the author's system prompt), `answer_contract.py` (the one output contract), `answer_lint.py` (deterministic answer clean-up).
 - `legal_helper/connectors/` — in-process tool functions over httpx / WebFetch. The primary call path for both providers.
 - `legal_helper/mcp/` — external MCP boundary. Only used for MCPs we don't maintain in-tree (CourtListener, GovInfo, EDGAR, EUR-Lex, PKULaw) and the one in-tree MCP we ship (`ccar_aviation`).
 - `legal_helper/citations/` — `audit_citations` (legacy, preserved), eyecite-backed `extract` / `validate`, PRC regex, format conversion.
-- `legal_helper/documents/` — the deliverable layer. `office.py` (inspect / extract / guarded edit), `redline.py` (w:ins/w:del), `pdf.py`, `graph_layout.py` (Graphviz geometry), `diagrams.py` (Mermaid authoring + raster), `quality.py` (deterministic output checks), `contact_sheet.py`, and `writers/` — one module per output format plus `writers/scripts/` (the Node renderers and `deck.css`).
+- `legal_helper/documents/` — the deliverable layer. `office.py` (inspect / extract / guarded edit), `redline.py` (w:ins/w:del), `pdf.py`, `graph_layout.py` (CJK text measurement + the Graphviz / d2 render binaries), `diagrams.py` (Mermaid parsed and drawn by Graphviz; mermaid-cli for other types), `quality.py` (deterministic output checks), `contact_sheet.py`, `soffice.py` (headless LibreOffice under a per-call profile), `lineage.py`, `review_fonts.py` + `review_fonts.conf` (GB-font stand-ins for review renders), and `writers/` — the DOCX, PDF and XLSX writers with their shared Markdown front end (`writers/_markdown.py`) and language rules (`writers/_text.py`). Decks are made by `tools/decks.create_deck` (ppt-master), never by an in-tree writer.
 - `legal_helper/rag/` — local bge-m3 embeddings + Qdrant (embedded) + legal-aware hierarchical chunker.
 
 ## Authoring rules
@@ -96,7 +115,7 @@ instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
 - **SKILL.md ≤ 100 lines.** Use pointer paragraphs (`Read references/foo.md for ...`) instead of inlining deep content.
 - **Frontmatter required**: `name`, `description`, `argument-hint` (optional), `allowed_connectors` (optional), `rag_collections` (optional).
 - **No aviation strings outside `domains/aviation/`.** If you find yourself writing FAA/EASA/ICAO/IDERA/Cape Town/MRO/AD/SB inside `skills/` or `playbook/`, stop and put it in `domains/aviation/overlays/<skill>.md` instead.
-- **PRC primary, comparative second.** Generic skills should reference 法律 → 行政法规 → 部门规章 → 规范性文件 → 司法解释 → 指导案例 first; US/EU when relevant.
+- **PRC primary, comparative second.** Generic skills follow general playbook §0: legislation by 立法法 rank (宪法 → 法律 → 行政法规 → 地方性法规 / 规章), then 司法解释 (legal effect, cited after the statute it applies), then cases by weight label (指导性案例 应当参照 → 案例库参考案例 参考 → other 类案 persuasive); 规范性文件 and SPC 会议纪要 support reasoning only, never as 裁判依据. US/EU when relevant.
 
 ## Document, deck and diagram production
 
@@ -105,13 +124,67 @@ reported as done.** This is the Excel loop below, generalised: inspect →
 guarded edit → diff → re-inspect became write → lint → render → repair →
 re-lint. The deterministic layer comes first because it costs nothing.
 
+- **Every deck is made by ppt-master, through `create_deck`** (`tools/decks.py`).
+  A presentation, a single slide, a diagram slide, 汇报材料, 课件 — on every
+  authoring surface: the single-pass author and the integrator
+  (`workflow._document_io_tools`), the orchestrator, and every in-tree skill
+  sub-agent. It runs ppt-master to completion in a forked `SkillAgent` on the
+  chat's model, never round-capped. `run_skill` does not offer ppt-master: a
+  second route to the same skill would skip everything below.
+- **The sub-agent sees the task, not the chat.** `create_deck` writes the
+  `brief` into the workspace as the deck's closed corpus and states the
+  language (default: the brief's), audience, purpose, page count, sources,
+  template, the user's quick intent, and that `project_manager.py init` takes
+  `--dir <workspace>` — its default is a `projects/` folder inside the skill's
+  own installation. The tool description tells the caller the same thing:
+  nothing absent from the brief reaches a slide.
+- **The project never reaches the user's file list.** It lives under
+  `<outputs_dir>/_decks/`, which the artifact scan skips (any path component
+  starting with `_` or `.`); only the export is copied, to
+  `<outputs_dir>/<safe title>.pptx`, never over an existing file, with lineage
+  recorded from the user's inputs. The sub-agent's own `outputs_dir` is that
+  workspace, so its writes, script runs and renders stay inside it.
+- **A deck is verified by the tool, not by the sub-agent's word.** The export
+  is found on disk (an `exports/` file wins; a copied source deck never
+  counts), opened with python-pptx and counted, linted, and matched to
+  ppt-master's own postflight report. The result is compact JSON:
+  `status` (`ok` | `failed` | `unavailable`), `pptx_path`, `slides`,
+  `gate_verdict`, `decisions_under_delegation`, `lint_summary`, `next_step`,
+  plus `project_dir`, timing and tool-call counts. Without ppt-master the
+  status is `unavailable` with the install instruction; there is no fallback
+  writer, and `next_step` says not to substitute another format.
+- **Progress reaches the stream while it runs.** `DeckProgress` sits over the
+  active event sink for the run and turns each sub-agent tool call into one
+  `deck_progress` event (`stage`: page_authored, quality_gate, export, …;
+  `message`, `ok`/`exit_code`, `current`/`total` pages), forwarding the
+  sub-agent's own tool events unchanged. Measured on the acceptance run
+  (gpt-6-luna, Default route, six pages): 502 s, 77 tool calls, ~$0.18.
+- **Decks the user already has** are read and changed with `inspect_pptx`,
+  `edit_pptx_text`, `reshape_pptx` and `render_pptx_slides`. `inspect_pptx`
+  and `reshape_pptx`'s `shape_name` reach shapes inside groups, where a
+  ppt-master deck keeps all of its text; `edit_pptx_text` already walked every
+  paragraph. A redesign of the user's deck is `create_deck` with
+  `template_path`.
 - **`documents/quality.py` is a conformance floor, and only that.** Shapes off
   the canvas, pairwise overlap past 2% of the smaller shape, text that cannot
   fit its box (CJK-aware, reading the frame's real insets rather than assuming
-  PowerPoint's defaults), runs under the 11pt body / 9pt label floor, WCAG
-  contrast, empty placeholders big in both dimensions. Findings carry `slide`
-  and `shape` indices, not prose, so a finding names a location the model can
-  go and look at rather than a sentence it has to interpret.
+  PowerPoint's defaults), table rows that grow past the slide
+  (`table_overflow`), runs under the 11pt body / 9pt label floor, WCAG
+  contrast, empty placeholders big in both dimensions. Groups are opened and
+  every child mapped through its group's `chOff`/`chExt` into slide inches —
+  the top-level walk saw none of a ppt-master deck's 112 nested text frames.
+  Overlap between two unfilled text boxes is judged on their glyphs, not their
+  line boxes. Findings carry `slide` and `shape` indices (a dotted path such
+  as `"4.2"` inside a group), and `where` adds the shape's name, so a finding
+  names a location the model can go and look at.
+  For Word, PDF and Excel the floor is: an ordered list that keeps counting
+  across a heading (plain "1." lists only — "第%1条" clause numbering runs on
+  by design), literal Markdown residue (`**`, `[x](http`, `####`, `|---|`,
+  `[^1]`, `~~`, `<br>`) by paragraph / table cell / page, a table that runs
+  onto another page without a repeating header row (needs the render's PDF),
+  and XLSX error values and formulas with no cached value. **A file type with
+  no checks reports `conformance: "no checks for this type"`, never "pass"**,
+  and an unreadable file reports "not checked".
 - **A check belongs here only when a pass means "nothing is provably broken".**
   It loses its place the moment a pass could be read as "this is good".
   Coverage, overfill and dead-band were all deleted on that test: measured over
@@ -122,7 +195,36 @@ re-lint. The deterministic layer comes first because it costs nothing.
   `canvas_overfilled` ever flagged was correct work. All three could be passed
   by padding, and padding produced the deck that got rejected. **Do not add a
   density metric either**: the best process map in the reference set measures
-  13 em, because its labels live inside grouped graphics.
+  13 em, because its labels live inside grouped graphics. A CJK language-tag
+  check was measured and not added: all 215 Han runs in both real ppt-master
+  exports are `zh-CN` in the theme's East Asian face. Both exports lint clean
+  (303 shapes); a new check must keep it that way or name a real defect.
+- **Word and PDF output is PRC-ready by default** (`writers/docx.py`,
+  `writers/pdf.py`). A document is Chinese when most of its words are
+  (`_text.han_share` ≥ 0.5 — one fullwidth comma no longer flips an English
+  memo), and then it is A4 with "第 X 页 共 Y 页"; English is Letter with
+  "Page X of Y"; `page_size` overrides. Both writers parse Markdown with one
+  markdown-it-py front end (CJK-friendly emphasis, so `**结论：**正文` is bold; a
+  single newline is a new paragraph; raw HTML other than `<br>`/`<sup>`/… is
+  printed as text). Every ordered list gets its own `w:num` with a
+  `w:startOverride`, nesting is `w:ilvl`, links are `w:hyperlink`, `[^1]` are
+  real footnotes, table header rows repeat and rows never split.
+  `layout="gbt9704"` is verified against GB/T 9704-2012 and the
+  gongwen-gbt9704-skill verifier (A4, 37/26/35/28 mm, 22 × 28 grid, 一、（一）
+  1.（1） in 黑体/楷体/仿宋/仿宋 unbolded, 小标宋 title, "— n —" outside).
+  `reference_docx` writes into a firm or court template.
+- **The not-legal-advice notice is never part of the instrument.** It goes into
+  document properties (Word `description`, PDF `Subject`) in the document's
+  language; `disclaimer="none"` plus a `disclaimer_reason` omits it for
+  filings and signed letters. The export path titles an answer by its own first
+  heading (then the chat title, then 法律分析 / Legal Analysis by language).
+- **Fonts: name the GB fonts, review with stand-ins.** A Chinese DOCX names
+  仿宋 / 黑体 / 楷体 / 宋体 / 方正小标宋简体 — what the reader's Word/WPS has. A review
+  render (`render_docx_pages` / `render_xlsx_pages`) passes
+  `documents/review_fonts.conf` to soffice as `FONTCONFIG_FILE`, so each role
+  gets a distinct open face, and tells the model which faces are stand-ins.
+  Never edit the user's fontconfig; never bundle a GB font (方正 faces are
+  commercial, and the tree is MIT).
 - **Style is not in the code.** Whether a title should assert or name, whether
   load should vary, whether a deck needs an ask — those differ between an
   internal 汇报, a training 宣贯, a seminar talk and a pitch, and none of it is
@@ -142,59 +244,68 @@ re-lint. The deterministic layer comes first because it costs nothing.
   so the pages arrive as image blocks the model actually sees with the
   findings and a `next_step` beside them. `authored=False` for a file the
   model is *reading* (`render_pdf_pages`) — telling it to repair a source PDF
-  it never wrote drove repeat single-page renders.
+  it never wrote drove repeat single-page renders. `render_pptx_slides` runs
+  LibreOffice under a per-call profile (`documents/soffice.convert`): on the
+  shared default profile two concurrent renders failed one of them.
 - **Looking is opt-in; measuring is not.** Nothing forces a `render_*` call,
   but once one happens the lint is attached whether the model asked for it or
   not. There is no enforced write→review→repair loop in the tree: an earlier
   `review.py` / `wireframe.py` pair implemented one and was reverted. Do not
   cite it as if it exists, and if it returns, wire it through
   `max_repair_rounds` so it shares the existing cost dial.
-- **HTML is the default deck path.** `write_pptx_from_html` authors in real
-  CSS, renders in Chromium, and maps the computed geometry onto native
-  PowerPoint objects — text stays text, `<table>` stays a table. Measured
-  Reach for `write_pptx` when the enum genuinely fits; reach for HTML whenever
-  the arrangement matters. A `<div data-diagram="name">` in the HTML reserves a
-  box that the diagram is drawn into as native shapes, which is how a dense CSS
-  layout and an editable diagram share one slide.
-- **One canvas: 13.333 × 7.5in.** `writers/pptx.py` wrote 10 × 5.625 for its
-  fallback while every other path and every `SlideFlowchart` default assumed
-  the wide canvas — a `w: 12.2` default does not fit on a 10in slide. Do not
-  reintroduce a second canvas size.
-- **`write_pptx` returns a bare absolute path on success** and an
-  `ERROR:`-prefixed string on failure, including `ERROR: … DEGRADED …` naming
-  every dropped feature when the fallback writer ran. Returning JSON there
-  would break every caller that chains the result straight into
-  `render_pptx_slides` / `inspect_pptx`. `write_pptx_from_html` returns JSON
-  and the per-slide geometry it mapped.
-- **Diagrams are geometry, not pictures.** `documents/graph_layout.py` asks
-  Graphviz for node boxes, routed edge polylines, arrowhead tips and edge-label
-  positions, in slide inches, and the emitter turns them into native shapes.
-  Four kinds on a slide's `flowchart` block: `flow` (process map, from a Mermaid
-  string), `mindmap` (思维导图) and `structure` (结构图, plain connectors
-  because a reporting line is not a step). A `swimlane` kind existed and was
-  reverted; its dispatch branch and its `kind` / `lane_order` schema entries
-  are removed, because a schema that advertises a kind the code cannot build
-  is worse than a missing feature — `write_pptx` returned a bare success path
-  and a slide with no diagram on it at all. `direction: "auto"` tries both rank directions and keeps
-  whichever fills the box. A node's `role` names its lane and drives a stable
-  colour; `sub` hangs its deliverable underneath; an edge `label` carries the
-  condition or the statutory period. `quality.diagram_encoding` reports which of
-  those dimensions a drawing actually uses — reported, never graded.
-- **The fit adjusts type, never geometry alone.** Scaling a drawing down
-  shrinks its boxes and leaves the text at its original size; scaling it up
-  leaves a legible diagram in a corner. `layout_graph` re-measures the boxes at
-  a new font size instead, bounded by `MIN_DIAGRAM_FONT_PT` (9) and
-  `MAX_DIAGRAM_FONT_PT` (22). The previous path scaled x and y independently,
-  which is why fixed-size nodes collided on one axis.
-- **Edges are routed polylines with one arrowhead on the last segment.** The
-  previous emitter drew a single line between node *centres*, so every
-  arrowhead was buried inside the shape it pointed at. A pptxgenjs line is a
-  bounding box plus `flipH`/`flipV`, and flipping carries the arrowheads with
-  it, so direction survives the flip.
-- **Mermaid's inline edge-label form is supported.** `A -- yes --> B` as well as
-  `A -->|yes| B`; only the piped form used to match, so every labelled decision
-  branch was dropped in silence and process maps rendered with their yes/no
-  arms missing.
+- **A diagram on a slide is ppt-master's; a diagram as a picture is
+  Graphviz's.** `render_flowchart_image` is for a Word document, an email or
+  the chat. Mermaid `flowchart` / `graph` sources become DOT (subgraphs become
+  clusters, decisions diamonds, labels wrapped into balanced lines) and
+  `mindmap` sources a left-to-right tree with plain ties; Graphviz measures
+  every label in the font it draws, so boxes fit their text. A source the
+  parser cannot read, and every other Mermaid type, goes to mermaid-cli; a
+  structure of nested containers is D2.
+- **The Mermaid parser keeps what the author wrote.** `A -- yes --> B` as well
+  as `A -->|yes| B` (only the piped form used to match, so every labelled
+  decision branch was dropped in silence), chains `A --> B --> C` (a plain
+  `finditer` consumed `B` and lost `B → C`), open links `---` and thick `==>`,
+  quoted labels and `<br>` breaks.
+
+### Document intake and editing
+
+- **One reader for every format** (`documents/intake.py`, used by
+  `read_document` and attachments). Word (.docx, and .doc/.rtf/.odt/.wps via a
+  cached LibreOffice → .docx conversion) goes through `documents/docx_reader.py`:
+  tracked changes as `{++…++}` / `{--…--}` under a one-line summary (they read
+  as accepted text before — a counterparty's markup looked agreed), headers and
+  footers as `[Header]` / `[Footer]`, and numbering labels computed from
+  `numbering.xml` as Word shows them (第一条, not anydoc's `- 第1条`). PDFs get
+  `[page N]` markers, `pages=`, and RapidOCR for image-only pages (cached by
+  sha256 + page under `state/ocr_cache`, labelled `· OCR`); a read under 200
+  characters always carries a warning. OFD is read in-tree; a .zip lists its
+  members (`path="a.zip::member"`). An unknown binary is an error naming what
+  is supported — never `read_text(errors="replace")` garbage.
+- **One clause index** (`documents/clauses.py`) serves the attachment outline,
+  `read_document(section="第三条")`, `extract_clauses` and `redline_docx`
+  anchors; 第三条 = 第3条 = "3" resolve to the same clause.
+- **DOCX edits never blank a run.** `edit_docx_text` / `reshape_docx` edit the
+  text elements (`w:t`, `w:tab`, `w:br`), so footnote/comment references,
+  fields and drawings in the same run survive; paragraphs carrying tracked
+  revisions are refused with a pointer to `redline_docx`. `inspect_docx` lists
+  every body paragraph under the 0-based index `reshape_docx` ops take.
+- **Every DOCX edit returns `integrity`** (`documents/integrity.py`):
+  ooxml-integrity (MIT) `compare` + new `check` findings, plus in-tree counts
+  of bookmarks, fields, section breaks and endnote references. Losses only.
+- **Tracked changes out:** `redline_docx` (anchored by text, clause label or
+  paragraph index; tabs survive run splits; `w:trackRevisions` set; enforced
+  protection other than tracked-changes refused; every miss returns a
+  `reason` + `hint`) and `compare_docx` (LibreOffice compare over UNO in the
+  system Python, `_lo_uno.py`). Both are gated by the round-trip contract:
+  accept-all = revised text, reject-all = original.
+- **No edit overwrites its source.** An output name equal to the input goes to
+  `<stem>_vN` and the result says so (7 of 121 edit calls had overwritten
+  theirs); every derived file is recorded in `documents/lineage.py`.
+- **`reshape_xlsx` row/column inserts and deletes behave as in Excel**
+  (`documents/xlsx_shift.py`): merges, validations, conditional formats,
+  formula references on every sheet, defined names and row heights move with
+  the cells, and each op reports its `side_effects` (#REF! included).
+  `set_styles` starts from a copy of the cell's font, so theme colours work.
 
 ### Excel / workbook operations
 
@@ -218,6 +329,16 @@ For existing `.xlsx` files:
 Use `write_xlsx` for new workbooks. Preserve formulas, styles, merged cells,
 sheet names, file/manual names, and protected columns unless the user
 explicitly asks for restructuring.
+
+`write_xlsx` computes every formula and stores the result as the cell's cached
+value (`writers/_xlsx_recalc.py`): LibreOffice recalculates a *copy*, the
+values are written into the openpyxl file's `<v>` elements, and LibreOffice's
+re-export is discarded, so styles, charts and validations stay byte-identical.
+The `formulas` engine is the fallback without soffice and the second opinion
+for a LibreOffice 7.3 `#NAME?` (XLOOKUP, LET). ISO date strings become date
+cells, `number_formats` sets formats per column/range, and widths count a Han
+character double. An openpyxl round-trip (the edit tools) drops cached values;
+the lint reports them as `formula_without_cached_value`.
 
 ## Cost center / usage ledger
 
@@ -268,11 +389,15 @@ explicitly asks for restructuring.
   `config.yaml` means "derive"; any positive value pins it for every model —
   but it tunes the window share only, never the pricing cliff.
 - **The compaction decision uses the provider's token count, not the estimate.**
-  `context.compaction_decision` takes `provider_usage_tokens` (the last turn's
-  reported input, which the server already captures for the UI's context ring)
-  and treats it as authoritative: it counts the system prompt, tool schemas,
-  attachments and tool results, none of which a transcript estimate can see.
-  The CJK-aware estimate stays as the fallback and is reported alongside.
+  `context.compaction_decision` takes `provider_usage_tokens` (the input of the
+  turn's *last request*, `last_request_input_tokens` on the provider's `done`
+  usage, read via `context.context_tokens_from_usage`; the UI's context ring
+  shows the same number) and treats it as authoritative: it counts the system
+  prompt, tool schemas, attachments and tool results, none of which a
+  transcript estimate can see. Never feed it the turn-summed `input_tokens` —
+  that is billing, and summed over a 30-round loop it read 3.64M on a
+  1.05M-window model. The CJK-aware estimate stays as the fallback and is
+  reported alongside.
 - **Tool results are budgeted per tool** (`legal_helper/tool_budget.py`), in
   estimated *tokens* rather than bytes — the same 50 KB is ~12K tokens of
   English and ~50K of Chinese. Over-budget results either truncate with a
@@ -298,22 +423,44 @@ explicitly asks for restructuring.
   ~33 calls with no answer written. **Do not reintroduce a cap on rounds or on
   cumulative tool output**; solve growth with context management instead.
 - **Long loops are kept under the ceiling by clearing, not stopping**
-  (`legal_helper/turn_compaction.py`, both providers). Before each request the
-  projected input (provider's count for the last request + results appended
-  since) is checked against `turn_input_ceiling_for`; past it, the oldest tool
-  results are saved to `state/tool_results/` and replaced by a stub naming the
-  path for `read_document`, down to `CLEAR_TARGET_SHARE` (50%) of the ceiling
-  so the cache-busting pass is rare. Lossless by construction: a result that
-  cannot be saved is not cleared. The latest round is never touched;
-  `EXEMPT_TOOLS` deliverables go last. Anthropic hooks the SDK runner's
-  `_handle_request`; OpenAI keeps a local mirror of the conversation and, on a
-  clearing pass only, re-sends it (output items as `item_reference`) instead of
-  chaining `previous_response_id`, then resumes chaining.
+  (`legal_helper/turn_compaction.py`, both providers). On **OpenAI**, before
+  each request the projected input (provider's count for the last request +
+  results appended since) is checked against `turn_input_ceiling_for`; past
+  it, the oldest tool results are saved to `state/tool_results/` and replaced
+  by a stub naming the path for `read_document`, down to `CLEAR_TARGET_SHARE`
+  (50%) of the ceiling so the cache-busting pass is rare. Lossless by
+  construction: a result that cannot be saved is not cleared. The latest round
+  is never touched; `EXEMPT_TOOLS` deliverables go last. OpenAI keeps a local
+  mirror of the conversation and, on a clearing pass only, re-sends it (output
+  items as `item_reference`) instead of chaining `previous_response_id`, then
+  resumes chaining.
+  **On Anthropic the transcript is never edited client-side.** Opus 5.5 binds
+  each thinking block to the exact history before it: editing an earlier
+  `tool_result` invalidates every later thinking block (silently dropped on
+  older accounts — this one, measured 2026-10-07 — and a 400 on accounts
+  created on or after 2026-08-31). The server clears instead
+  (`clear_tool_uses_20250919`, `turn_compaction.anthropic_context_management`):
+  trigger = the turn ceiling, `clear_at_least` = (1 − `CLEAR_TARGET_SHARE`) ×
+  ceiling — measured, the server clears in sticky chunks of (input − trigger)
+  + `clear_at_least`, and later requests read the cleared prefix from cache —
+  `keep` = 10 newest tool uses, `EXEMPT_TOOLS` excluded. Losslessness is kept
+  append-only: once a turn's projected input reaches half the trigger,
+  `ClearingNotes` saves each sizeable result and names it in a text block
+  after the round's `tool_result` blocks, which clearing does not touch. If
+  the clearable results total less than `clear_at_least`, nothing is cleared.
 - **Model windows live in `context._WINDOWS`.** A model missing from that dict
   silently gets `_DEFAULT_WINDOW` (200K) — which is how a 1M-window model ends
   up compacting at ~120K. **Add every new model ID here, to
   `usage.DEFAULT_PRICING`, and to the `*_HIGH_EFFORT_MODELS` tuple in
   `config.py` at the same time.**
+- **The SSE stream closes at `done`; summary and title run afterwards** on a
+  per-chat serial worker (`server._submit_chat_housekeeping`: one job at a
+  time per chat, in order, each reading the summary the previous one wrote)
+  at pinned effort (`memory.TITLE_EFFORT` = none, `SUMMARY_EFFORT` = low).
+  They used to hold the stream — and the disabled composer — open for p50 8 s,
+  p90 63 s. Their `memory_updated` / `chat_updated` events normally reach no
+  one; what they persist is what a reload, or a re-read of the chat list,
+  shows.
 - **Rolling summaries roll forward by delta, never by rewrite.** Both
   `memory.summarize_with_fast_model` (per chat) and `ProjectStore.compact`
   (cross-chat) ask the fast model only for `+ Section | …` / `- Section | …`
@@ -321,16 +468,102 @@ explicitly asks for restructuring.
   sections in `memory.SUMMARY_SECTIONS`. Re-summarizing a summary erodes
   detail every pass (context collapse); do not reintroduce a "rewrite this
   summary" prompt. An unparseable delta must leave the prior playbook intact.
-- **Attachments: inject one document, navigate a corpus.** A single text
-  attachment is inlined. Past `LEGAL_HELPER_INLINE_CORPUS_BYTES` (400 KB of
-  extracted text, `0` disables) each text attachment degrades to an outline
-  built from `rag.chunker._ARTICLE_RES` plus the `read_document` call that
-  opens it. Images and provider-side PDFs are unaffected.
-- **Anthropic server-side context management is opt-in.**
-  `LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS` enables `clear_tool_uses_20250919`.
-  It is off by default because it invalidates the cached prompt prefix every
-  time it fires, and this provider relies on `cache_control` breakpoints for
-  the system block and tool list. Do not default it on without measuring.
+- **Attachments: inline what fits, outline the rest — decided in tokens.**
+  Text attachments are inlined in order while their *extracted* tokens
+  (`context.estimate_tokens`, CJK-aware) fit `_INLINE_SHARE_OF_TURN_CEILING`
+  (0.4) of `context.turn_input_ceiling_for`; the rest — a single huge one
+  included — degrade to an outline (clause labels from `documents/clauses.py`,
+  headings) plus the `read_document(…, section=…)` call that opens them. Bytes
+  were the wrong unit: one 353 KB workbook extracted to ~367K tokens and was
+  inlined into every sub-agent. `LEGAL_HELPER_INLINE_ATTACHMENT_TOKENS` sets the
+  budget in tokens (`0` = never outline; the old `LEGAL_HELPER_INLINE_CORPUS_BYTES=0`
+  still means off). Images and provider-side PDFs are unaffected; HEIC/BMP/TIFF
+  are converted to JPEG first.
+- **Anthropic server-side clearing is on by default.**
+  `LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS` set to `0`/`false`/`off` turns it off; a
+  number pins the trigger in tokens. It was opt-in while the trigger sat at a
+  fixed 120K and every pass busted the cache; derived from the turn ceiling it
+  fires only where the turn would otherwise run on to the window, and it is
+  the only form of clearing preserved thinking allows.
+- **Anthropic caching: 1h on the stable prefix, an automatic breakpoint on
+  the loop.** The tool list and system prompt carry `ttl: "1h"` breakpoints
+  (the next turn usually starts 5–60 minutes later); inside a local-tool loop
+  a top-level `cache_control` adds a 5-minute breakpoint that follows the
+  conversation, so each round reads the last. It is left off one-shot calls,
+  where it would only bill the write premium, and whenever the explicit
+  breakpoints already fill the four slots (a fifth is a 400). Measured: four
+  breakpoints plus hosted web search is accepted.
+
+## Planning, authoring and the output contract
+
+- **One routing call; decomposition only for complex turns.** The router (fast
+  tier, low effort) returns the mode, the complexity and — for a simple or
+  standard turn — the one task its author needs (`skill_name`, title, task),
+  plus what the answer must cover and any facts that contradict each other.
+  Only a `complex` turn pays for a decomposition call, which returns `issues`
+  (争点, claim basis, elements, facts needed/assumed) and 2-3 specialists that
+  own them. A failed planner answers in one pass from the request; it never
+  guesses a decomposition.
+- **The planner reads the newest context.** `workflow._routing_view` spends a
+  token budget on the summary and the newest turns first and drops older turns
+  whole. Never char-slice the author's digest for the planner: it runs
+  oldest-first, and a head slice is how 31% of router calls lost the turn the
+  user had just written.
+- **The answer language comes from the request's script**
+  (`answer_contract.detect_language`, `workflow._turn_language`), never from a
+  planner default.
+- **Every legal answer is written by an author holding the method.** The
+  single-pass author and the integrator share
+  `authoring.author_system_prompt`: role, research conduct, the whole general
+  playbook, the author contract and, when the router chose a skill, that
+  SKILL.md with its bundle-contract section stripped. It is static per (mode,
+  skill, active packs), so it caches. Date, language, length tier, must-cover
+  points and fact conflicts go in the request tail
+  (`answer_contract.author_tail`) — never in a system prompt
+  (`tests/test_provider_cache_control.py`).
+- **One output contract** (`answer_contract.py`). The author's sources list is
+  one numbered line per source with a status word in the answer's language
+  (已在线核验 / 未核验 / 用户提供 / 无法获得具体条款, or the English set) — no
+  claim column, no disclaimer line (the UI and exports carry it once). The
+  author names the source in plain text and keeps the citation web search
+  attaches; it is never asked to wrap a source in a markdown link. Asked to,
+  luna wrote empty `]()` targets and once put a search citation inside a link,
+  where OpenAI's citation rendering swallowed the text between — 0 such
+  answers in 868 before that rule, 1 in 20 with it. Next steps are part of the
+  answer whenever the facts call for action. The
+  specialist bundle contract is Findings · Issues · Artefacts · Out of scope ·
+  Sources with one label set and one length rule; a SKILL.md names only its
+  artefacts. `tests/test_answer_contract.py` fails when a prompt grows its own
+  copy of either.
+- **Length is a tier, not a cap.** `answer_contract.length_tier` maps
+  complexity (simple → brief, standard → focused, complex → full) unless the
+  chat pins `answer_length`. The tier sets OpenAI `text.verbosity` and one
+  sentence; it never touches max tokens, tool rounds or tool budgets, and an
+  explicit length request in the message wins.
+- **The answer lint is a stream filter** (`answer_lint.py`): it strips `utm_*`,
+  collapses repeated search chips within a paragraph, rewrites upload and
+  artifact paths to served routes (or to the bare file name), localises
+  `pinpoint unavailable` in a Chinese answer, rewrites each sources line to
+  `N. [name](url) — status` (the chip or bare URL moves onto the name, "——"
+  counts as a separator), counts sources sections and logs an `answer_lint`
+  event. It works on whole lines, so a URL is never split, and it never grades
+  style.
+- **Specialists see the chat.** Each gets the digest as its cache prefix and
+  only the attachments its task names (all of them when no task names any), and
+  reports a typed outcome — completed, empty, truncated or failed. A context
+  overflow is not retried.
+- **The integrator is an author, not a dispatcher.** It holds the author's
+  tools, walks the plan's issues, reconciles conflicting findings (or keeps
+  both and says how they sit together), and closes or discloses every open gap:
+  failed or empty specialists and each bundle's `Out of scope` items.
+- **Roles are a table** (`config.DEFAULT_ROLE_PROFILES`, overridable as
+  `role_profiles:` in config.yaml): model tier and effort for router,
+  decomposer, author, specialist, integrator, cite-check, summariser, title and
+  deck. Effort caps include `max`, and the dial applies to both providers.
+- **Domain routing lives in the pack.** A pack's `research_sources.md` is
+  inlined for authors and specialists only while the pack is active; generic
+  prompts name no domain's regulators or tools
+  (`test_no_aviation_tokens_in_prompts_when_the_pack_is_inactive`).
 
 ## Answer verification and durable runs
 
@@ -396,7 +629,13 @@ explicitly asks for restructuring.
   body is inlined into the sub-agent with the PRC playbook and the citation
   contract. A skill discovered under an external root is a *procedure*: it
   carries its own workflow, references, artifact contracts and gate scripts,
-  and it is **driven**, not inlined. `ppt-master` is the motivating case.
+  and it is **driven**, not inlined. `ppt-master` is the motivating case, and
+  `create_deck` is how it is driven (see **Document, deck and diagram
+  production**). Any other installed procedure — a GB/T 9704 公文 generator
+  with its red head, say — is driven by `tools/procedures.run_procedure` the
+  same way: a sub-agent under the host contract in `<outputs>/_procedures/`,
+  only the files it names under `## Deliverables` copied out. That tool is on
+  the author's surface only while such a procedure is installed.
 - **Discovery is `skills.skill_roots()`, and this package is always first.**
   It cannot be configured away — the in-tree legal skills are the product, and
   a mistyped `LEGAL_HELPER_SKILL_ROOTS` must not be able to delete them. That
@@ -404,26 +643,40 @@ explicitly asks for restructuring.
   an earlier root shadows a later one so a third party cannot silently replace
   a methodology. **Nothing hardcodes a skill name any more**: the previous two
   allowlists — a tuple in `skills/__init__.py` and a separate `Literal` in
-  `tools/orchestrator.py` — had already drifted, leaving `flowchart` and
-  `docx-redline` on disk and undispatchable by `run_skill`.
+  the deleted dispatcher — had already drifted, leaving `flowchart` and
+  `docx-redline` on disk and undispatchable. The planner offers the discovered
+  in-tree methods; external procedures are never plan tasks.
+- **Discovered directories are resolved.** The install that keeps `.git` is a
+  symlink into the clone's `skills/<name>/`, and every containment check
+  compares resolved paths: an unresolved link made `run_skill_script` refuse
+  each of the skill's own scripts.
 - **Three tools make driving possible** (`tools/skill_runtime.py`), and the
   containment is the point. `write_text_file` writes only under `outputs_dir`,
   **not** `project_root`, which holds the source tree. `run_skill_script` runs
-  only a `.py` that resolves *inside* a discovered skill's directory, with
-  `argv` as a list so there is no shell to inject into; a non-zero exit is
-  returned as data, because that is how a skill's own gate reaches the model.
+  only a `.py` (this Python) or `.mjs`/`.js`/`.cjs` (Node via
+  `writers._node.find_node`) that resolves *inside* a discovered skill's
+  directory — the skill directory itself is resolved first, so a staged skill
+  that is a symlink into a checkout works and a script linked out of it does
+  not — with `argv` as a list so there is no shell to inject into; a non-zero
+  exit is returned as data, because that is how a skill's own gate reaches the
+  model. mizzlelover/gongwen-gbt9704-skill (MIT, `.mjs` generator and
+  verifier) is the Node case; it is staged as an intact clone, not vendored.
   `list_skill_dir` exists so reference paths are read rather than guessed.
   The trust boundary is the skill root: a script under a configured root runs
   with the harness's privileges, so never point a root at a directory the
   model can write to — the two tools compose into arbitrary code execution.
 - **An external skill gets a host runtime contract, never the playbook.**
   `agent._external_skill_prompt` supplies the resolved absolute `SKILL_DIR`
-  (such a skill is typically told never to guess it), the call mapping, and the
-  two assumptions that fail here: there is no interactive channel, so a
-  blocking user gate runs under the skill's own explicit-delegation provision
-  and the decision is reported rather than fabricated; and there are no
-  background processes, so a preview server is never started. Handing it the
-  PRC playbook would be a conflicting instruction, not extra context.
+  (such a skill is typically told never to guess it), the call mapping, and
+  what does not hold here: `SKILL_DIR` is read-only, so a command whose default
+  output lies inside the installation is pointed at the work directory;
+  `run_skill_script` sets no environment variables and waits at most 900 s;
+  `read_document` returns ~12K tokens per call, so a long reference is paged to
+  its end; there is no interactive channel, so a blocking user gate runs under
+  the skill's own explicit-delegation provision and the decision is reported
+  under `## Decisions under delegation` rather than fabricated; and there are
+  no background processes, so a preview server is never started. Handing it
+  the PRC playbook would be a conflicting instruction, not extra context.
 - **A procedure must never be round-capped.** It spends rounds reading its own
   workflow, authoring one artifact per page, running its gate, repairing, then
   exporting; the old 8-round research cap could not reach its export step at
@@ -435,9 +688,10 @@ explicitly asks for restructuring.
   those are contracts about methodology we maintain. Contract tests iterate
   `skills.internal_skill_names()`; `list_skills()` reports every discovered
   skill and flags which are external.
-- **Never vendor a large external skill.** `ppt-master` is 124 MB / 13k files
-  and its `attribution_guard.py` fails closed on any modification, so it must
-  remain an intact official distribution at a configured root.
+- **Never vendor a large external skill.** `ppt-master`'s skill folder is
+  83 MB / 13k files and its `attribution_guard.py` fails closed on any
+  modification, so it must remain an intact official distribution at a
+  configured root.
 
 ## Workflow failure taxonomy
 
@@ -454,9 +708,11 @@ is the right-answer-wrong-reason case, and summing them would hide it.
 
 - Both `claude-opus-5-5` and `gpt-6.1-sol` (the primaries, and the only high-effort models offered) must work end-to-end on every change.
 - Fast/lightweight tier: `claude-sonnet-5` and `gpt-6-luna` (there is no `gpt-6.1-luna`). There is no bare `gpt-6` or `gpt-6.1` alias — always name the variant.
-- **`gpt-6.1-sol` rejects `none` and `minimal` reasoning effort** (it accepts low / medium / high / xhigh / max). `none` is safe only because `openai_provider` *omits* the `reasoning` param for it, which runs the model at its default, medium. Never forward `none` or `minimal` as a literal effort value.
+- **Per-model OpenAI request capabilities are tables, from live probes** (`openai_provider.OPENAI_REASONING_EFFORTS`, `OPENAI_VERBOSITY_MODELS`, `OPENAI_EXPLICIT_CACHE_MODELS`, 2026-10-07). `gpt-6.1-sol` takes low / medium / high / xhigh / max and rejects `none` / `minimal`; `gpt-6-luna` takes `none` too but not `minimal`. Omitting `reasoning` runs **both** at medium — so the old "omit it for `none`" rule made every `none` luna call (titles, routing) reason at medium. `reasoning_effort_for` now sends the nearest level the model accepts (`none` → `low` on sol, `none` as-is on luna); a model missing from the table keeps the old omit rule. **Add a new model's row when you add the model.** `text.verbosity` is sent only to models in the verbosity table.
 - **Retired 2026-09-22:** `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-haiku-4-5`, and the whole `gpt-5.6` family (terra / sol / luna). **Retired 2026-10-07:** `gpt-6-sol`, superseded by `gpt-6.1-sol` (same $2.00/$10.00; cached input $0.10 against $0.20). The reasons are in `config.RETIRED_MODELS`. They stay priced in `usage.DEFAULT_PRICING` and windowed in `context._WINDOWS` so historical ledger months still replay.
-- **Anthropic thinking is adaptive, never `budget_tokens`.** Every offered Claude model rejects `thinking: {type: "enabled"}` with a 400. `anthropic_provider._thinking_kwargs` maps the shared effort dial onto `thinking: {type: "adaptive"}` + `output_config.effort`. `none` maps to `low` effort because Opus 5.5 cannot disable thinking at all. `claude-sonnet-5` is the fast *model* but not the fast *compaction tier*: it has a 1M window and frontier-class quality, so `is_fast_tier` deliberately excludes it.
+- **Anthropic thinking is adaptive, never `budget_tokens`.** Every offered Claude model rejects `thinking: {type: "enabled"}` with a 400. `anthropic_provider._thinking_kwargs` maps the shared effort dial onto `thinking: {type: "adaptive", display: "summarized"}` + `output_config.effort`, on `tool_runner` as well as `stream`. `none` maps to `low` effort because Opus 5.5 cannot disable thinking at all. `display` must be set: Opus 5.5 and Sonnet 5 default to `omitted`, which streams empty thinking text.
+- **A response's independent read-only tool calls run side by side**, on both providers (`providers/tool_exec.py`; the Anthropic runner's `_generate_tool_call_response` is replaced to get there). What may overlap is declared in `tool_policy` — `CONCURRENT_SAFE_TOOLS`, every connector in `connectors.REGISTRY`, tools of the `READ_ONLY_MCP_SERVERS` — never inferred from `is_mutating`: renders mutate nothing yet share PDFium, which is not thread-safe, so they sit in a `CONCURRENCY_GROUPS` group whose members never overlap (process-wide, across sub-agents too). Anything undeclared is a barrier that runs alone, in order. Started/finished events still go out in call order — the UI pairs them first-in, first-out per tool — and worker threads get a copy of the caller's contextvars, without which their events and usage attribution vanish.
+- **Progress before results:** both providers emit `tool_progress` (`{tool_name, call_id, chars_so_far, agent}`, throttled to one per 250 ms per call, silent for calls that finish streaming inside that) while a call's arguments are still being written, and `hosted_tool_progress` (`status` searching / completed, plus `query` / `url` when known) when the provider reports a hosted search. Both are transient previews like `reasoning_delta`: emit them, never persist them per tick. `claude-sonnet-5` is the fast *model* but not the fast *compaction tier*: it has a 1M window and frontier-class quality, so `is_fast_tier` deliberately excludes it.
 - `gpt-5.5` is **retired from the high-effort list** (2026-09-11): at verified list prices it is $5.00/$30.00 against Terra's $2.00/$12.00 for the same work, and it was 5.7% of September requests but 55% of real spend. It stays in `usage.DEFAULT_PRICING` so historical ledger months still replay — do not put it back in `OPENAI_HIGH_EFFORT_MODELS`.
 - **Retirement is enforced at load, not only at selection.** A chat freezes its
   model at creation (`ChatStore.default_settings`) and re-applies it on every
@@ -519,7 +775,7 @@ python -m legal_helper serve --port 8010
 python -m legal_helper.rag.ingest --collection aviation --source caac_ccar
 python -m pytest -q                      # always `python -m`: bare `pytest` resolves
                                          # to base's interpreter and dies at collection
-python -m pytest -q tests/test_pptx_flowchart.py   # native flowchart shape contract
+python -m pytest -q tests/test_decks.py tests/test_diagrams.py  # the deck path and diagram pictures
 dot -V && d2 --version                   # diagram engines; d2 is optional
 python -c "from legal_helper.skills import list_skills; print([s['name'] for s in list_skills()])"
 ```
@@ -528,10 +784,14 @@ python -c "from legal_helper.skills import list_skills; print([s['name'] for s i
 
 - `python -m pytest -q tests/test_skill_anatomy.py` — anatomy contract: each SKILL.md <100 lines, frontmatter valid, referenced files exist.
 - `python -m pytest -q tests/test_provider_parity.py` — Anthropic and OpenAI see identical tool surface and equivalent results.
-- `python -m pytest -q tests/test_tool_budget.py tests/test_context.py tests/test_turn_compaction.py` — per-result budgets, the turn ceiling, and in-turn clearing (no caps).
+- `python -m pytest -q tests/test_tool_budget.py tests/test_context.py tests/test_turn_compaction.py` — per-result budgets, the turn ceiling, and in-turn clearing (no caps; server-side on Anthropic).
+- `python -m pytest -q tests/test_tool_exec.py tests/test_stream_release.py` — concurrent tool calls (order, barriers, groups, contextvars) and the stream closing at `done` with housekeeping behind it.
 - `python -m pytest -q tests/test_verified_synthesis.py tests/test_runs.py` — audit-then-reveal, the clarify gates, and the durable run record.
-- `python -m pytest -q tests/test_graph_layout.py tests/test_document_quality.py tests/test_docx_layout.py` — diagram geometry, the output linter, and the DOCX table/indent contract.
+- `python -m pytest -q tests/test_decks.py tests/test_external_skill_install.py` — `create_deck` on a fake ppt-master run: the self-contained task, the `_decks/` workspace, export verification, progress events, and that it is on every authoring surface; and a symlinked skill install driving its own scripts.
+- `python -m pytest -q tests/test_procedures.py` — `run_procedure` on a fake procedure run: only named deliverables reach the chat, never over a delivered file, and the tool is offered only while a non-deck procedure is installed.
+- `python -m pytest -q tests/test_diagrams.py tests/test_document_quality.py tests/test_docx_layout.py` — Mermaid parsed and drawn by Graphviz, the output linter (groups, table overflow), and the DOCX table/indent contract.
 - `python -m pytest -q tests/test_skill_runtime.py` — skill discovery and, more importantly, the containment of `write_text_file` / `run_skill_script`: escapes out of `outputs/` and out of a skill directory are asserted, not assumed.
-- The baseline is **3 failed / 625 passed / 2 skipped**; the three failures are
+- `python -m pytest -q tests/test_docx_prc_output.py tests/test_pdf_prc_output.py tests/test_xlsx_writer.py tests/test_document_lint_prc.py tests/test_document_tools_prc.py tests/test_skill_resources_and_gongwen.py` — PRC page/footer, list restarts, disclaimer-in-properties, the Markdown front end, templates, GB/T 9704 (checked by the staged gongwen verifier when present), stored formula values, and the Word/PDF/XLSX lint.
+- The baseline is **3 failed / 946 passed / 2 skipped**; the three failures are
   `tests/test_caac_local_connector.py` (staged CAAC corpus absent). Anything else is a regression.
 - Live smoke once per provider per major change: `MODEL_PROVIDER=anthropic` then `MODEL_PROVIDER=openai`.

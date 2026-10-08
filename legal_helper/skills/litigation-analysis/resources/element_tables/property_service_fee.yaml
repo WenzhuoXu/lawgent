@@ -1,0 +1,92 @@
+# 物业服务合同纠纷（物业服务人请求业主支付物业费）— property-service fee claim.
+# Pinpoints checked 2026-10-07 against the 民法典 text at court.gov.cn.
+# Re-verify every pinpoint via pkulaw_fatiao before use (README rule).
+# Not a defence: "I did not use / did not need the service" — once service was
+# provided as agreed, the owner may not refuse on that ground (第九百四十四条).
+# The provider may not cut power, water, heating or gas to collect (same article).
+name: property_service_fee
+display_name: 物业服务合同之诉（物业费）/ Property-service fee claim
+cause_of_action: 物业服务合同纠纷
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第九百三十七条
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第九百四十四条
+elements:
+  - id: binding_contract
+    element_zh: 物业服务合同对业主有约束力（建设单位依法订立的前期物业服务合同，或业主委员会与业主大会依法选聘的物业服务人订立的合同）
+    element_en: A service contract binds the owner (developer's preliminary contract or owners' committee contract)
+    burden: claimant
+    evidence_hints: [前期物业服务合同, 业主大会决议及选聘材料, 业主身份/产权证明]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百三十九条
+  - id: service_provided
+    element_zh: 物业服务人已经按照约定和有关规定提供服务
+    element_en: The provider supplied the service as agreed and as required
+    burden: claimant
+    evidence_hints: [服务记录, 维修养护台账, 公示材料]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百四十四条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百四十二条
+  - id: fee_amount
+    element_zh: 收费标准、计费面积和欠费期间可以确定
+    element_en: Rate, chargeable area and arrears period are established
+    burden: claimant
+    evidence_hints: [收费标准条款/备案, 面积证明, 欠费明细]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百四十四条
+  - id: overdue_after_demand
+    element_zh: 业主逾期不支付，经催告在合理期限内仍不支付
+    element_en: Fees overdue and unpaid after a demand with a reasonable period
+    burden: claimant
+    evidence_hints: [催缴通知及送达证据, 催缴记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百四十四条
+defenses:
+  - id: substandard_service
+    element_zh: 物业服务不符合约定，请求相应减少物业费
+    element_en: Service fell short of the contract — fee reduced accordingly
+    burden: respondent
+    stage: quantum
+    evidence_hints: [服务缺陷证据, 投诉及处理记录, 第三方评估]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百四十二条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百八十二条
+  - id: holdover_after_termination
+    element_zh: 合同终止后原物业服务人未按约定或合理期限退出、移交，不得请求合同终止后的物业费（新物业服务人或自管业主接管前继续处理服务事项的，可请求该期间物业费）
+    element_en: No fees after termination if the old provider refused to hand over (interim service excepted)
+    burden: respondent
+    stage: arises
+    evidence_hints: [合同终止证据, 退出与交接情况, 新物业接管时间]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百四十九条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百五十条
+  - id: fees_paid
+    element_zh: 物业费已经支付
+    element_en: The fees were paid
+    burden: respondent
+    stage: extinguished
+    evidence_hints: [缴费凭证, 收据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百五十七条
+  - id: limitation
+    element_zh: 诉讼时效已经届满（先定性各期物业费是同一债务分期履行还是各自独立的定期给付）
+    element_en: Limitation expired — classify the periodic fees first
+    burden: respondent
+    stage: exercisable
+    evidence_hints: [各期费用到期日, 催缴记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十九条

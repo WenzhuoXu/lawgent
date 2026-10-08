@@ -10,22 +10,34 @@ mammoth>=1.11
 firecrawl-anydoc>=0.1.6
 markitdown[all]>=0.1.5
 Pillow>=12
+# HEIC/HEIF phone photos. pi-heif decodes only (BSD-3; wheels bundle libheif and
+# libde265, LGPLv3). Not pillow-heif: its wheels are GPLv2 (they bundle x265).
+pi-heif>=1.0
 weasyprint>=68
 markdown>=3.10
+markdown-it-py>=3
+mdit-py-plugins>=0.4
 loguru>=0.7
 fastapi>=0.136
 uvicorn[standard]>=0.46
 python-multipart>=0.0.28
 python-dotenv>=1.2
 pdfminer.six
-pymupdf>=1.24
 pdfplumber>=0.11.9
 pypdf>=6.11
 pypdfium2>=5.8
+# OCR for image-only PDF pages and images (Apache-2.0, CPU via onnxruntime).
+# Its PP-OCRv6 models (~31 MB) download once into site-packages/rapidocr/models.
+# rapidocr declares opencv-python; on a headless server install opencv-python-headless
+# and then rapidocr with --no-deps.
+rapidocr>=3.9
+onnxruntime>=1.20
+# Integrity check run after every DOCX edit (MIT): lost comment anchors,
+# revisions, footnote references. Findings codes change between minors.
+ooxml-integrity>=0.5,<0.6
 pikepdf>=10.6
 reportlab>=4.5
 pdf2image>=1.17
-pytesseract>=0.3.13
 jinja2
 rich
 pyyaml
@@ -39,3 +51,4 @@ qdrant-client>=1.12
 sentence-transformers>=5
 pytest>=9
 pytest-asyncio>=1.3
+chinesecalendar>=1.11.0   # PRC 法定休假日 / 调休 for compute_period; bump each November

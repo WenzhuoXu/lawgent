@@ -4,6 +4,9 @@ Each pack is a directory under ``legal_helper/domains/<name>/`` containing:
 
     pack.yaml          — metadata (name, jurisdictions, mcp_servers, skill_overlays)
     playbook.md        — domain-specific playbook (loaded after general_playbook.md)
+    research_sources.md — the domain's source routing (regulators, connectors,
+                         collections), inlined for authors and specialists while
+                         the pack is active
     references/        — long-form domain prose pulled on demand
     overlays/<skill>.md — per-skill aviation deltas concatenated after SKILL.md
 
@@ -13,9 +16,8 @@ is passed via the ``--domain-pack`` flag / ``ChatSettings.domain_pack``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 import yaml
 
@@ -40,6 +42,7 @@ class DomainPack:
     markers_chinese: tuple[str, ...] = ()
     default_language: str = "en"
     description: str = ""
+    research_sources_path: Path | None = None
 
     def overlay_for(self, skill_name: str) -> Path | None:
         rel = self.skill_overlays.get(skill_name)
@@ -47,11 +50,6 @@ class DomainPack:
             return None
         path = self.root / rel
         return path if path.is_file() else None
-
-    def list_references(self) -> list[Path]:
-        if not self.references_dir.is_dir():
-            return []
-        return sorted(self.references_dir.glob("*.md"))
 
 
 def _load_yaml(path: Path) -> dict:
@@ -82,6 +80,9 @@ def load_pack(name: str) -> DomainPack:
         markers_chinese=tuple(markers.get("chinese") or ()),
         default_language=meta.get("default_language", "en"),
         description=meta.get("description", ""),
+        research_sources_path=(
+            root / meta["research_sources"] if meta.get("research_sources") else None
+        ),
     )
 
 
@@ -94,7 +95,3 @@ def available_packs() -> list[str]:
         if child.is_dir() and (child / "pack.yaml").is_file():
             out.append(child.name)
     return out
-
-
-def load_packs(names: Iterable[str]) -> list[DomainPack]:
-    return [load_pack(n) for n in names if n]

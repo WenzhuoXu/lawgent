@@ -20,7 +20,7 @@ import random
 import threading
 import time
 from collections import OrderedDict
-from typing import Any, Optional, Protocol
+from typing import Any, Optional
 
 import httpx
 
@@ -245,12 +245,3 @@ def ensure_keys_loaded() -> None:
         pass
 
 
-class Connector(Protocol):
-    """Protocol for an in-process connector exposed as a function tool."""
-
-    jurisdiction: tuple[str, ...]
-    rate_limit_per_sec: float
-    cache_ttl_seconds: int
-
-    def name(self) -> str:
-        ...

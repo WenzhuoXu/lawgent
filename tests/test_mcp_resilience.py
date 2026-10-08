@@ -195,3 +195,40 @@ def test_tools_list_fallback_ttl_shorter_than_live_ttl():
 
     assert mt._TOOLS_LIST_FALLBACK_TTL < mt._TOOLS_LIST_LIVE_TTL
     assert mt._TOOLS_LIST_FALLBACK_TTL <= 120
+
+
+def test_discovery_probes_servers_in_parallel_and_keeps_registry_order(monkeypatch):
+    """Cold discovery used to cost the sum of every server's probe (9.4 s for 11
+    servers on 2026-10-07); in parallel it costs the slowest one. A server that
+    blows up loses only its own tools, and the assembled list keeps registry
+    order whichever probe finishes first — it is part of every cached prefix."""
+    import threading
+    import time
+
+    from legal_helper.tools import mcp_tools as mt
+
+    names = ["pkulaw_law_search", "pkulaw_fatiao", "courtlistener_mcp", "govinfo_mcp"]
+    specs = [McpServerSpec(name=n, transport="http", url=f"https://{n}.invalid/mcp") for n in names]
+    monkeypatch.setattr(mt, "visible_mcp_specs", lambda j, p: specs)
+    mt._cached_tools_list.cache_clear()
+    barrier = threading.Barrier(len(names) - 1, timeout=5)
+
+    def fake_list_tools(spec):
+        if spec.name == "pkulaw_fatiao":
+            raise RuntimeError("gateway exploded")
+        barrier.wait()  # only parallel probes get past this
+        time.sleep(0.01 * (len(names) - names.index(spec.name)))  # finish out of order
+        return [{"name": f"{spec.name}_tool", "description": "d", "inputSchema": {"type": "object", "properties": {}}}]
+
+    monkeypatch.setattr(mt, "http_list_tools", fake_list_tools)
+    try:
+        tools = mt.visible_mcp_function_tools(["CN", "US"], [])
+    finally:
+        mt._cached_tools_list.cache_clear()
+    servers = [t.name.split("__", 1)[0] for t in tools]
+    # Registry order, each server's tools contiguous; the exploding server has none.
+    assert list(dict.fromkeys(servers)) == ["pkulaw_law_search", "courtlistener_mcp", "govinfo_mcp"]
+    assert servers == sorted(servers, key=names.index)
+    names_out = {t.name for t in tools}
+    for live in ("pkulaw_law_search__pkulaw_law_search_tool", "courtlistener_mcp__courtlistener_mcp_tool", "govinfo_mcp__govinfo_mcp_tool"):
+        assert live in names_out

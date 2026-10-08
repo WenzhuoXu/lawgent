@@ -1,0 +1,131 @@
+# 保证合同纠纷（债权人请求保证人承担保证责任）— creditor v. guarantor.
+# Pinpoints checked 2026-10-07 against the 民法典 text at court.gov.cn and
+# 法释〔2020〕28号 (担保制度解释). Re-verify every pinpoint via pkulaw_fatiao
+# before use (README rule).
+# Also check: 保证人可以主张债务人对债权人的抗辩 (民法典 第七百零一条);
+# 一般保证中只起诉保证人的，驳回起诉 (担保制度解释 第二十六条);
+# "直至主债务本息还清时为止" 视为约定不明 (担保制度解释 第三十二条);
+# co-guarantor recourse only by agreement or joint signature (担保制度解释 第十三条).
+name: guarantee
+display_name: 保证合同之诉 / Suretyship — claim against the guarantor
+cause_of_action: 保证合同纠纷
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第六百八十一条
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第六百八十八条
+elements:
+  - id: main_debt_due_unpaid
+    element_zh: 主债权有效存在，债务人不履行到期债务或者发生约定情形
+    element_en: A valid main debt is due and unpaid (or the agreed trigger occurred)
+    burden: claimant
+    evidence_hints: [主合同, 放款/交付凭证, 到期与欠款证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百八十一条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百八十二条
+  - id: guarantee_formed
+    element_zh: 保证合同成立：单独书面合同、主合同中的保证条款，或第三人单方书面保证经债权人接收且未提出异议
+    element_en: Guarantee formed — written contract, clause, or unilateral written guarantee accepted
+    burden: claimant
+    evidence_hints: [保证合同/保证条款, 担保函及接收记录, 签章真实性]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百八十五条
+  - id: guarantee_type
+    element_zh: 保证方式：约定连带责任的为连带责任保证；没有约定或者约定不明确的按一般保证（"不能履行/无力偿还时才承担"认定为一般保证，"不履行/未偿还即承担""无条件承担"认定为连带）
+    element_en: Type — joint-and-several only if agreed; otherwise general (wording test)
+    burden: claimant
+    evidence_hints: [保证方式条款原文, 磋商记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百八十六条
+      - source: 《最高人民法院关于适用〈中华人民共和国民法典〉有关担保制度的解释》
+        pinpoint: 第二十五条
+  - id: within_guarantee_period
+    element_zh: 债权人在保证期间内依法行使权利（一般保证：对债务人提起诉讼或申请仲裁；连带责任保证：请求保证人承担责任）；未约定或约定不明的，保证期间为主债务履行期限届满之日起六个月；保证期间不中止、中断、延长，法院应当主动查明
+    element_en: Creditor acted within the guarantee period (default six months; no tolling)
+    burden: claimant
+    evidence_hints: [保证期间条款, 起诉/仲裁受理材料, 向保证人主张权利的函件及送达证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十二条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十三条
+      - source: 《最高人民法院关于适用〈中华人民共和国民法典〉有关担保制度的解释》
+        pinpoint: 第三十四条
+  - id: scope
+    element_zh: 保证范围：主债权及利息、违约金、损害赔偿金和实现债权的费用，另有约定的按约定
+    element_en: Scope — principal, interest, penalties, damages, enforcement costs unless agreed otherwise
+    burden: claimant
+    evidence_hints: [保证范围条款, 债权计算表]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十一条
+defenses:
+  - id: benefit_of_discussion
+    element_zh: 一般保证的先诉抗辩：主合同纠纷未经审判或者仲裁、并就债务人财产依法强制执行仍不能履行前，拒绝承担保证责任（债务人下落不明且无财产可供执行、法院已受理债务人破产、债权人有证据证明债务人财产不足或丧失履行能力、保证人书面放弃的除外）
+    element_en: General guarantee — enforce against the debtor first (four statutory exceptions)
+    burden: respondent
+    stage: exercisable
+    evidence_hints: [保证方式条款, 对债务人诉讼/执行进展, 放弃先诉抗辩权的书面文件]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百八十七条
+  - id: main_contract_invalid
+    element_zh: 主债权债务合同无效致保证合同无效（法律另有规定的除外；各方按过错承担相应民事责任）
+    element_en: Main contract void, so the guarantee is void (fault-based liability may remain)
+    burden: respondent
+    stage: arises
+    evidence_hints: [主合同无效事由证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百八十二条
+  - id: unconsented_variation
+    element_zh: 债权人与债务人未经保证人书面同意变更主合同加重债务的，保证人对加重部分不承担责任（变更履行期限未经书面同意的，保证期间不受影响）
+    element_en: Unconsented variation increasing the debt — no liability for the increase
+    burden: respondent
+    stage: quantum
+    evidence_hints: [变更协议, 保证人未书面同意的证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十五条
+  - id: unconsented_debt_transfer
+    element_zh: 债权人未经保证人书面同意允许债务人转移债务的，保证人对未经其同意转移的债务不再承担责任（另有约定的除外；第三人加入债务不影响保证责任）
+    element_en: Debt transferred without the guarantor's written consent — released for that part
+    burden: respondent
+    stage: extinguished
+    evidence_hints: [债务转移协议, 保证人同意情况]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十七条
+  - id: assignment_against_ban
+    element_zh: 保证人与债权人约定禁止债权转让，债权人未经保证人书面同意转让的，保证人对受让人不再承担责任（转让未通知保证人的，对保证人不发生效力）
+    element_en: Assignment despite an agreed ban — no liability to the assignee
+    burden: respondent
+    stage: extinguished
+    evidence_hints: [禁止转让约定, 转让协议, 通知保证人的记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十六条
+  - id: debtor_setoff_or_rescission
+    element_zh: 债务人对债权人享有抵销权或者撤销权的，保证人可以在相应范围内拒绝承担保证责任
+    element_en: Debtor holds a set-off or rescission right — guarantor may refuse to that extent
+    burden: respondent
+    stage: exercisable
+    evidence_hints: [债务人对债权人的反向债权, 撤销事由证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百零二条
+  - id: guarantee_limitation
+    element_zh: 保证债务诉讼时效已经届满（一般保证自先诉抗辩权消灭之日起算；连带保证自债权人请求保证人承担责任之日起算）
+    element_en: Limitation on the guarantee debt expired (start differs by type)
+    burden: respondent
+    stage: exercisable
+    evidence_hints: [执行终结/终本裁定送达时间, 向保证人主张权利的日期]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第六百九十四条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条

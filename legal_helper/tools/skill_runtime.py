@@ -6,7 +6,7 @@ files* (a design spec, a lock, one SVG per page, a notes document) and it
 *runs its own scripts* (an integrity guard, a structure validator, a quality
 gate, an exporter). Neither capability existed here, and without them the
 skill cannot be driven at all — not for want of permission but for want of a
-call. ``write_docx``/``write_pptx`` take structured parameters and emit
+call. ``write_docx``/``write_pdf`` take structured parameters and emit
 binaries; there was no way to write an ``.svg``, and no way to run the
 checker that is the skill's own gate.
 
@@ -15,9 +15,12 @@ Both tools are deliberately narrow:
 - :func:`write_text_file` writes only under ``outputs_dir``. Not
   ``project_root`` — that contains the source tree, and an agent that can
   overwrite ``legal_helper/*.py`` is a different kind of tool than this.
-- :func:`run_skill_script` runs only a ``.py`` file that resolves *inside* a
+- :func:`run_skill_script` runs only a script that resolves *inside* a
   discovered skill's own directory, with ``argv`` passed as a list so there is
-  no shell to inject into.
+  no shell to inject into: ``.py`` under this Python, ``.mjs``/``.js``/``.cjs``
+  under the Node that ships with it (``writers._node.find_node``). Node was
+  needed for gongwen-gbt9704-skill, whose generator and 13-check verifier are
+  both ``.mjs``; the containment is identical for every interpreter.
 
 The trust boundary is the skill root, not the call: a script under a
 configured root runs with the harness's privileges, which is what "drive this
@@ -137,7 +140,7 @@ def list_skill_dir(skill: str, subpath: str = "") -> str:
         subpath: Optional directory inside the skill, e.g. ``workflows``.
     """
     try:
-        root = skill_dir(skill)
+        root = _real_skill_dir(skill)
     except FileNotFoundError as exc:
         return f"ERROR: {exc}"
     target = (root / subpath).resolve() if subpath else root
@@ -167,6 +170,45 @@ def list_skill_dir(skill: str, subpath: str = "") -> str:
     )
 
 
+def _real_skill_dir(skill: str) -> Path:
+    """The skill's directory with symlinks resolved.
+
+    A skill root is operator-configured and trusted, and a staged skill is
+    often a symlink into a checkout (``root/ppt-master -> …/skills/ppt-master``).
+    Comparing a resolved script path against the unresolved link refused every
+    script of such a skill as "outside the skill directory". Resolving the
+    skill's own directory follows the operator's link once; a script that
+    escapes it by ``..`` or by a link of its own is still refused.
+    """
+    return skill_dir(skill).resolve()
+
+
+#: Interpreter per script suffix. Python runs under this interpreter so a
+#: skill's script sees the harness's own packages; Node is looked up the way
+#: every Node renderer here is (``LEGAL_HELPER_NODE`` → beside Python → PATH).
+_PYTHON_SUFFIXES = frozenset({".py"})
+_NODE_SUFFIXES = frozenset({".mjs", ".js", ".cjs"})
+
+
+def _interpreter_for(script: Path) -> tuple[list[str] | None, dict[str, str], str]:
+    """``(argv prefix, extra env, error)`` for running ``script``."""
+    suffix = script.suffix.lower()
+    if suffix in _PYTHON_SUFFIXES:
+        return [sys.executable], {}, ""
+    if suffix in _NODE_SUFFIXES:
+        from ..documents.writers._node import find_node, node_diagnostic
+
+        node = find_node()
+        if not node:
+            return None, {}, f"ERROR: cannot run {script.name}: {node_diagnostic()}"
+        # A script that spawns its own children (npx, a second node) must find
+        # them beside the interpreter, not on whatever PATH launched the server.
+        node_bin = str(Path(node).resolve().parent)
+        path = os.environ.get("PATH", "")
+        return [node], {"PATH": f"{node_bin}{os.pathsep}{path}" if path else node_bin}, ""
+    return None, {}, f"ERROR: only .py, .mjs, .js or .cjs scripts may be run (got {script.name!r})."
+
+
 def _clip(stream: str) -> tuple[str, bool]:
     if len(stream) <= _MAX_STREAM_CHARS:
         return stream, False
@@ -187,12 +229,13 @@ def run_skill_script(
     args: list[str] | None = None,
     timeout_s: int = 300,
 ) -> str:
-    """Run one of a skill's own Python scripts and return its output.
+    """Run one of a skill's own scripts (Python or Node) and return its output.
 
     This is how a procedural skill's gates and exporters are executed — its
     integrity guard, structure validator, quality checker and export step.
     The script must live inside that skill's directory. Arguments are passed
-    as an argv list, not through a shell.
+    as an argv list, not through a shell. Relative paths in ``args`` resolve
+    against outputs/, the script's working directory.
 
     Returns JSON with ``exit_code``, ``stdout``, ``stderr`` and the resolved
     command. A non-zero ``exit_code`` is the script's verdict, not a tool
@@ -201,21 +244,23 @@ def run_skill_script(
     Args:
         skill: A discovered skill name that owns the script.
         script: Path to the script relative to the skill directory, e.g.
-            ``scripts/svg_quality_checker.py``. Must end in .py.
+            ``scripts/svg_quality_checker.py`` or
+            ``scripts/verify_gongwen_docx.mjs``. Must end in .py, .mjs, .js or .cjs.
         args: Arguments passed to the script, each as its own list item.
         timeout_s: Wall-clock limit in seconds (default 300, max 900).
     """
     try:
-        root = skill_dir(skill)
+        root = _real_skill_dir(skill)
     except FileNotFoundError as exc:
         return f"ERROR: {exc}"
-    if not script.endswith(".py"):
-        return f"ERROR: only .py scripts may be run (got {script!r})."
     candidate = (root / script).expanduser()
     try:
         resolved = candidate.resolve()
     except OSError as exc:
         return f"ERROR: cannot resolve script {script!r}: {exc}"
+    prefix, extra_env, error = _interpreter_for(resolved)
+    if prefix is None:
+        return error
     if root not in resolved.parents:
         return (
             f"ERROR: {resolved} is outside the skill directory {root}. "
@@ -224,9 +269,9 @@ def run_skill_script(
     if not resolved.is_file():
         return f"ERROR: script not found: {resolved}"
 
-    argv = [sys.executable, str(resolved), *[str(a) for a in (args or [])]]
+    argv = [*prefix, str(resolved), *[str(a) for a in (args or [])]]
     limit = max(1, min(int(timeout_s), MAX_TIMEOUT_S))
-    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", **extra_env}
     try:
         proc = subprocess.run(  # noqa: S603 — argv list, no shell; path is skill-confined
             argv,

@@ -67,3 +67,67 @@ def test_tool_name_of_handles_both_tool_shapes():
 
     assert tool_name_of(some_tool) == "some_tool"
     assert tool_name_of(object()) == ""
+
+
+# --- which calls of one response may run side by side ------------------------
+
+
+def test_concurrent_safe_tools_are_read_only_and_exist():
+    from legal_helper.tool_policy import CONCURRENCY_GROUPS, CONCURRENT_SAFE_TOOLS, is_concurrent_safe
+    from legal_helper.tools import _external_skill_tools, all_connector_tools, skill_tools
+    from legal_helper.tools.project_tools import project_brief_read
+    from legal_helper.workflow import _document_io_tools
+
+    assert not (CONCURRENT_SAFE_TOOLS & MUTATING_TOOLS)
+    # A declared name that no longer exists is a silent no-op; catch the typo.
+    known = {
+        tool_name_of(t)
+        for t in [
+            *_document_io_tools(),
+            *_external_skill_tools(),
+            *all_connector_tools(),
+            project_brief_read,
+        ]
+    }
+    for skill in ("brief", "cite-check", "review-contract"):
+        known |= {tool_name_of(t) for t in skill_tools(skill)}
+    missing = sorted(CONCURRENT_SAFE_TOOLS - known)
+    assert not missing, f"declared concurrent-safe but not registered: {missing}"
+    # Grouped tools are concurrent-safe against everything outside their group.
+    assert all(is_concurrent_safe(name) for name in CONCURRENCY_GROUPS)
+
+
+def test_connectors_and_research_mcp_servers_are_concurrent_safe():
+    from legal_helper.tool_policy import is_concurrent_safe
+    from legal_helper.tools import all_connector_tools
+
+    for tool in all_connector_tools():
+        assert is_concurrent_safe(tool_name_of(tool)), tool_name_of(tool)
+    assert is_concurrent_safe("pkulaw_fatiao__get_law_item_content")
+    assert is_concurrent_safe("courtlistener_mcp__search")
+
+
+def test_anything_undeclared_runs_serially():
+    from legal_helper.tool_policy import is_concurrent_safe
+
+    for name in (
+        "write_docx",  # authoring
+        "edit_xlsx_cells_checked",
+        "render_flowchart_image",  # authors a diagram
+        "create_deck",  # a whole sub-agent
+        "retrieve_legal",  # embedded Qdrant takes a file lock per client
+        "aviation_source_search",  # queries the same store
+        "some_new_tool",
+        "unknown_server__search",  # an MCP server nobody declared
+        "",
+    ):
+        assert not is_concurrent_safe(name), name
+
+
+def test_renders_and_document_reads_have_their_own_groups():
+    from legal_helper.tool_policy import concurrency_group
+
+    renders = {concurrency_group(n) for n in ("render_docx_pages", "render_pdf_pages", "render_pptx_slides", "render_xlsx_pages")}
+    assert renders == {"pdfium"}
+    assert concurrency_group("read_document") == "document_converter"
+    assert concurrency_group("inspect_docx") is None

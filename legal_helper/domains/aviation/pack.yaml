@@ -120,5 +120,6 @@ skill_overlays:
   draft-agreement: overlays/draft-agreement.md
   litigation-analysis: overlays/litigation-analysis.md
 playbook_path: playbook.md
+research_sources: research_sources.md
 references_dir: references
 overlay_dir: overlays

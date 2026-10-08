@@ -43,4 +43,22 @@ describe("SourcesList parser", () => {
     expect(body).toBe("just an answer, no sources.");
     expect(sources).toBeUndefined();
   });
+
+  it("parses the one-line-per-source list the answer contract writes", () => {
+    const answer = `结论：可以解除。\n\n## 资料来源\n1. [《中华人民共和国劳动合同法》第三十八条](https://flk.npc.gov.cn/x) — 已在线核验\n2. 《劳动合同》第5条 — 用户提供\n3. 某地方规定第12条 — 无法获得具体条款\n4. [某判例](https://example.com/c) — 未核验\n`;
+    const { body, sources } = splitSources(answer);
+    expect(body).toBe("结论：可以解除。");
+    const rows = parseSourcesTable(sources!);
+    expect(rows).toHaveLength(4);
+    expect(rows![0]).toMatchObject({ index: "1", claim: "", status: "ok", pinpointHref: "https://flk.npc.gov.cn/x" });
+    expect(rows![0].pinpoint).toContain("第三十八条");
+    expect(rows![1].status).toBe("none"); // the user's own file: no amber dot
+    expect(rows![2].status).toBe("warn");
+    expect(rows![3].status).toBe("warn");
+  });
+
+  it("parses the English list form", () => {
+    const rows = parseSourcesTable("## Sources\n1. [Cal. Bus. & Prof. Code § 16600](https://law.example/16600) — verified online\n2. Employment agreement, cl. 9 — user-provided\n3. Some guidance, para. 4 — unverified\n");
+    expect(rows!.map((r) => r.status)).toEqual(["ok", "none", "warn"]);
+  });
 });

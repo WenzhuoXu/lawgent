@@ -19,22 +19,12 @@ frequently; verify against authoritative sources before reliance.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5 require. Emit exactly:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. No tables, matrices, walkthroughs, or
-sanity-check sections — those are forbidden in specialist bundles.
+Artefacts this skill produces: a requirements table (requirement · pinpoint · approval or reporting duty · deadline · owner) when the request involves several obligations.
 
 ## Inputs
 

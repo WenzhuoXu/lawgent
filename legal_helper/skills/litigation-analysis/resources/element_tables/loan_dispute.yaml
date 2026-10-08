@@ -19,15 +19,17 @@ elements:
       - source: 《中华人民共和国民法典》
         pinpoint: 第六百六十八条
   - id: funds_delivered
-    element_zh: 出借人已实际交付借款本金
-    element_en: The principal was actually delivered
+    element_zh: 出借人已实际交付借款本金（被告否认借贷实际发生并作出合理说明的，法院结合金额、交付方式、经济能力、交易习惯等综合判断——这是否认，不是抗辩）
+    element_en: The principal was actually delivered (a reasoned denial triggers a holistic review)
     burden: claimant
-    evidence_hints: [转账凭证, 银行流水, 现金交付的补强证据]
+    evidence_hints: [转账凭证, 银行流水, 现金交付的补强证据, 出借能力证据]
     authority:
       - source: 《中华人民共和国民法典》
         pinpoint: 第六百七十九条
       - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
-        pinpoint: 第十六条
+        pinpoint: 第九条
+      - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+        pinpoint: 第十五条第二款
   - id: repayment_due
     element_zh: 还款期限届满或依法可主张返还，借款人未还
     element_en: Repayment fell due (or is claimable) and was not made
@@ -45,11 +47,12 @@ elements:
       - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
         pinpoint: 第二十五条
 defenses:
-  - id: no_delivery
-    element_zh: 仅有借据而无交付事实，借贷关系未实际发生
-    element_en: IOU without actual delivery — no loan arose
+  - id: transfer_repaid_other_debt
+    element_zh: 原告仅凭转账凭证起诉，被告主张该转账系偿还双方之前借款或其他债务（被告举证后，原告仍须证明借贷关系成立）
+    element_en: Plaintiff relies only on a transfer; respondent shows it repaid an earlier debt
     burden: respondent
-    evidence_hints: [资金流水反证, 出借能力质疑证据]
+    stage: arises
+    evidence_hints: [此前债务的证据, 资金往来对账]
     authority:
       - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
         pinpoint: 第十六条
@@ -57,6 +60,7 @@ defenses:
     element_zh: 出借人套取金融机构贷款转贷，借贷合同无效
     element_en: Funds re-lent from institutional credit — contract void
     burden: respondent
+    stage: arises
     evidence_hints: [出借人贷款记录与出借时间的对应关系]
     authority:
       - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
@@ -65,12 +69,18 @@ defenses:
     element_zh: 借款已经清偿（含以物抵债、抵销）
     element_en: The loan was already repaid or set off
     burden: respondent
+    stage: extinguished
     evidence_hints: [还款凭证, 抵债协议, 抵销通知]
-    authority: []
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百五十七条
+      - source: 《最高人民法院关于审理民间借贷案件适用法律若干问题的规定》
+        pinpoint: 第十五条第一款
   - id: limitation
     element_zh: 诉讼时效已经届满
     element_en: The limitation period has expired
     burden: respondent
+    stage: exercisable
     evidence_hints: [还款期届满时点, 无催收/承诺还款的时间线]
     authority:
       - source: 《中华人民共和国民法典》

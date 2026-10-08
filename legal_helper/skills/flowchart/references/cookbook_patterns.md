@@ -3,8 +3,8 @@
 Attribution: prompting patterns below are distilled from the public
 **[anthropics/claude-cookbook](https://github.com/anthropics/anthropic-cookbook)**
 diagram-authoring notebooks (specifically the "iterative refinement" and
-"thinking before coding" recipes) and adapted to Mermaid + the
-`SlideFlowchart` schema. License of the original recipes: MIT.
+"thinking before coding" recipes) and adapted to Mermaid. License of the
+original recipes: MIT.
 
 ## Pattern 1 — Restate before drawing
 
@@ -21,69 +21,50 @@ question** instead of guessing. Asking is cheaper than re-drawing.
 
 For each step, pick the shape kind first, then the label:
 
-- Has an obvious "start" or "end"? Always wrap in `([…])` terminator.
+- Has an obvious "start" or "end"? Always wrap in `([…])`.
 - Splits into ≥ 2 paths? `{…?}` decision — and **end the label with `?`**.
   Decision shapes without a question mark consistently confuse readers.
-- Refers to an existing SOP / sub-procedure? `[[…]]` subprocess. Hyperlink
-  later via a separate annotation in the slide notes.
+- Refers to an existing SOP / sub-procedure? `[[…]]` subprocess.
 - External input (form filed, document submitted)? `[/…/]` IO.
-- Side-note that interrupts but doesn't progress the flow? `>…]` data /
-  callout.
+- Side-note that interrupts but doesn't progress the flow? `>…]` note.
 
-## Pattern 3 — Direction by intent
+## Pattern 3 — Direction by destination and intent
 
-- Approval / sequential workflows: `direction: TB` (top-down reads as
-  "first this, then this").
-- Hand-off timelines, parallel tracks, or comparative steps: `direction:
-  LR` (left-right reads as a swimlane).
-- Decision trees with many fan-outs: `direction: TB` keeps fan-outs
-  visually grouped; `LR` makes them cramped.
-- Never use `RL` or `BT` unless the user explicitly requested it; both
-  read as "backwards" to most readers.
+- Approval / sequential workflows: `flowchart TB` (top-down reads as
+  "first this, then this"), and always `TB` for a picture going onto a
+  portrait Word page.
+- Hand-off timelines and parallel tracks in a chat image: `LR`.
+- Decision trees with many fan-outs: `TB` keeps fan-outs grouped.
+- Never use `RL` or `BT` unless the user explicitly asked; both read as
+  "backwards" to most readers.
 
-## Pattern 4 — Inspect after writing, before reporting
+## Pattern 4 — Look after drawing, before reporting
 
-The skill's success criterion is **what's actually in the file**, not
-what the model intended. Always:
+The success criterion is **what is actually in the file**, not what was
+intended:
 
-1. `path = write_pptx(...)`.
-2. `inspect = inspect_pptx(path)`.
-3. Compare `inspect.slides[i].flowchart_node_count` against the number
-   of nodes you authored.
-4. If they don't match, you authored a typo (most often a node ID
-   referenced in an edge but never defined). Fix the Mermaid and rerun.
+1. Picture: `render_flowchart_image(...)`, then `view_image` on the PNG.
+   Count the decision branches you drew against the ones you meant.
+2. Deck: `create_deck(...)` returns the slide count, ppt-master's gate verdict
+   and the lint; `render_pptx_slides` shows the slide.
 
-If you skip this, the user sees a broken deck before you do.
+A branch that is missing almost always means a node id typed two ways
+(`D` in one line, `d` in another).
 
-## Pattern 5 — Loopback handling
+## Pattern 5 — Slide or picture
 
-Backward edges (`D --> A` to re-do a step) are common in approval flows.
-The pptxgenjs line shape can only orient one way per axis, so a long
-loopback may render the arrowhead on the wrong end. Two fixes:
+The destination decides, not the diagram's complexity:
 
-1. **Short loopbacks** — add `arrow="both"` so the arrow shows on both
-   ends. Visually unambiguous.
-2. **Long loopbacks** — author the loopback edge with an explicit
-   intermediate node so the segment direction matches the natural flow.
-   Example: `D --> R[复审]; R --> A` instead of `D --> A`.
+- Anything that will be presented — a deck, a 汇报 page, a single slide — is
+  `create_deck`. ppt-master draws the diagram as editable shapes and checks
+  it with its own gate; put every step, branch, owner and period in the brief.
+- A diagram for a memo, an email or the chat is `render_flowchart_image`.
+  Swimlanes are `subgraph` blocks; a 思维导图 is a `mindmap` source; a
+  structure of boxes inside boxes is D2 (`engine: "d2"`).
 
-## Pattern 6 — When to escalate to an image
-
-If the diagram needs any of:
-
-- swimlanes (`subgraph`),
-- > 12 nodes,
-- cross-edges that the auto-layout solver can't untangle,
-- a corporate-style theme the layout helper doesn't reproduce,
-
-…stop trying to make `SlideFlowchart` do it and switch to
-`render_flowchart_image(...)` → embed via `SlideImage`. The Artifact
-block then reports `kind: image`. This is not a failure — it's the
-right tool for dense or visually-prescriptive diagrams.
-
-## Pattern 7 — Source the process, not just the diagram
+## Pattern 6 — Source the process, not just the diagram
 
 A flowchart for an internal SOP must cite the SOP. A flowchart for a
 statutory procedure must cite the statute with article-level pinpoints
 (中华人民共和国行政许可法 第三十二条 etc.). If you can't cite, write
-`pinpoint unavailable` in the Sources block — never invent.
+`pinpoint unavailable` / `无法获得具体条款` — never invent.

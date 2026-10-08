@@ -12,27 +12,17 @@ Classify an NDA quickly: GREEN (standard sign), YELLOW (light counsel
 review), RED (full legal review). Surface the deviations driving the
 classification.
 
-**Not legal advice.** The bundle is internal triage; counsel signs off on
+**Not legal advice.** This is internal triage; counsel signs off on
 anything not GREEN.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. No coloured-band tables in the bundle
-— orchestrator authors those.
+Artefacts this skill produces: the classification line (GREEN / YELLOW / RED with the triggering clauses) and the carve-out checklist.
 
 ## Classification rules
 

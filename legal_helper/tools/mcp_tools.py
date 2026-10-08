@@ -14,7 +14,9 @@ runtime.
 
 from __future__ import annotations
 
+import contextvars
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 from anthropic.lib.tools._beta_functions import BetaFunctionTool
@@ -27,7 +29,16 @@ from ..mcp.registry import McpServerSpec
 from ..mcp.sync_client import http_call_tool, http_list_tools
 
 
-_LIST_LOCK = threading.Lock()
+# One lock per server, not one for all of them. A single lock serialised every
+# `tools/list` probe: measured 2026-10-07, a cold discovery of the 11 HTTP
+# servers took 9.4 s, the sum of the per-server probes (slowest 4.0 s), and
+# every sub-agent that started meanwhile queued behind it. The per-server lock
+# still stops two agents starting together from probing the same server twice:
+# the second waits, then reads what the first cached.
+_SPEC_LOCKS: dict[tuple[str, str, tuple[tuple[str, str], ...]], threading.Lock] = {}
+_SPEC_LOCKS_GUARD = threading.Lock()
+# Probes are network waits, so this bounds open sockets, not CPU.
+_MAX_PARALLEL_PROBES = 16
 
 
 def visible_mcp_specs(
@@ -94,6 +105,22 @@ def _spec_key(spec: McpServerSpec) -> tuple[str, str, tuple[tuple[str, str], ...
     return (spec.name, spec.url or "", headers)
 
 
+def _tools_list_for(spec_key: tuple[str, str, tuple[tuple[str, str], ...]]) -> tuple[dict[str, Any], ...]:
+    """One server's tool list, probing it at most once at a time.
+
+    A failure stays with its server: the probe already soft-fails to the static
+    manifest, and anything that escapes it yields an empty list here rather
+    than costing the other servers their tools.
+    """
+    with _SPEC_LOCKS_GUARD:
+        lock = _SPEC_LOCKS.setdefault(spec_key, threading.Lock())
+    try:
+        with lock:
+            return _cached_tools_list(spec_key)
+    except Exception:  # noqa: BLE001 — isolate one server's failure
+        return ()
+
+
 def _build_dispatcher(spec: McpServerSpec, tool_name: str):
     """Return a ``**kwargs`` closure suitable for ``BetaFunctionTool(func=...)``."""
 
@@ -124,21 +151,29 @@ def visible_mcp_function_tools(
     """Return ``BetaFunctionTool`` wrappers for every tool on every visible
     HTTP MCP server. Empty list if no MCP is visible / reachable.
     """
+    # stdio MCPs are reachable via :class:`McpManager` for clients that host
+    # them as subprocesses; the in-process tool surface only exposes HTTP MCPs
+    # to keep ``BetaFunctionTool.call`` sync.
+    specs = [s for s in visible_mcp_specs(jurisdictions, active_packs) if s.transport == "http"]
+    keys = [_spec_key(spec) for spec in specs]
+    if len(keys) > 1:
+        with ThreadPoolExecutor(
+            max_workers=min(len(keys), _MAX_PARALLEL_PROBES), thread_name_prefix="mcp-list"
+        ) as pool:
+            futures = [pool.submit(contextvars.copy_context().run, _tools_list_for, key) for key in keys]
+        lists = [f.result() for f in futures]
+    else:
+        lists = [_tools_list_for(key) for key in keys]
+    # Assembled in registry order whatever order the probes finished in: the
+    # tool list is part of every request's cached prefix, so it must not vary.
     out: list[BetaFunctionTool] = []
-    with _LIST_LOCK:
-        for spec in visible_mcp_specs(jurisdictions, active_packs):
-            if spec.transport != "http":
-                # stdio MCPs are reachable via :class:`McpManager` for clients
-                # that host them as subprocesses; the in-process tool surface
-                # only exposes HTTP MCPs to keep ``BetaFunctionTool.call`` sync.
+    for spec, tools in zip(specs, lists):
+        for t in tools:
+            if not isinstance(t, dict) or not t.get("name"):
                 continue
-            tools = _cached_tools_list(_spec_key(spec))
-            for t in tools:
-                if not isinstance(t, dict) or not t.get("name"):
-                    continue
-                wrapped = _wrap_as_function_tool(spec, t)
-                if wrapped is not None:
-                    out.append(wrapped)
+            wrapped = _wrap_as_function_tool(spec, t)
+            if wrapped is not None:
+                out.append(wrapped)
     return out
 
 

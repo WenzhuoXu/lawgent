@@ -90,7 +90,7 @@ def _set_text(shape, text, *, pt, wrap):
 
 
 def _translucent(shape, alpha_pct=30):
-    """Fill the shape at ``alpha_pct`` opacity, as the flowchart emitter does."""
+    """Fill the shape at ``alpha_pct`` opacity, as a tinted diagram node is drawn."""
     colour = shape.fill._xPr.find(".//" + qn("a:srgbClr"))
     etree.SubElement(colour, qn("a:alpha")).set("val", str(alpha_pct * 1000))
     return shape
@@ -286,9 +286,9 @@ def test_low_contrast_text_on_its_own_fill_is_reported(tmp_path):
 def test_a_translucent_fill_yields_no_contrast_finding(tmp_path):
     """Its effective colour is whatever is behind it, so the ratio is fiction.
 
-    The flowchart emitter fills nodes with the accent at 70% transparency; read
-    nominally that measured 1.9:1 against the navy label and manufactured a
-    finding for every node on the slide.
+    A node filled with the accent at 70% transparency, read nominally, measured
+    1.9:1 against its navy label and manufactured a finding for every node on
+    the slide.
     """
     prs, slide = _deck()
     node = _card(slide, 1.0, 1.0, 4.0, 1.5, "Navy on pale navy", pt=14.0, fill=NAVY)
@@ -301,6 +301,105 @@ def test_an_inherited_text_colour_is_skipped_rather_than_guessed(tmp_path):
     prs, slide = _deck()
     _card(slide, 1.0, 1.0, 4.0, 1.5, "Theme colour", pt=14.0, fill=NAVY)
     assert "low_contrast" not in _checks(_lint(prs, tmp_path))
+
+
+# ---------------------------------------------------------------------------
+# Groups and tables — where a ppt-master deck keeps its content
+# ---------------------------------------------------------------------------
+
+
+def _filled(shapes, x, y, w, h, text="", *, pt=18.0):
+    shape = shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = PALE
+    return _set_text(shape, text, pt=pt, wrap=True)
+
+
+def _place_group(group, *, x, y, w, h):
+    """Move/resize a group on its parent without touching its children."""
+    xfrm = group._element.find(qn("p:grpSpPr")).find(qn("a:xfrm"))
+    off, ext = xfrm.find(qn("a:off")), xfrm.find(qn("a:ext"))
+    off.set("x", str(int(Inches(x))))
+    off.set("y", str(int(Inches(y))))
+    ext.set("cx", str(int(Inches(w))))
+    ext.set("cy", str(int(Inches(h))))
+
+
+def test_text_inside_a_group_is_checked_like_any_other(tmp_path):
+    """ppt-master keeps every text frame in a group; the top-level walk saw none."""
+    prs, slide = _deck()
+    group = slide.shapes.add_group_shape()
+    _filled(group.shapes, 1.0, 1.0, 3.0, 0.6, HAN_BODY)
+    overflow = _only(_lint(prs, tmp_path), "text_overflow")
+    assert overflow.severity == "critical"
+    assert overflow.shape == "1.1"
+    assert "slide 1, shape 1.1" in overflow.where
+
+
+def test_a_group_maps_its_children_onto_the_slide(tmp_path):
+    """A child is where its group puts it, not where its own coordinates say."""
+    prs, slide = _deck()
+    group = slide.shapes.add_group_shape()
+    _filled(group.shapes, 1.0, 1.0, 2.0, 1.0, "Inside on its own terms")
+    _place_group(group, x=12.0, y=1.0, w=2.0, h=1.0)
+    off = _only(_lint(prs, tmp_path, "moved.pptx"), "shape_off_canvas")
+    assert off.shape == "1.1" and "(12.00, 1.00)" in off.detail
+
+    prs, slide = _deck()
+    group = slide.shapes.add_group_shape()
+    _filled(group.shapes, 9.0, 1.0, 8.0, 2.0, "Past the edge until the group scales it")
+    _place_group(group, x=6.0, y=1.0, w=4.0, h=1.0)
+    assert "shape_off_canvas" not in _checks(_lint(prs, tmp_path, "scaled.pptx"))
+
+
+def test_a_table_whose_rows_grow_past_the_slide_is_critical(tmp_path):
+    """Rows grow to fit their text; the frame's height does not bound the table."""
+    prs, slide = _deck()
+    frame = slide.shapes.add_table(16, 3, Inches(0.5), Inches(1.2), Inches(12.0), Inches(4.8))
+    for row in frame.table.rows:
+        for cell in row.cells:
+            cell.text = HAN_BODY
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(14)
+    lost = _only(_lint(prs, tmp_path), "table_overflow")
+    assert lost.severity == "critical"
+    assert "of a 16-row table run past the slide" in lost.detail
+    assert lost.detail.startswith("rows ") and "–16" in lost.detail
+
+
+def test_a_table_that_fits_is_not_reported(tmp_path):
+    prs, slide = _deck()
+    frame = slide.shapes.add_table(4, 3, Inches(0.5), Inches(1.2), Inches(12.0), Inches(2.0))
+    for row in frame.table.rows:
+        for cell in row.cells:
+            cell.text = "第三十八条"
+    assert "table_overflow" not in _checks(_lint(prs, tmp_path))
+
+
+def test_title_lines_set_as_separate_boxes_do_not_collide_on_their_leading(tmp_path):
+    """Their line boxes overlap by a fifth; their lettering clears by a gap."""
+    prs, slide = _deck()
+    _textbox(slide, 1.0, 1.0, 6.0, 0.85, "本月启动时刻申请", pt=40.0)
+    _textbox(slide, 1.0, 1.7, 6.0, 0.85, "航权与许可并行推进", pt=40.0)
+    assert "shape_overlap" not in _checks(_lint(prs, tmp_path))
+
+
+def test_unfilled_text_whose_lettering_overlaps_is_still_an_overlap(tmp_path):
+    prs, slide = _deck()
+    _textbox(slide, 1.0, 1.0, 6.0, 0.85, "本月启动时刻申请", pt=40.0)
+    _textbox(slide, 1.0, 1.2, 6.0, 0.85, "航权与许可并行推进", pt=40.0)
+    assert "shape_overlap" in _checks(_lint(prs, tmp_path))
+
+
+def test_a_diagram_node_is_held_to_the_floor_its_box_implies(tmp_path):
+    """The 9pt allowance served a deleted emitter's own minimum label size."""
+    prs, slide = _deck()
+    node = slide.shapes.add_shape(MSO_SHAPE.FLOWCHART_PROCESS, Inches(1), Inches(1), Inches(3), Inches(1.0))
+    node.fill.solid()
+    node.fill.fore_color.rgb = PALE
+    _set_text(node, "材料审查", pt=9.0, wrap=True)
+    assert _only(_lint(prs, tmp_path), "type_too_small").shape == 1
 
 
 # ---------------------------------------------------------------------------
@@ -494,3 +593,44 @@ def test_lint_artifact_joins_the_file_and_its_renders(tmp_path):
     assert report.metrics["slides"] == 1 and report.metrics["slides_measured"] == 1
     assert "coverage_mean" in report.metrics
     assert report.ok is False
+
+
+def test_a_number_wider_than_its_column_is_measured_in_excel_units(tmp_path):
+    """A preview drawn with stand-in fonts at LibreOffice's width conversion
+    showed ### where Excel does not; the check measures the workbook itself."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    from legal_helper.documents.quality import lint_xlsx
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"], ws["B1"] = 1152000, 1152000
+    for ref in ("A1", "B1"):
+        ws[ref].number_format = "#,##0"
+        ws[ref].font = Font(bold=True)
+    ws.column_dimensions["A"].width = 13  # fits in Excel
+    ws.column_dimensions["B"].width = 7   # does not
+    path = tmp_path / "w.xlsx"
+    wb.save(path)
+    findings, metrics = lint_xlsx(path)
+    narrow = [f for f in findings if f.check == "number_wider_than_column"]
+    assert [f.where for f in narrow] == ["Sheet!B1"]
+    assert metrics["numbers_wider_than_column"] == 1
+
+
+def test_column_width_spans_are_read_for_every_column_they_cover(tmp_path):
+    from openpyxl import Workbook
+
+    from legal_helper.documents.quality import lint_xlsx
+
+    wb = Workbook()
+    ws = wb.active
+    ws["C1"] = 1152000
+    ws["C1"].number_format = "#,##0"
+    ws.column_dimensions.group("A", "D", hidden=False)
+    ws.column_dimensions["A"].width = 13  # the span A:D, stored under "A"
+    path = tmp_path / "span.xlsx"
+    wb.save(path)
+    findings, _ = lint_xlsx(path)
+    assert not [f for f in findings if f.check == "number_wider_than_column"]

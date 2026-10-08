@@ -31,39 +31,42 @@ def _is_valid_pdf(path: Path) -> bool:
 
 
 def load_pdf(path: Path) -> str:
-    """Extract text from a PDF using PyMuPDF.
+    """Extract text from a PDF with pypdfium2 (Apache-2.0 / BSD).
 
-    Returns plain text with one blank line between pages. If a page yields
-    almost no characters (likely a scanned page or image-only), it is
-    skipped silently; the caller can detect a short total and flag for
-    OCR follow-up.
+    Returns plain text with one blank line between pages. A page with no text
+    layer (a scan) contributes nothing; the caller can detect a short total
+    and flag it for OCR (``documents.pdf.read_pdf_text`` OCRs such pages).
+
+    This used PyMuPDF, which is AGPL — not shippable in this MIT tree or its
+    public mirror. PDFium's text order follows the content stream, which for
+    the two-column statute layouts the old block-sorting fallback handled is
+    already column order.
     """
     if not _is_valid_pdf(path):
         raise RuntimeError(
             f"Not a PDF (likely an HTML error page): {path}. "
             f"Delete the file and re-fetch with a corrected URL."
         )
-    try:
-        import fitz  # PyMuPDF
-    except ImportError as e:
-        raise RuntimeError(
-            "PyMuPDF not installed. Add `pymupdf>=1.24` to requirements.txt "
-            "and `pip install pymupdf`."
-        ) from e
+    import pypdfium2 as pdfium
 
     out: list[str] = []
-    with fitz.open(path) as doc:
-        for page in doc:
-            # First try the default extractor — handles single-column well.
-            text = page.get_text("text")
-            if len(text.strip()) < 80:
-                # Likely a 2-column layout; fall back to block extraction
-                # sorted top-to-bottom, left-to-right.
-                blocks = page.get_text("blocks") or []
-                blocks = sorted(blocks, key=lambda b: (round(b[1], 1), round(b[0], 1)))
-                text = "\n".join(b[4] for b in blocks if len(b) >= 5)
-            if text and text.strip():
+    pdf = pdfium.PdfDocument(str(path))
+    try:
+        for index in range(len(pdf)):
+            page = pdf[index]
+            try:
+                textpage = page.get_textpage()
+                try:
+                    text = textpage.get_text_range() or ""
+                finally:
+                    textpage.close()
+            finally:
+                page.close()
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+            if text.strip():
                 out.append(text)
+    finally:
+        pdf.close()
     return _normalize_whitespace("\n\n".join(out))
 
 

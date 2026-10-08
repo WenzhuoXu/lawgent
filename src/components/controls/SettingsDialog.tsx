@@ -10,7 +10,7 @@ import {
 import { client } from "@/api/client";
 import { cn } from "@/lib/utils";
 import type { PersonaId, ThemeId } from "@/hooks/useTheme";
-import type { ChatSettings, ProviderId, RuntimeOptions, UsageSummary } from "@/types/chat";
+import type { AnswerLength, ChatSettings, ProviderId, RuntimeOptions, UsageSummary } from "@/types/chat";
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   openai: "OpenAI",
@@ -21,6 +21,15 @@ const THEME_OPTIONS: Array<{ id: ThemeId; label: string }> = [
   { id: "system", label: "跟随系统" },
   { id: "paper", label: "浅色 Paper" },
   { id: "ink", label: "深色 Ink" },
+];
+
+/** "auto" sizes each answer from the question's complexity; the others pin it.
+ * An explicit length request in the message always wins. */
+const ANSWER_LENGTHS: Array<{ id: AnswerLength; label: string }> = [
+  { id: "auto", label: "自动 / Auto" },
+  { id: "brief", label: "简要 / Brief" },
+  { id: "focused", label: "聚焦 / Focused" },
+  { id: "full", label: "完整 / Full memo" },
 ];
 
 export function SettingsDialog({
@@ -46,7 +55,7 @@ export function SettingsDialog({
 }) {
   const providers = runtime?.providers ?? ["openai", "anthropic"];
   const models = runtime?.models[settings.provider] ?? [settings.model];
-  const efforts = runtime?.reasoning_efforts ?? ["none", "low", "medium", "high", "xhigh"];
+  const efforts = runtime?.reasoning_efforts ?? ["none", "low", "medium", "high", "xhigh", "max"];
 
   return (
     <Dialog open={open} onOpenChange={(v) => (v ? undefined : onClose())}>
@@ -93,21 +102,35 @@ export function SettingsDialog({
               </select>
             </Field>
 
-            {settings.provider === "openai" ? (
-              <Field label="推理强度 / Reasoning">
-                <div className="flex flex-wrap gap-1.5">
-                  {efforts.map((r) => (
-                    <SegButton
-                      key={r}
-                      active={r === settings.reasoning_effort}
-                      onClick={() => setSettings((s) => ({ ...s, reasoning_effort: r }))}
-                    >
-                      {r}
-                    </SegButton>
-                  ))}
-                </div>
-              </Field>
-            ) : null}
+            {/* The effort dial applies to both providers (Anthropic maps it onto
+                adaptive thinking + output_config.effort). */}
+            <Field label="推理强度 / Reasoning">
+              <div className="flex flex-wrap gap-1.5">
+                {efforts.map((r) => (
+                  <SegButton
+                    key={r}
+                    active={r === settings.reasoning_effort}
+                    onClick={() => setSettings((s) => ({ ...s, reasoning_effort: r }))}
+                  >
+                    {r}
+                  </SegButton>
+                ))}
+              </div>
+            </Field>
+
+            <Field label="回答长度 / Answer length">
+              <div className="flex flex-wrap gap-1.5">
+                {ANSWER_LENGTHS.map((l) => (
+                  <SegButton
+                    key={l.id}
+                    active={(settings.answer_length ?? "auto") === l.id}
+                    onClick={() => setSettings((s) => ({ ...s, answer_length: l.id }))}
+                  >
+                    {l.label}
+                  </SegButton>
+                ))}
+              </div>
+            </Field>
           </Section>
 
           {/* Appearance */}

@@ -14,10 +14,15 @@ for pages that genuinely have no text layer:
       invoked by the caller when both tiers above return empty.
 
 ``anydoc`` has no OCR: an image-only PDF parses successfully but yields
-almost nothing. :func:`pdf_text_density` lets callers detect that case and
-route to the vision path (``attachments.py`` already sends PDF pages to the
-model as native multimodal blocks) instead of silently returning a blank
-extraction.
+almost nothing. PDFs therefore no longer come through here on the read path:
+:func:`legal_helper.documents.pdf.read_pdf_text` measures each page's text
+layer, OCRs the image-only pages and marks every page. The per-document
+``pdf_text_density`` that used to live here had no caller and averaged a scan
+page into its text pages; it is gone.
+
+Word-processing files (.docx, and .doc/.rtf/.odt/.wps via LibreOffice) are
+read by :mod:`.docx_reader`, which keeps tracked changes, headers/footers and
+numbering labels this converter loses; see :mod:`.intake`.
 """
 
 from __future__ import annotations
@@ -34,11 +39,6 @@ _ANYDOC_SUFFIXES = frozenset({
     ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
     ".odt", ".ods", ".odp", ".rtf", ".epub", ".csv", ".pdf",
 })
-
-# Below this many extracted characters per page a PDF is treated as scanned.
-# A dense legal page runs 1500-3000 chars; a header-only scan lands under 50.
-_SCANNED_PDF_CHARS_PER_PAGE = 100
-
 
 @contextmanager
 def _silenced_stderr() -> Iterator[None]:
@@ -90,34 +90,3 @@ def convert_to_markdown(path: Path) -> str:
     except Exception as exc:
         errors.append(f"markitdown: {type(exc).__name__}: {exc}")
         raise RuntimeError(f"no converter handled {path.name} — " + "; ".join(errors)) from exc
-
-
-def pdf_text_density(path: Path, text: str | None = None) -> dict[str, object]:
-    """Report how much of a PDF's text layer actually came through.
-
-    ``text`` may be supplied when the caller already ran an extraction, to
-    avoid parsing twice. Returns ``page_count``, ``chars``, ``chars_per_page``
-    and ``likely_scanned`` — the last is the signal to route to OCR/vision
-    rather than trusting a near-empty extraction.
-    """
-    path = Path(path)
-    if text is None:
-        try:
-            text = convert_to_markdown(path)
-        except Exception:
-            text = ""
-    chars = len((text or "").strip())
-    page_count = 0
-    try:
-        import pypdf
-
-        page_count = len(pypdf.PdfReader(str(path)).pages)
-    except Exception:
-        page_count = 0
-    per_page = (chars / page_count) if page_count else float(chars)
-    return {
-        "page_count": page_count,
-        "chars": chars,
-        "chars_per_page": round(per_page, 1),
-        "likely_scanned": per_page < _SCANNED_PDF_CHARS_PER_PAGE,
-    }

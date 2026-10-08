@@ -2,7 +2,6 @@
 
 import json
 import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..config import current_settings
 from ..logging_setup import log_workflow_event
+from ..documents.writers._text import disclaimer_for, resolve_lang
 from ..documents import (
     copy_xlsx_worksheet as copy_xlsx_worksheet_in_package,
     edit_docx_text_document,
@@ -31,7 +31,6 @@ from ..documents import (
     merge_pdf_files,
     read_pdf_text,
     render_pdf_to_images,
-    render_xlsx_to_images,
     reshape_docx_document,
     reshape_pptx_deck,
     reshape_xlsx_workbook,
@@ -39,25 +38,32 @@ from ..documents import (
     split_pdf_file,
     write_docx_document,
     write_pdf_document,
-    write_pptx_deck,
     write_xlsx_workbook,
-)
-
-
-_DISCLAIMER = (
-    "Legal AI helper — not legal advice. All output must be reviewed by "
-    "qualified counsel in the relevant jurisdiction before reliance."
 )
 
 
 class Section(BaseModel):
     """One section of a generated legal document."""
 
-    heading: str = Field(..., description="Section heading (rendered as Heading 2).")
+    heading: str = Field(
+        ...,
+        description=(
+            "Section heading, rendered as a level-1 heading (empty string for none). "
+            "With layout='gbt9704' a leading 一、/（一）/1./（1） sets the GB/T 9704 level."
+        ),
+    )
     body_markdown: str = Field(
         ...,
-        description="Section body, written in markdown.  Tables, bullet lists, "
-                    "bold/italic, and headings are rendered correctly.",
+        description=(
+            "Section body in CommonMark + GFM. Rendered: # to ###### headings (nested "
+            "under the section heading), **bold**, *italic*, ~~strike~~, `code`, fenced "
+            "code, > quotes, [text](https://…) as live hyperlinks, [^1] footnotes as real "
+            "Word footnotes, ordered and bullet lists nested by indentation (each list "
+            "numbers from its own first item), pipe tables with :--: alignment (header "
+            "row repeats on every page), <br> line breaks, and ![alt](image.png) for an "
+            "image already under outputs/. A single newline starts a new paragraph; "
+            "other raw HTML is printed as text."
+        ),
     )
 
 
@@ -115,19 +121,43 @@ class XlsxDataValidation(BaseModel):
     error_title: str = Field(default="", description="Optional validation-failure title.")
 
 
+class XlsxNumberFormat(BaseModel):
+    """An Excel number format applied to a column or range."""
+
+    range: str = Field(
+        ...,
+        description="Column letter (C), column span (C:E) or A1 range (C2:C40).",
+    )
+    format: str = Field(
+        ...,
+        description=(
+            "Excel number format code, e.g. '#,##0.00', '0.0%', 'yyyy-mm-dd', "
+            "'¥#,##0.00', '[$-zh-CN]yyyy\"年\"m\"月\"d\"日\"'."
+        ),
+    )
+
+
 class Sheet(BaseModel):
     """One worksheet in a generated Excel workbook.
 
-    Rows may include formula strings (``"=SUM(B2:B9)"``). When soffice is on
-    PATH the writer recalculates the workbook on save so the cached values
-    are present and any ``#REF!``/``#DIV/0!``/``#NAME?`` errors surface to
-    the caller.
+    Rows may include formula strings (``"=SUM(B2:B9)"``). After writing, every
+    formula is computed (LibreOffice, with the ``formulas`` engine as fallback)
+    and its value stored in the file, so readers other than Excel see numbers
+    rather than blanks; ``#REF!``/``#DIV/0!``/``#NAME?`` results are returned.
     """
 
     name: str = Field(default="Sheet1", description="Worksheet name, maximum 31 characters in Excel.")
     rows: list[list[str | int | float | bool | None]] = Field(
         default_factory=list,
-        description="Rows of cell values. Strings beginning with '=' are written as live formulas.",
+        description=(
+            "Rows of cell values. Strings beginning with '=' are written as live formulas. "
+            "A string that is exactly an ISO date ('2026-10-07') or date-time "
+            "('2026-10-07 14:30') becomes a real date cell; prefix ' to keep it as text."
+        ),
+    )
+    number_formats: list[XlsxNumberFormat] = Field(
+        default_factory=list,
+        description="Number formats for columns or ranges (amounts, percentages, dates).",
     )
     charts: list[XlsxChart] = Field(default_factory=list, description="Native charts anchored on this sheet.")
     conditional_formats: list[XlsxConditionalFormat] = Field(
@@ -179,216 +209,6 @@ class DocxTextReplacement(BaseModel):
     replace: str = Field(..., description="Replacement text.")
 
 
-class ChartSeries(BaseModel):
-    """One data series on a slide chart."""
-
-    name: str = Field(..., description="Series label shown in the legend.")
-    values: list[float] = Field(..., description="Numeric values aligned with the chart's categories list.")
-
-
-class SlideChart(BaseModel):
-    """A chart embedded on a slide via pptxgenjs.
-
-    Supported chart types map directly to pptxgenjs.ChartType: bar, line, pie,
-    doughnut, scatter, bubble, radar.
-    """
-
-    type: str = Field(..., description="Chart type: bar, line, pie, doughnut, scatter, bubble, or radar.")
-    title: str = Field(default="", description="Optional chart title shown above the plot area.")
-    categories: list[str] = Field(default_factory=list, description="Category (x-axis) labels.")
-    series: list[ChartSeries] = Field(default_factory=list, description="One or more data series.")
-    x: float | None = Field(default=None, description="Optional override: left position in inches.")
-    y: float | None = Field(default=None, description="Optional override: top position in inches.")
-    w: float | None = Field(default=None, description="Optional override: width in inches.")
-    h: float | None = Field(default=None, description="Optional override: height in inches.")
-
-
-class SlideImage(BaseModel):
-    """An image overlaid on a slide."""
-
-    path: str = Field(default="", description="Local filesystem path or http(s) URL of the image.")
-    data: str = Field(default="", description="Base64 data URI, used when path is empty (e.g. 'image/png;base64,...').")
-    x: float = Field(default=0.85, description="Left position in inches.")
-    y: float = Field(default=1.55, description="Top position in inches.")
-    w: float = Field(default=5.0, description="Width in inches.")
-    h: float = Field(default=3.0, description="Height in inches.")
-    sizing: str = Field(default="contain", description="Sizing mode: contain, cover, crop, or stretch.")
-
-
-class SlideMaster(BaseModel):
-    """A master-slide spec consumed by pptxgenjs.defineSlideMaster.
-
-    Slides reference a master by setting their ``master`` field to this name.
-    """
-
-    name: str = Field(..., description="Master identifier used by Slide.master.")
-    background_color: str = Field(default="", description="Optional hex RGB background, e.g. FFFFFF.")
-    accent_color: str = Field(default="", description="Optional hex RGB accent, e.g. 1F4E79.")
-    footer: str = Field(default="", description="Optional footer text shown on every slide using this master.")
-    show_slide_number: bool = Field(default=True, description="Whether to show the slide-number placeholder.")
-
-
-class FlowNode(BaseModel):
-    """One node in a slide flowchart."""
-
-    id: str = Field(..., description="Author-chosen node identifier referenced by edges.")
-    kind: Literal["process", "decision", "terminator", "io", "data", "subprocess"] = Field(
-        default="process",
-        description=(
-            "Shape kind. Maps to pptxgenjs flowChart* shapes: process=rectangle, "
-            "decision=diamond, terminator=oval (start/end), io=parallelogram, "
-            "data=manual-input, subprocess=predefined-process."
-        ),
-    )
-    text: str = Field(default="", description="Label drawn inside the shape.")
-    role: str = Field(
-        default="",
-        description=(
-            "The actor or category this node belongs to. It drives a stable fill "
-            "colour, so the same actor is the same colour on every slide of the deck."
-        ),
-    )
-    sub: str = Field(
-        default="",
-        description=(
-            "Optional second tier set smaller beneath the label — the deliverable the step "
-            "produces, e.g. '可行性评估结论'. This is what ties a step to its output."
-        ),
-    )
-    x: float | None = Field(default=None, description="Left position in inches; required when layout='manual'.")
-    y: float | None = Field(default=None, description="Top position in inches; required when layout='manual'.")
-    w: float | None = Field(default=None, description="Width in inches; defaults to SlideFlowchart.node_w.")
-    h: float | None = Field(default=None, description="Height in inches; defaults to SlideFlowchart.node_h.")
-    fill: str = Field(default="", description="Hex RGB fill color (no leading #); empty = theme accent tint.")
-    stroke: str = Field(default="", description="Hex RGB outline color (no leading #); empty = theme ink.")
-
-
-class FlowEdge(BaseModel):
-    """One directed edge between two flowchart nodes."""
-
-    from_id: str = Field(..., description="Source FlowNode.id.")
-    to_id: str = Field(..., description="Target FlowNode.id.")
-    label: str = Field(default="", description="Optional edge label drawn near the midpoint.")
-    style: Literal["solid", "dashed"] = Field(default="solid", description="Line style.")
-    arrow: Literal["end", "none", "both"] = Field(default="end", description="Arrowhead placement.")
-
-
-class SlideFlowchart(BaseModel):
-    """A diagram block rendered as editable native shapes, laid out by Graphviz.
-
-    Three shapes of diagram, chosen with ``kind``:
-
-    * ``flow`` (default) — a process map or decision tree. Give ``mermaid``
-      (preferred: the helper parses kinds, labels and edges) or ``nodes`` +
-      ``edges`` directly; when both are given ``nodes``/``edges`` win.
-    * ``mindmap`` — 思维导图. Give ``outline``; it fans left-to-right.
-    * ``structure`` — 结构图 / org chart. Give ``outline``; it hangs top-down
-      with plain connectors rather than arrows.
-
-    Node boxes are sized to their labels (CJK-aware) and the type size is
-    fitted to the space, so the block fills the box it is given without any
-    label outrunning its shape.
-    """
-
-    kind: Literal["flow", "mindmap", "structure"] = Field(
-        default="flow",
-        description=(
-            "flow = process map / decision tree; mindmap = 思维导图; "
-            "structure = 结构图 / org chart."
-        ),
-    )
-    outline: str = Field(
-        default="",
-        description=(
-            "Indented outline for kind='mindmap' or 'structure'. Markdown headings "
-            "('# Root') or two-space-indented '-' bullets; nesting becomes the hierarchy."
-        ),
-    )
-    mermaid: str = Field(
-        default="",
-        description=(
-            "Mermaid flowchart source (e.g. 'flowchart TB\\n  A[Step 1] --> B{OK?}'). "
-            "When set, the helper renders to SVG via mmdc and extracts node/edge "
-            "positions automatically."
-        ),
-    )
-    nodes: list[FlowNode] = Field(
-        default_factory=list,
-        description="Explicit node list; takes precedence over the mermaid string when both are set.",
-    )
-    edges: list[FlowEdge] = Field(
-        default_factory=list,
-        description="Edges referencing FlowNode.id values.",
-    )
-    layout: Literal["manual", "auto"] = Field(
-        default="auto",
-        description=(
-            "manual = use the x/y/w/h fields on each FlowNode as-is. "
-            "auto = run mermaid+dagre layout and overwrite the coordinates."
-        ),
-    )
-    direction: Literal["auto", "TB", "BT", "LR", "RL"] = Field(
-        default="auto",
-        description=(
-            "Flow direction. 'auto' tries top-to-bottom and left-to-right and keeps "
-            "whichever fills the box better — a long chain on a 16:9 slide belongs on "
-            "its side. Pin it only when the reading order matters more than the fit."
-        ),
-    )
-    x: float = Field(default=0.55, description="Bounding-box left in inches for auto layout.")
-    y: float = Field(default=1.25, description="Bounding-box top in inches for auto layout.")
-    w: float = Field(default=12.2, description="Bounding-box width in inches for auto layout.")
-    h: float = Field(default=5.6, description="Bounding-box height in inches for auto layout.")
-    node_w: float = Field(default=2.2, description="Default node width in inches when not specified per-node.")
-    node_h: float = Field(default=0.9, description="Default node height in inches when not specified per-node.")
-
-
-class Slide(BaseModel):
-    """One slide in a generated PowerPoint deck."""
-
-    title: str = Field(..., description="Slide title.")
-    subtitle: str = Field(default="", description="Optional subtitle or emphasis text.")
-    layout: str = Field(
-        default="bullets",
-        description=(
-            "Slide layout: title, section, bullets, two_column, comparison, "
-            "table, quote, stat, timeline, or chart."
-        ),
-    )
-    bullets: list[str] = Field(default_factory=list, description="Body bullet lines.")
-    left_title: str = Field(default="", description="Optional left-column heading.")
-    right_title: str = Field(default="", description="Optional right-column heading.")
-    left: list[str] = Field(default_factory=list, description="Left-column bullet lines.")
-    right: list[str] = Field(default_factory=list, description="Right-column bullet lines.")
-    table_headers: list[str] = Field(default_factory=list, description="Table header row for table layout.")
-    table_rows: list[list[str | int | float | bool | None]] = Field(default_factory=list, description="Table rows.")
-    stats: list[dict[str, str | int | float]] = Field(default_factory=list, description="Stat callouts with label/value.")
-    speaker_notes: str = Field(default="", description="Optional speaker notes.")
-    footer: str = Field(default="", description="Optional slide footer or source note.")
-    background_color: str = Field(default="", description="Optional hex RGB background color, e.g. FFFFFF.")
-    accent_color: str = Field(default="", description="Optional hex RGB accent color, e.g. 1F4E79.")
-    chart: SlideChart | None = Field(
-        default=None,
-        description=(
-            "Optional chart. When layout='chart' the chart fills the body; on "
-            "other layouts it docks on the right half as an overlay."
-        ),
-    )
-    images: list[SlideImage] = Field(
-        default_factory=list,
-        description="Optional images overlaid on the slide, in z-order.",
-    )
-    flowchart: SlideFlowchart | None = Field(
-        default=None,
-        description=(
-            "Optional flowchart block rendered as editable pptxgenjs flowChart* "
-            "shapes + line connectors. Author a small Mermaid string (preferred) "
-            "or supply explicit nodes/edges. See skills/flowchart for guidance."
-        ),
-    )
-    master: str = Field(default="", description="Optional master-slide name; must match a SlideMaster defined on the deck.")
-
-
 class SlideTextReplacement(BaseModel):
     """One exact text replacement in an existing PowerPoint slide."""
 
@@ -415,51 +235,213 @@ def _output_path(filename: str, extension: str) -> Path:
     return settings.outputs_dir / f"{stem}.{extension.lstrip('.')}"
 
 
+def _disclaimer_text(mode: str, reason: str, lang: str) -> tuple[str | None, str]:
+    """``(properties text or None, error)`` for the disclaimer parameters.
+
+    The disclaimer is never part of the instrument: 88 of 104 Chinese DOCX
+    opened with an English AI disclaimer, including every fresh court filing.
+    It goes into the document properties in the document's language, or —
+    for a filing, a letter on letterhead, anything the user will sign — it is
+    left out, with the reason stated so the omission is a decision on record.
+    """
+    mode = (mode or "properties").strip().lower()
+    if mode == "properties":
+        return disclaimer_for("zh" if lang == "zh" else "en"), ""
+    if mode == "none":
+        if not (reason or "").strip():
+            return None, (
+                "ERROR: disclaimer='none' needs disclaimer_reason — say why this document "
+                "carries no AI notice, e.g. 'court filing (起诉状) to be signed by counsel'."
+            )
+        return None, ""
+    return None, f"ERROR: disclaimer must be 'properties' or 'none' (got {mode!r})."
+
+
+def _write_time_lint(path: Path) -> dict[str, Any] | None:
+    """The file checks that need no render, run on the writer's own output."""
+    from ..documents.quality import lint_artifact
+
+    try:
+        report = lint_artifact(path)
+    except Exception:  # noqa: BLE001 - a linter must never fail a write
+        return None
+    # Minor findings wait for the render; only a real defect changes the
+    # return from a bare path.
+    if any(f.severity in {"critical", "major"} for f in report.findings):
+        return report.to_payload()
+    return None
+
+
+def _resolve_template(reference_docx: str) -> tuple[Path | None, str]:
+    if not (reference_docx or "").strip():
+        return None, ""
+    template = _resolve_read_path(reference_docx.strip())
+    if not template.is_file():
+        return None, f"ERROR: reference_docx not found: {template}"
+    if template.suffix.lower() not in {".docx", ".dotx"}:
+        return None, f"ERROR: reference_docx must be a .docx or .dotx file: {template}"
+    return template, ""
+
+
 @beta_tool
-def write_docx(filename: str, title: str, sections: list[Section]) -> str:
-    """Write a .docx legal document under outputs/. Returns the absolute path.
+def write_docx(
+    filename: str,
+    title: str,
+    sections: list[Section],
+    lang: Literal["auto", "zh", "en"] = "auto",
+    layout: Literal["memo", "gbt9704"] = "memo",
+    page_size: Literal["auto", "A4", "Letter"] = "auto",
+    disclaimer: Literal["properties", "none"] = "properties",
+    disclaimer_reason: str = "",
+    reference_docx: str = "",
+    subtitle: str = "",
+) -> str:
+    """Write a .docx document under outputs/. Returns the absolute path.
+
+    A Chinese document (most of its words Chinese, or lang='zh') is A4 with
+    宋体 body, 黑体 headings, 首行缩进 and a "第 X 页 共 Y 页" footer; an English
+    one is Letter with "Page X of Y". The not-legal-advice notice goes into the
+    file's properties in the document's language, never into the text. When
+    the written file fails a file check (e.g. literal Markdown left in the
+    text), the result is ``{"path", "lint"}`` instead of the bare path.
 
     Args:
         filename: Desired filename (with or without .docx extension).
         title: Document title rendered on the first page.
         sections: Ordered list of {heading, body_markdown} sections.
+        lang: Typography and footer language; 'auto' decides by the share of Han characters.
+        layout: 'memo' (default) or 'gbt9704' for a 公文: A4, GB/T 9704 margins and
+            22x28 grid, 3号仿宋 body, 一、（一）1.（1） headings in 黑体/楷体/仿宋,
+            2号小标宋 title, "— n —" page numbers.
+        page_size: 'auto' (A4 for Chinese, Letter for English), 'A4' or 'Letter'.
+        disclaimer: 'properties' (default) writes the AI notice into document
+            properties; 'none' omits it — use for court filings (起诉状、答辩状、上诉状),
+            律师函 and anything to be signed, and give disclaimer_reason.
+        disclaimer_reason: Required with disclaimer='none': why the notice is omitted.
+        reference_docx: Optional path of a firm or court template (.docx/.dotx). Its body
+            is cleared and the content is written in its own styles, page setup, headers
+            and footers.
+        subtitle: Optional line under the title.
     """
-    out = _output_path(filename, "docx")
-    write_docx_document(
-        output_path=out,
-        title=title,
-        sections=[(s.heading, s.body_markdown) for s in sections],
-        disclaimer=_DISCLAIMER,
+    effective_lang = "zh" if layout == "gbt9704" and lang == "auto" else resolve_lang(
+        lang, title, subtitle, *(f"{s.heading}\n{s.body_markdown}" for s in sections)
     )
+    note, error = _disclaimer_text(disclaimer, disclaimer_reason, effective_lang)
+    if error:
+        return error
+    template, error = _resolve_template(reference_docx)
+    if error:
+        return error
+    out = _output_path(filename, "docx")
+    try:
+        write_docx_document(
+            output_path=out,
+            title=title,
+            sections=[(s.heading, s.body_markdown) for s in sections],
+            subtitle=subtitle or None,
+            disclaimer=note,
+            lang=effective_lang,
+            layout=layout,
+            page_size=page_size,
+            reference_docx=template,
+            image_roots=[current_settings().outputs_dir],
+        )
+    except ValueError as exc:
+        return f"ERROR: {exc}"
+    if template is not None:
+        from ..documents.lineage import record_derivation
+
+        record_derivation(out, [template], "write_docx")
+    if disclaimer == "none":
+        log_workflow_event(
+            "document_disclaimer_omitted",
+            {"path": str(out.resolve()), "reason": disclaimer_reason.strip()[:300]},
+        )
+    lint = _write_time_lint(out)
+    if lint:
+        return json.dumps({"path": str(out.resolve()), "lint": lint}, ensure_ascii=False, indent=2)
     return str(out.resolve())
 
 
 @beta_tool
-def write_pdf(filename: str, title: str, body_markdown: str) -> str:
-    """Render markdown into a .pdf legal document under outputs/. Returns the
-    absolute path.
+def write_pdf(
+    filename: str,
+    title: str,
+    body_markdown: str,
+    lang: Literal["auto", "zh", "en"] = "auto",
+    layout: Literal["memo", "gbt9704"] = "memo",
+    page_size: Literal["auto", "A4", "Letter"] = "auto",
+    disclaimer: Literal["properties", "none"] = "properties",
+    disclaimer_reason: str = "",
+    subtitle: str = "",
+) -> str:
+    """Render Markdown into a .pdf document under outputs/. Returns the absolute path.
+
+    Same Markdown as write_docx (headings, lists nested by indentation, tables whose
+    header repeats on every page, [text](https://…) links, [^1] footnotes at the page
+    foot, ~~strike~~, <br>). Chinese content is A4 with "第 X 页 共 Y 页"; English is
+    Letter with "Page X of Y". The not-legal-advice notice is the PDF's Subject
+    metadata in the document's language, never page content. When the written
+    text still contains literal Markdown, the result is ``{"path", "lint"}``.
 
     Args:
         filename: Desired filename (with or without .pdf extension).
         title: Document title rendered at the top of the first page.
-        body_markdown: Document body in markdown (headings, lists, tables).
+        body_markdown: Document body in Markdown.
+        lang: Typography and footer language; 'auto' decides by the share of Han characters.
+        layout: 'memo' (default) or 'gbt9704' (GB/T 9704 公文 page, fonts and "— n —" numbers).
+        page_size: 'auto' (A4 for Chinese, Letter for English), 'A4' or 'Letter'.
+        disclaimer: 'properties' (default) or 'none' for filings and signed letters,
+            with disclaimer_reason.
+        disclaimer_reason: Required with disclaimer='none': why the notice is omitted.
+        subtitle: Optional line under the title.
     """
-    out = _output_path(filename, "pdf")
-    write_pdf_document(
-        output_path=out,
-        title=title,
-        body_markdown=body_markdown,
-        disclaimer=_DISCLAIMER,
+    effective_lang = "zh" if layout == "gbt9704" and lang == "auto" else resolve_lang(
+        lang, title, subtitle, body_markdown
     )
+    note, error = _disclaimer_text(disclaimer, disclaimer_reason, effective_lang)
+    if error:
+        return error
+    out = _output_path(filename, "pdf")
+    try:
+        write_pdf_document(
+            output_path=out,
+            title=title,
+            body_markdown=body_markdown,
+            subtitle=subtitle or None,
+            disclaimer=note,
+            lang=effective_lang,
+            layout=layout,
+            page_size=page_size,
+            image_roots=[current_settings().outputs_dir],
+        )
+    except ValueError as exc:
+        return f"ERROR: {exc}"
+    if disclaimer == "none":
+        log_workflow_event(
+            "document_disclaimer_omitted",
+            {"path": str(out.resolve()), "reason": disclaimer_reason.strip()[:300]},
+        )
+    lint = _write_time_lint(out)
+    if lint:
+        return json.dumps({"path": str(out.resolve()), "lint": lint}, ensure_ascii=False, indent=2)
     return str(out.resolve())
 
 
 @beta_tool
-def inspect_docx(path: str) -> str:
-    """Inspect a .docx file's structure, headings, tables, comments, and metadata.
+def inspect_docx(path: str, paragraph_offset: int = 0, paragraph_limit: int = 150) -> str:
+    """Inspect a .docx: every body paragraph under the index edits use, plus
+    headings, tables, comments, tracked changes and metadata.
+
+    Each paragraph's ``index`` is the 0-based number ``reshape_docx`` ops
+    (after/index/indices) and ``redline_docx`` (paragraph) take; headings are
+    flagged in place. Auto-numbering labels (第一条, 1.1) are shown with
+    ``label_is_auto_numbering`` — they are not text in the paragraph.
 
     Args:
         path: Absolute or project-relative path to the .docx file.
+        paragraph_offset: Skip this many non-empty paragraphs (for long documents).
+        paragraph_limit: Maximum paragraphs to list; 0 lists all.
     """
     p = _resolve_read_path(path)
     if not p.is_file():
@@ -467,7 +449,11 @@ def inspect_docx(path: str) -> str:
     if p.suffix.lower() != ".docx":
         return f"ERROR: inspect_docx only supports .docx files: {p}"
     try:
-        payload = inspect_docx_document(p)
+        payload = inspect_docx_document(
+            p,
+            paragraph_offset=max(0, int(paragraph_offset)),
+            paragraph_limit=max(0, int(paragraph_limit)),
+        )
     except Exception as e:
         return f"ERROR inspecting {p}: {e}"
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -475,7 +461,14 @@ def inspect_docx(path: str) -> str:
 
 @beta_tool
 def edit_docx_text(source_path: str, filename: str, replacements: list[DocxTextReplacement]) -> str:
-    """Copy an existing .docx and replace exact text in paragraphs and tables.
+    """Copy an existing .docx and replace exact text everywhere it appears —
+    body, tables, text boxes, headers and footers — without tracking it.
+
+    Formatting, footnote/comment references, fields and hyperlinks around the
+    text are kept. Paragraphs that carry tracked changes are refused (listed
+    under ``refused``): edit those with ``redline_docx``. A find that matches
+    nothing is listed under ``not_found`` with a hint. The result also reports
+    anything the edit lost (``integrity``).
 
     Args:
         source_path: Absolute or project-relative path to the source .docx.
@@ -487,11 +480,13 @@ def edit_docx_text(source_path: str, filename: str, replacements: list[DocxTextR
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".docx":
         return f"ERROR: edit_docx_text only supports .docx files: {source}"
-    out = _output_path(filename, "docx")
+    out, note = _derived_output(source, filename, "docx")
     try:
         payload = edit_docx_text_document(source, out, [r.model_dump() for r in replacements])
     except Exception as e:
         return f"ERROR editing {source}: {e}"
+    payload = _with_integrity(source, out, payload)
+    payload = _record_edit(source, out, "edit_docx_text", payload, note)
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
@@ -512,41 +507,129 @@ def render_docx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150)
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".docx":
         return f"ERROR: render_docx_pages only supports .docx files: {source}"
-    soffice = shutil.which("soffice")
-    if not soffice:
-        return "ERROR: render_docx_pages requires soffice on PATH"
     settings = current_settings()
     safe_prefix = _safe_filename(filename_prefix, default="pages")
-    out_dir = settings.outputs_dir / f"{safe_prefix}_{source.stem}"
+    out_dir = _review_dir(settings, safe_prefix, source)
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out_dir), str(source)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        pdf = out_dir / f"{source.stem}.pdf"
-        if not pdf.is_file():
-            candidates = sorted(out_dir.glob("*.pdf"))
-            if not candidates:
-                return f"ERROR: soffice did not produce a PDF in {out_dir}"
-            pdf = candidates[0]
+        pdf = _review_pdf(source, out_dir)
         rendered = render_pdf_to_images(pdf, out_dir, safe_prefix, dpi)
+    except _SofficeMissing:
+        return "ERROR: render_docx_pages requires soffice on PATH"
     except subprocess.CalledProcessError as e:
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
+    payload: dict[str, Any] = {
+        "pdf": str(pdf.resolve()),
+        **{k: v for k, v in rendered.items() if k != "images"},
+        "images": rendered.get("images", []),
+    }
+    payload.update(_font_stand_in_note(source))
+    payload.update(_unrendered_floating_tables(source, pdf))
     return _visual_result(
-        {"pdf": str(pdf.resolve()), **{k: v for k, v in rendered.items() if k != "images"},
-         "images": rendered.get("images", [])},
+        payload,
         rendered.get("images", []),
         out_dir,
         safe_prefix,
         label="Page",
         source=source,
+        pdf=pdf,
     )
+
+
+class _SofficeMissing(RuntimeError):
+    pass
+
+
+def _review_pdf(source: Path, out_dir: Path) -> Path:
+    """Convert an Office file to PDF for review, with the GB font stand-ins.
+
+    A private LibreOffice profile per call (``documents.soffice``) lets renders
+    run side by side, and ``review_fonts.conf`` lets a 黑体 heading look like a
+    sans and 仿宋 body like a serif on a host that has neither — the file
+    itself still names the GB fonts.
+    """
+    from ..documents.review_fonts import review_env
+    from ..documents.soffice import SofficeNotInstalled, convert
+
+    try:
+        return convert(source, out_dir, "pdf", timeout=120, env=review_env())
+    except SofficeNotInstalled as exc:
+        raise _SofficeMissing(str(exc)) from exc
+
+
+def _font_stand_in_note(source: Path) -> dict[str, Any]:
+    """Tell the model which faces in the render are stand-ins, not defects."""
+    from ..documents.review_fonts import stand_in_note
+
+    try:
+        fonts = stand_in_note(source)
+    except Exception:  # noqa: BLE001 - advisory
+        return {}
+    if not fonts:
+        return {}
+    return {
+        "font_stand_ins": {
+            "fonts": fonts,
+            "note": (
+                "This host lacks these fonts, so the pages are drawn with open stand-ins "
+                "whose widths differ. The file still names the original fonts and renders "
+                "with them in the reader's Office or WPS; do not change fonts to match this "
+                "render, and do not read a narrow overflow (a cell showing ###, a clipped "
+                "line) as proof — measure it or widen only when the content clearly needs it."
+            ),
+        }
+    }
+
+
+def _unrendered_floating_tables(source: Path, pdf: Path) -> dict[str, Any]:
+    """Positioned tables whose text is in the file but not in the review render.
+
+    LibreOffice 7.3 does not draw a table positioned with ``w:tblpPr`` against
+    the page or margin — the 版记 a GB/T 9704 generator anchors to the foot of
+    the last page is one — while Word and WPS do. The render then shows a
+    公文 without its 版记, and an author that believes it re-runs the
+    generator to "fix" a document that was never broken. Measured, not
+    assumed: a table is listed only when its text is absent from the PDF.
+    """
+    try:
+        from docx import Document
+        from docx.oxml.ns import qn
+
+        from ..documents.pdf import read_pdf_text
+
+        floating = []
+        for index, table in enumerate(Document(str(source)).tables):
+            props = table._tbl.tblPr
+            if props is None or props.find(qn("w:tblpPr")) is None:
+                continue
+            text = "".join("".join(t.text or "" for t in table._tbl.iter(qn("w:t"))).split())
+            if text:
+                floating.append((index, text))
+        if not floating:
+            return {}
+        rendered = "".join(read_pdf_text(pdf, ocr=False).split())
+    except Exception:  # noqa: BLE001 - advisory
+        return {}
+    missing = [
+        {"table_index": index, "text": text[:60]}
+        for index, text in floating
+        if text[:12] not in rendered
+    ]
+    if not missing:
+        return {}
+    return {
+        "floating_tables_not_rendered": {
+            "tables": missing,
+            "note": (
+                "These positioned (floating) tables are in the file but this host's "
+                "LibreOffice does not draw them; Word and WPS do. Their absence from the "
+                "pages is a limit of the preview, not a defect: do not move or rebuild "
+                "them to make them appear here. Check their text with read_document."
+            ),
+        }
+    }
 
 
 @beta_tool
@@ -555,19 +638,25 @@ def write_xlsx(filename: str, sheets: list[Sheet]) -> str:
 
     Beyond scalar rows the writer also accepts:
 
-    - Live formula strings (``"=SUM(B2:B9)"``) — these are evaluated by an
-      automatic LibreOffice recalc pass on save when ``soffice`` is on PATH.
+    - Live formula strings (``"=SUM(B2:B9)"``). After writing, every formula
+      is computed — LibreOffice when ``soffice`` is on PATH, the pure-Python
+      ``formulas`` engine otherwise and for functions LibreOffice lacks — and
+      its value stored in the file, so every reader sees the number.
+    - ISO date strings ('2026-10-07') stored as real dates; ``number_formats``
+      per column or range ('#,##0.00', '0.0%', 'yyyy-mm-dd').
+    - Column widths sized for the text, a Chinese character counting double.
     - Native charts (bar, line, pie, scatter) anchored to a cell.
     - Conditional-formatting rules (color scales, cell-is, data bars).
     - Data-validation rules (drop-downs, numeric ranges).
 
-    Returns the absolute path on success; if formula errors are detected
-    after recalc, returns a JSON object with ``path`` and ``formula_errors``.
+    Returns the absolute path on success; if a formula evaluates to an error
+    (or no engine could evaluate it), returns a JSON object with ``path`` and
+    ``formula_errors`` / ``unevaluated_formulas``.
 
     Args:
         filename: Desired filename (with or without .xlsx extension).
-        sheets: Workbook sheets with rows, charts, conditional formats, and
-            data validations.
+        sheets: Workbook sheets with rows, number formats, charts, conditional
+            formats, and data validations.
     """
     from ..documents import recalc_xlsx_workbook
 
@@ -575,12 +664,14 @@ def write_xlsx(filename: str, sheets: list[Sheet]) -> str:
     write_xlsx_workbook(out, [s.model_dump() for s in sheets])
     status = recalc_xlsx_workbook(out)
     errors = status.get("errors") or []
-    if errors:
-        return json.dumps(
-            {"path": str(out.resolve()), "formula_errors": errors, "recalc_status": status},
-            ensure_ascii=False,
-            indent=2,
-        )
+    unevaluated = status.get("unevaluated") or []
+    if errors or unevaluated:
+        payload: dict[str, Any] = {"path": str(out.resolve()), "recalc_status": status}
+        if errors:
+            payload["formula_errors"] = errors
+        if unevaluated:
+            payload["unevaluated_formulas"] = unevaluated
+        return json.dumps(payload, ensure_ascii=False, indent=2)
     return str(out.resolve())
 
 
@@ -593,6 +684,7 @@ def _visual_result(
     label: str = "Page",
     authored: bool = True,
     source: Path | None = None,
+    pdf: Path | None = None,
 ) -> str:
     """Attach a labeled contact sheet to a render result so the model SEES it.
 
@@ -606,6 +698,8 @@ def _visual_result(
     The prose this replaced asked the model to check for overflow, blank pages,
     overlaps and inconsistent margins — every one of which is now arithmetic,
     and none of which an instruction could guarantee was actually performed.
+    ``pdf`` is the render the pages came from; the DOCX page checks (a table
+    running onto a page without its header row) read it.
     """
     from ..documents.contact_sheet import build_contact_sheets
     from .multimodal import image_result
@@ -620,13 +714,17 @@ def _visual_result(
     if authored:
         from ..documents.quality import lint_artifact
 
-        report = lint_artifact(source or Path(), paths, render_label=label.lower())
+        report = lint_artifact(source or Path(), paths, render_label=label.lower(), pdf=pdf)
         body["lint"] = report.to_payload()
-        body["next_step"] = (
-            "Fix every critical finding and re-render; a deck with none is done."
-            if report.findings
-            else "Nothing measured as wrong. Look once for anything the checks cannot see."
-        )
+        if report.findings:
+            body["next_step"] = "Fix every critical finding and re-render; a file with none is done."
+        elif report.checked is False:
+            body["next_step"] = (
+                "No automatic checks exist for this file type, so nothing was measured: "
+                "look at every page before calling it done."
+            )
+        else:
+            body["next_step"] = "Nothing measured as wrong. Look once for anything the checks cannot see."
     else:
         body["reading"] = (
             f"A source document you are reading, not one you produced. Read what you need and "
@@ -640,6 +738,106 @@ def _resolve_read_path(path: str) -> Path:
     if not p.is_absolute():
         p = current_settings().project_root / path
     return p
+
+
+#: Review renders (page images, contact sheets, preview PDFs) live under a
+#: "_" directory: the model sees the pages inline, and the chat's file list —
+#: which skips "_" components — keeps only what the user asked for. A 公文
+#: turn listed 20 files, most of them previews of the one .docx it delivered.
+REVIEW_DIRNAME = "_renders"
+
+
+def _review_dir(settings: Any, prefix: str, source: Path) -> Path:
+    return settings.outputs_dir / REVIEW_DIRNAME / f"{prefix}_{source.stem}"
+
+
+def _derived_output(source: Path, filename: str, extension: str) -> tuple[Path, str]:
+    """The output path for an edit of ``source`` — never ``source`` itself.
+
+    7 of 121 recorded edit calls named their own source as the output and
+    overwrote it, so the original could no longer be diffed, integrity-checked
+    or re-edited. The edit now goes to the next free ``<stem>_vN`` name and
+    the result says so.
+    """
+    out = _output_path(filename, extension)
+    try:
+        same = out.resolve() == source.resolve()
+    except OSError:
+        same = False
+    if not same:
+        return out, ""
+    n = 2
+    candidate = out.with_name(f"{out.stem}_v{n}{out.suffix}")
+    while candidate.exists():
+        n += 1
+        candidate = out.with_name(f"{out.stem}_v{n}{out.suffix}")
+    note = (
+        f"{out.name} is the file being edited; the edit was written to {candidate.name} instead "
+        "so the original stays available for comparison. Use the new path from here on."
+    )
+    return candidate, note
+
+
+def _record_edit(source: Path, out: Path, tool: str, payload: dict[str, Any], note: str = "") -> dict[str, Any]:
+    """Lineage, the overwrite note and the stale-source warning, on any edit result."""
+    from ..documents.lineage import record_derivation, stale_source_warning
+
+    # Ask before recording: the file just written is itself a newer
+    # descendant of the source and must not trigger the warning.
+    warning = stale_source_warning(source)
+    record_derivation(out, [source], tool)
+    if note:
+        payload["note"] = note
+    if warning:
+        payload["warning"] = warning
+    return payload
+
+
+def _with_recalc(out: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """Recompute the edited workbook's formulas and report error cells.
+
+    openpyxl saves a formula with no cached value, so every reader but Excel
+    (pandas, previews, ``read_document``) saw blanks after an edit; and an
+    insert/delete that broke a reference should say so now, not when the user
+    opens the file. ``recalc_xlsx_workbook`` caches values without rewriting
+    the rest of the workbook, and never raises.
+    """
+    from ..documents.writers import recalc_xlsx_workbook
+
+    status = recalc_xlsx_workbook(out)
+    errors = status.get("errors") or []
+    if errors:
+        payload["formula_errors"] = errors[:50]
+    # A bolded or newly formatted amount that no longer fits shows as ### in
+    # Excel; say so with the edit, whether or not a render follows.
+    try:
+        from ..documents.quality import lint_xlsx
+
+        narrow = [f.as_dict() for f in lint_xlsx(out)[0] if f.check == "number_wider_than_column"]
+    except Exception:  # noqa: BLE001 — advisory
+        narrow = []
+    if narrow:
+        payload["numbers_wider_than_column"] = narrow[:10]
+    if status.get("recalculated"):
+        payload["formulas_recalculated"] = status.get("engine") or True
+    elif status.get("skipped_reason") and status.get("skipped_reason") != "no formulas":
+        payload["recalc_skipped"] = status["skipped_reason"]
+    return payload
+
+
+def _with_integrity(source: Path, out: Path, payload: dict[str, Any], *, expected: tuple[str, ...] = ()) -> dict[str, Any]:
+    """Attach what the edit lost relative to its source (comment anchors,
+    tracked changes, footnote references, bookmarks, fields, images, sections)."""
+    from ..documents.integrity import compare_docx_integrity
+
+    report = compare_docx_integrity(source, out, expected_losses=expected)
+    payload["integrity"] = report
+    if report.get("status") == "issues":
+        payload["next_step"] = (
+            "The edit lost content listed under integrity. If that was not intended, redo it from the "
+            "source — a narrower find, or redline_docx for text near references and revisions."
+        )
+    return payload
 
 
 @beta_tool
@@ -699,6 +897,9 @@ def edit_xlsx_cells(source_path: str, filename: str, edits: list[CellEdit]) -> s
     Inspect the real workbook coordinates first: markdown table exports shift
     row numbers wherever blank rows or merged headers appear.
 
+    Returns JSON with the output ``path`` (a new file; the source is never
+    overwritten) and the number of cells written.
+
     Args:
         source_path: Absolute or project-relative path to the source workbook.
         filename: Desired output filename under outputs/ (with or without .xlsx).
@@ -709,13 +910,15 @@ def edit_xlsx_cells(source_path: str, filename: str, edits: list[CellEdit]) -> s
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".xlsx":
         return f"ERROR: edit_xlsx_cells only supports .xlsx files: {source}"
-    out = _output_path(filename, "xlsx")
+    out, note = _derived_output(source, filename, "xlsx")
     payload: list[dict[str, Any]] = [e.model_dump() for e in edits]
     try:
         edit_xlsx_workbook(source, out, payload)
     except Exception as e:
         return f"ERROR editing {source}: {e}"
-    return str(out.resolve())
+    result = _with_recalc(out, {"path": str(out.resolve()), "cells_written": len(payload)})
+    result = _record_edit(source, out, "edit_xlsx_cells", result, note)
+    return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
 @beta_tool
@@ -743,13 +946,15 @@ def edit_xlsx_cells_checked(
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".xlsx":
         return f"ERROR: edit_xlsx_cells_checked only supports .xlsx files: {source}"
-    out = _output_path(filename, "xlsx")
+    out, note = _derived_output(source, filename, "xlsx")
     payload = [e.model_dump() for e in edits]
-    protected = [r.model_dump() for r in (protected_ranges or [])]
+    protected = [r.model_dump() if hasattr(r, "model_dump") else dict(r) for r in (protected_ranges or [])]
     try:
         result = edit_xlsx_workbook_checked(source, out, payload, protected_ranges=protected)
     except Exception as e:
         return f"ERROR editing {source}: {e}"
+    result = _with_recalc(out, result)
+    result = _record_edit(source, out, "edit_xlsx_cells_checked", result, note)
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
@@ -805,169 +1010,12 @@ def diff_xlsx(
 
 
 @beta_tool
-def write_pptx(
-    filename: str,
-    title: str,
-    slides: list[Slide],
-    masters: list[SlideMaster] | None = None,
-) -> str:
-    """Write a .pptx slide deck under outputs/. Returns the absolute path.
-
-    Each slide can carry an embedded chart, overlay images, a flowchart
-    block (real shapes + arrows, not text boxes), and reference a named
-    master. Define masters with the ``masters`` argument; refer to them
-    from a slide via ``master``.
-
-    For flowcharts/process maps prefer the ``flowchart`` field on a slide
-    over a vertical bullet list. Author a Mermaid string (e.g. ``flowchart
-    TB\\n  A[Step 1] --> B{OK?}``); the helper renders, lays out, and
-    embeds real shapes. See ``skills/flowchart`` for examples.
-
-    Args:
-        filename: Desired filename (with or without .pptx extension).
-        title: Deck title metadata.
-        slides: Slides with title, bullets, optional chart, flowchart, images, master ref, etc.
-        masters: Optional master-slide definitions for consistent branding.
-    """
-    from ..documents.diagrams import prepare_flowchart_slides
-
-    out = _output_path(filename, "pptx")
-    payload = [s.model_dump() for s in slides]
-    warnings: list[str] = []
-    diagram_failures: list[str] = []
-    try:
-        # Guarded per slide inside: one unlayoutable diagram costs its own
-        # slide its arrows, not the caller the other nine slides it already
-        # paid to compose.
-        diagram_failures = prepare_flowchart_slides(payload)
-    except Exception as exc:  # noqa: BLE001 — backstop for a whole-call fault
-        diagram_failures = [f"all slides: {type(exc).__name__}: {exc}"]
-    result = write_pptx_deck(
-        out,
-        payload,
-        title=title,
-        masters=[m.model_dump() for m in (masters or [])],
-    )
-    # The minimal OOXML fallback silently drops tables, charts, flowcharts,
-    # stats, images, and masters, and flattens every layout to bullets. Never
-    # report that as a plain success — the caller must know the deck it just
-    # "wrote" is not the deck it specified.
-    # Stay on this module's string contract: a successful write returns the
-    # path, a failure returns an "ERROR:"-prefixed string. Returning a JSON
-    # object here instead would break every caller that chains the result
-    # straight into render_pptx_slides / inspect_pptx as a path.
-    if result.get("renderer") != "pptxgenjs":
-        dropped = ", ".join(result.get("dropped_features", [])) or "none recorded"
-        return (
-            f"ERROR: deck written to {out.resolve()} but DEGRADED — the pptxgenjs "
-            f"renderer was unavailable, so the minimal OOXML fallback wrote it and "
-            f"these features were dropped: {dropped}. "
-            f"Renderer error: {result.get('renderer_error', '')}. "
-            "Install it with `npm i pptxgenjs` in the repo root and write the deck "
-            "again. Do not present this file to the user as finished."
-        )
-    # A success returns the path and NOTHING else. Appending anything to it
-    # produced `"<path> REVIEW: [...]"`, which the callers that chain this
-    # straight into render_pptx_slides / inspect_pptx passed to open() —
-    # `OSError: File name too long`. Non-critical findings reach the model
-    # through the lint payload on the next render instead.
-    for note in warnings:
-        log_workflow_event("deck_write_degraded", {"path": str(out.resolve()), "reason": note})
-    # A requested diagram that is missing from the written deck is not a
-    # non-critical finding: the slide the caller asked for does not exist. It
-    # used to be logged and the bare success path returned, so the model was
-    # told a deck was written and could not tell that a slide had lost its
-    # entire diagram. Report it the same way the renderer fallback is
-    # reported — path included, so the file is still findable.
-    if diagram_failures:
-        for note in diagram_failures:
-            log_workflow_event(
-                "deck_write_degraded",
-                {"path": str(out.resolve()), "reason": f"flowchart layout failed: {note}"},
-            )
-        detail = "; ".join(diagram_failures)
-        return (
-            f"ERROR: deck written to {out.resolve()} but DEGRADED — a requested "
-            f"diagram could not be laid out, so that slide has no nodes or edges: "
-            f"{detail}. Fix the diagram input and write the deck again. Do not "
-            "present this file to the user as finished."
-        )
-    return str(out.resolve())
-
-
-@beta_tool
-def read_deck_stylesheet() -> str:
-    """Read the built-in deck stylesheet for ``write_pptx_from_html``.
-
-    Returns the CSS design system (palette variables, .slide geometry, card /
-    grid / kpi / step / table components) to inline into the ``<style>`` block.
-    Read this before authoring HTML slides, then override the custom
-    properties for the client's palette.
-    """
-    from ..documents.writers.html_pptx import deck_stylesheet
-
-    css = deck_stylesheet()
-    return css or "ERROR: deck.css not found"
-
-
-@beta_tool
-def write_pptx_from_html(
-    filename: str,
-    html: str,
-    title: str = "Presentation",
-    raster_selectors: list[str] | None = None,
-) -> str:
-    """Write a .pptx by laying slides out in HTML/CSS. Returns a JSON report.
-
-    Use this instead of ``write_pptx`` whenever the deck needs a layout the
-    fixed enum does not cover — card grids, sidebars, KPI bands, numbered
-    process strips, overlapping heroes, anything with real visual structure.
-    Chromium renders the HTML and the computed geometry is mapped onto native
-    PowerPoint objects, so text stays editable text, boxes stay shapes, and
-    ``<table>`` stays a real table.
-
-    Contract: every slide is one element with ``class="slide"``, exactly
-    1280x720 px (13.333in x 7.5in at 96px/in). Call ``read_deck_stylesheet``
-    first and inline it in a ``<style>`` block. Keep content inside a ~52px
-    margin. Mark SVG/gradient/chart blocks with ``data-raster`` so they are
-    captured as pictures instead of being rebuilt as shapes.
-
-
-    Args:
-        filename: Desired filename (with or without .pptx extension).
-        html: Full HTML document containing one or more .slide elements.
-        title: Deck title metadata.
-        raster_selectors: Extra CSS selectors to rasterise, e.g. [".chart", ".logo"].
-    """
-    from ..documents.writers.html_pptx import write_pptx_from_html as _render
-
-    out = _output_path(filename, "pptx")
-    lang = "zh-CN" if re.search(r"[一-鿿]", html) else "en-US"
-
-    def render(markup: str) -> dict[str, Any]:
-        return _render(
-            out, markup, title=title, lang=lang, raster_selectors=raster_selectors or []
-        )
-
-    try:
-        report = render(html)
-    except Exception as e:
-        return (
-            f"ERROR: html2pptx failed: {e}\n\n"
-            "Fall back to write_pptx with the fixed layouts, or fix the HTML "
-            "and retry. Every slide must be an element with class=\"slide\"."
-        )
-
-    report["path"] = str(out.resolve())
-    report["next_step"] = (
-        "Call render_pptx_slides on this path, look at the slides, and fix what you see."
-    )
-    return json.dumps(report, ensure_ascii=False, indent=2)
-
-
-@beta_tool
 def inspect_pptx(path: str, include_text_runs: bool = True) -> str:
-    """Inspect a .pptx deck's slides, extracted text runs, and speaker notes.
+    """Inspect an existing .pptx: per slide, shapes, tables, images, text runs and notes.
+
+    Text inside grouped shapes is included — a ppt-master deck (what
+    ``create_deck`` delivers) keeps every text frame inside a group. To make a
+    new deck use ``create_deck``.
 
     Args:
         path: Absolute or project-relative path to the .pptx file.
@@ -987,7 +1035,13 @@ def inspect_pptx(path: str, include_text_runs: bool = True) -> str:
 
 @beta_tool
 def edit_pptx_text(source_path: str, filename: str, replacements: list[SlideTextReplacement]) -> str:
-    """Copy an existing .pptx and replace exact text in specified slides.
+    """Copy an existing .pptx and replace exact text in specified slides. Returns JSON.
+
+    Works on any deck the user has, including one ``create_deck`` delivered;
+    text inside grouped shapes and text split across runs both match. The
+    result gives the output ``path``, the match count per find, and lists the
+    finds that matched nothing under ``not_found`` — re-anchor those, never
+    report them as done.
 
     Args:
         source_path: Absolute or project-relative path to the source deck.
@@ -999,12 +1053,24 @@ def edit_pptx_text(source_path: str, filename: str, replacements: list[SlideText
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".pptx":
         return f"ERROR: edit_pptx_text only supports .pptx files: {source}"
-    out = _output_path(filename, "pptx")
+    out, note = _derived_output(source, filename, "pptx")
     try:
-        edit_pptx_text_in_package(source, out, [r.model_dump() for r in replacements])
+        result = edit_pptx_text_in_package(source, out, [r.model_dump() for r in replacements])
     except Exception as e:
         return f"ERROR editing {source}: {e}"
-    return str(out.resolve())
+    # The counts were computed and dropped: a find that matched nothing came
+    # back as a bare path, indistinguishable from a successful edit.
+    counts = result.get("replacements") or {}
+    payload: dict[str, Any] = {"path": str(out.resolve()), "replacements": counts}
+    missed = [key for key, n in counts.items() if not n]
+    if missed:
+        payload["not_found"] = missed
+        payload["next_step"] = (
+            "These finds matched nothing on their slide. Check the exact text with "
+            "inspect_pptx and retry, or tell the user they were not changed."
+        )
+    payload = _record_edit(source, out, "edit_pptx_text", payload, note)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @beta_tool
@@ -1012,41 +1078,34 @@ def render_pptx_slides(path: str, filename_prefix: str = "slides", dpi: int = 15
     """Render a .pptx deck to slide images and return them for visual QA.
 
     The slides come back inline as a labeled contact sheet — look at them, do
-    not just read the paths. Call this after every write_pptx / edit and fix
-    what you see before reporting the deck as done.
+    not just read the paths. Call it after an edit and fix what you see before
+    reporting the deck as done.
 
     Args:
         path: Absolute or project-relative path to the .pptx file.
         filename_prefix: Prefix for output files under outputs/.
         dpi: JPEG render DPI, clamped between 72 and 200.
     """
+    from ..documents.soffice import SofficeNotInstalled, convert
+
     source = _resolve_read_path(path)
     if not source.is_file():
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".pptx":
         return f"ERROR: render_pptx_slides only supports .pptx files: {source}"
-    soffice = shutil.which("soffice")
-    if not soffice:
-        return "ERROR: render_pptx_slides requires soffice on PATH"
     settings = current_settings()
     safe_prefix = _safe_filename(filename_prefix, default="slides")
-    out_dir = settings.outputs_dir / f"{safe_prefix}_{source.stem}"
+    out_dir = _review_dir(settings, safe_prefix, source)
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out_dir), str(source)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        pdf = out_dir / f"{source.stem}.pdf"
-        if not pdf.is_file():
-            candidates = sorted(out_dir.glob("*.pdf"))
-            if not candidates:
-                return f"ERROR: soffice did not produce a PDF in {out_dir}"
-            pdf = candidates[0]
+        # A private LibreOffice profile per call: on the shared default
+        # profile, two renders started together fail one of them (2 of 4 in
+        # every concurrent round), which is what made renders unsafe to run
+        # side by side.
+        pdf = convert(source, out_dir, "pdf", timeout=120)
         rendered = render_pdf_to_images(pdf, out_dir, safe_prefix, dpi)
+    except SofficeNotInstalled:
+        return "ERROR: render_pptx_slides requires soffice on PATH"
     except subprocess.CalledProcessError as e:
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
@@ -1123,7 +1182,7 @@ def render_pdf_pages(path: str, filename_prefix: str = "pages", dpi: int = 150, 
         return f"ERROR: render_pdf_pages only supports .pdf files: {source}"
     settings = current_settings()
     safe_prefix = _safe_filename(filename_prefix, default="pages")
-    out_dir = settings.outputs_dir / f"{safe_prefix}_{source.stem}"
+    out_dir = _review_dir(settings, safe_prefix, source)
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
         rendered = render_pdf_to_images(
@@ -1138,18 +1197,34 @@ def render_pdf_pages(path: str, filename_prefix: str = "pages", dpi: int = 150, 
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
+    authored = _written_by_write_pdf(source)
     return _visual_result(
         {"pdf": str(source.resolve()), **rendered},
         rendered.get("images", []),
         out_dir,
         safe_prefix,
         label="Page",
-        # Read-only: this renders a PDF the model is READING, so the
-        # authored-file "fix and re-render before reporting it done" QA loop
-        # does not apply. Emitting it here told the model to repair a file it
-        # never wrote, and drove repeat single-page renders of source PDFs.
-        authored=False,
+        # A PDF the model is READING gets no "fix and re-render" QA loop:
+        # emitting it told the model to repair a file it never wrote, and drove
+        # repeat single-page renders of source PDFs. A PDF write_pdf produced
+        # is the model's own deliverable, so it is measured like one.
+        authored=authored,
+        source=source if authored else None,
     )
+
+
+def _written_by_write_pdf(path: Path) -> bool:
+    """True for a PDF this harness's ``write_pdf`` produced (its HTML carries
+    ``<meta name="generator" content="legal_helper write_pdf">``, which
+    WeasyPrint records as the PDF's ``/Creator``)."""
+    try:
+        from pypdf import PdfReader
+
+        meta = PdfReader(str(path)).metadata or {}
+        creator = str(meta.get("/Creator") or "") + " " + str(meta.get("/Producer") or "")
+    except Exception:  # noqa: BLE001 — unreadable metadata: treat as a source
+        return False
+    return "legal_helper write_pdf" in creator
 
 
 @beta_tool
@@ -1171,6 +1246,9 @@ def merge_pdfs(paths: list[str], filename: str) -> str:
         payload = merge_pdf_files(resolved_paths, out)
     except Exception as e:
         return f"ERROR merging PDFs: {e}"
+    from ..documents.lineage import record_derivation
+
+    record_derivation(out, resolved_paths, "merge_pdfs")
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
@@ -1195,12 +1273,19 @@ def split_pdf(path: str, filename_prefix: str = "split", pages: str = "all") -> 
         payload = split_pdf_file(source, out_dir, safe_prefix, pages=pages)
     except Exception as e:
         return f"ERROR splitting {source}: {e}"
+    from ..documents.lineage import record_derivation
+
+    for produced in payload.get("outputs") or []:
+        record_derivation(produced, [source], "split_pdf")
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 @beta_tool
 def rotate_pdf_pages(path: str, filename: str, pages: str = "all", degrees: int = 90) -> str:
     """Copy a PDF and rotate selected pages clockwise.
+
+    Returns JSON with the output ``path`` (a new file; the source is never
+    overwritten).
 
     Args:
         path: Absolute or project-relative source PDF path.
@@ -1213,28 +1298,13 @@ def rotate_pdf_pages(path: str, filename: str, pages: str = "all", degrees: int 
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".pdf":
         return f"ERROR: rotate_pdf_pages only supports .pdf files: {source}"
-    out = _output_path(filename, "pdf")
+    out, note = _derived_output(source, filename, "pdf")
     try:
         rotate_pdf_file(source, out, pages=pages, degrees=degrees)
     except Exception as e:
         return f"ERROR rotating {source}: {e}"
-    return str(out.resolve())
-
-
-def _read_pdf(path: Path) -> str:
-    return read_pdf_text(path)
-
-
-def _read_docx(path: Path) -> str:
-    return extract_docx_text(path, include_comments=True)
-
-
-def _read_xlsx(path: Path) -> str:
-    return extract_xlsx_text(path)
-
-
-def _read_pptx(path: Path) -> str:
-    return extract_pptx_text(path)
+    result = _record_edit(source, out, "rotate_pdf_pages", {"path": str(out.resolve())}, note)
+    return json.dumps(result, ensure_ascii=False, indent=2)
 
 
 @beta_tool
@@ -1253,8 +1323,16 @@ def reshape_xlsx(
 
     Each entry in `operations` is a dict shaped like
     `{"op": "<kind>", "sheet": "A类", ...op-specific fields}`. Ops apply
-    in order; later ops see the state left by earlier ones. See the xlsx
-    format recipe (`read_format_recipe("xlsx")`) for the full op table.
+    in order; later ops see the state left by earlier ones. Valid ops:
+    insert_rows, delete_rows, insert_cols, delete_cols (`at`, `count`),
+    move_range, copy_row, merge_range, unmerge_range, set_styles,
+    set_row_height, set_col_width — see `read_format_recipe("xlsx")`.
+
+    Row/column inserts and deletes behave as in Excel: merged ranges, data
+    validations, conditional formats, formula references on every sheet,
+    defined names and row heights move with the cells, and each op reports
+    these under `side_effects` (a reference into deleted cells becomes #REF!,
+    listed under `formulas_now_ref_error`).
 
     Args:
         source_path: Absolute or project-relative path to the source workbook.
@@ -1267,11 +1345,13 @@ def reshape_xlsx(
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".xlsx":
         return f"ERROR: reshape_xlsx only supports .xlsx files: {source}"
-    out = _output_path(filename, "xlsx")
+    out, note = _derived_output(source, filename, "xlsx")
     try:
         result = reshape_xlsx_workbook(source, out, operations)
     except Exception as e:
         return f"ERROR reshaping {source}: {e}"
+    result = _with_recalc(out, result)
+    result = _record_edit(source, out, "reshape_xlsx", result, note)
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
@@ -1285,8 +1365,10 @@ def copy_xlsx_sheet(
     """Duplicate one worksheet inside a workbook under `new_name`.
 
     Use to spin off a styled sibling sheet (e.g. `A类` → `B类`) from a
-    template without losing fills, merges, validations, or conditional
-    formats.
+    template without losing fills, merges, validations, conditional
+    formats, freeze panes or the autofilter; formulas that name the source
+    sheet are pointed at the copy. Images and charts cannot be copied and
+    are reported under `copied.not_copied`.
 
     Args:
         source_path: Absolute or project-relative path to the source workbook.
@@ -1299,11 +1381,13 @@ def copy_xlsx_sheet(
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".xlsx":
         return f"ERROR: copy_xlsx_sheet only supports .xlsx files: {source}"
-    out = _output_path(filename, "xlsx")
+    out, note = _derived_output(source, filename, "xlsx")
     try:
         result = copy_xlsx_worksheet_in_package(source, sheet, out, new_name)
     except Exception as e:
         return f"ERROR copying sheet on {source}: {e}"
+    result = _with_recalc(out, result)
+    result = _record_edit(source, out, "copy_xlsx_sheet", result, note)
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
@@ -1328,16 +1412,25 @@ def render_xlsx_pages(path: str, filename_prefix: str = "pages", dpi: int = 150)
         return f"ERROR: render_xlsx_pages only supports .xlsx files: {source}"
     settings = current_settings()
     safe_prefix = _safe_filename(filename_prefix, default="pages")
-    out_dir = settings.outputs_dir / f"{safe_prefix}_{source.stem}"
+    out_dir = _review_dir(settings, safe_prefix, source)
     out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        rendered = render_xlsx_to_images(source, out_dir, safe_prefix, max(72, min(int(dpi), 200)))
+        pdf = _review_pdf(source, out_dir)
+        rendered = {
+            "pdf": str(pdf.resolve()),
+            **render_pdf_to_images(pdf, out_dir, safe_prefix, max(72, min(int(dpi), 200))),
+        }
+    except _SofficeMissing:
+        return "ERROR: render_xlsx_pages requires soffice on PATH"
     except subprocess.CalledProcessError as e:
         return f"ERROR rendering {source}: {e.stderr or e.stdout or e}"
     except Exception as e:
         return f"ERROR rendering {source}: {e}"
+    # Column widths are measured in the workbook's own font; "###" or a
+    # clipped cell in a preview drawn with a stand-in is not proof of either.
+    rendered.update(_font_stand_in_note(source))
     return _visual_result(
-        rendered, rendered.get("images", []), out_dir, safe_prefix, label="Page", source=source
+        rendered, rendered.get("images", []), out_dir, safe_prefix, label="Page", source=source, pdf=pdf
     )
 
 
@@ -1350,7 +1443,8 @@ def view_image(path: str, max_edge: int = 1400) -> str:
     stamp (盖章), signature block, or evidence photo on disk.
 
     Args:
-        path: Absolute or project-relative path to a .jpg/.jpeg/.png/.webp/.gif/.bmp file.
+        path: Absolute or project-relative path to a .jpg/.jpeg/.png/.webp/.gif/.bmp/.tif or
+            .heic/.heif (iPhone photo) file.
         max_edge: Longest edge in pixels after downscaling, clamped to 400-1600.
     """
     from .multimodal import image_result
@@ -1358,11 +1452,18 @@ def view_image(path: str, max_edge: int = 1400) -> str:
     p = _resolve_read_path(path)
     if not p.is_file():
         return f"ERROR: File not found: {p}"
-    if p.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}:
+    if p.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic", ".heif"}:
         return f"ERROR: view_image only supports raster image files: {p}"
     try:
         from PIL import Image
 
+        if p.suffix.lower() in {".heic", ".heif"}:
+            # 17 phone photos in one chat never reached the model: Pillow
+            # cannot open HEIC until a HEIF plugin registers its opener.
+            from ..documents.images import register_heif_opener
+
+            if not register_heif_opener():
+                return f"ERROR: reading {p.name} needs a HEIF plugin (pip install pi-heif)"
         with Image.open(p) as im:
             size = {"width": im.width, "height": im.height}
     except Exception as e:
@@ -1390,8 +1491,14 @@ def reshape_docx(
     cell.
 
     Each entry in `operations` is a dict like
-    `{"op": "<kind>", ...op-specific fields}`. See the docx format
-    recipe (`read_format_recipe("docx")`) for the full op table.
+    `{"op": "<kind>", ...op-specific fields}`. Valid ops: insert_paragraph
+    (`after`, `text`, `style`), delete_paragraphs (`indices` | `range`),
+    set_paragraph_style (`index`, `style`), replace_paragraph (`index`,
+    `text`), insert_table_row, delete_table_rows, set_cell_text — see
+    `read_format_recipe("docx")`. Paragraph indices are the 0-based `index`
+    values `inspect_docx` lists. Ops that would rewrite or delete content
+    carrying tracked changes are refused: use `redline_docx` for those. The
+    result reports anything the edit lost (`integrity`).
 
     Args:
         source_path: Absolute or project-relative path to the source .docx.
@@ -1403,11 +1510,21 @@ def reshape_docx(
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".docx":
         return f"ERROR: reshape_docx only supports .docx files: {source}"
-    out = _output_path(filename, "docx")
+    out, note = _derived_output(source, filename, "docx")
     try:
         result = reshape_docx_document(source, out, operations)
     except Exception as e:
         return f"ERROR reshaping {source}: {e}"
+    deleting = any(str((op or {}).get("op") or "") in {"delete_paragraphs", "delete_table_rows", "replace_paragraph", "set_cell_text"} for op in operations)
+    # Deleting or rewriting a paragraph removes whatever it anchored; report
+    # those losses as expected rather than as damage.
+    expected = (
+        ("bookmarks", "hyperlinks", "simple_fields", "complex_fields", "drawings", "vml_pictures", "tables", "styles", "text")
+        if deleting
+        else ()
+    )
+    result = _with_integrity(source, out, result, expected=expected)
+    result = _record_edit(source, out, "reshape_docx", result, note)
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
@@ -1437,15 +1554,16 @@ def reshape_pptx(
         return f"ERROR: File not found: {source}"
     if source.suffix.lower() != ".pptx":
         return f"ERROR: reshape_pptx only supports .pptx files: {source}"
-    out = _output_path(filename, "pptx")
+    out, note = _derived_output(source, filename, "pptx")
     try:
         result = reshape_pptx_deck(source, out, operations)
     except Exception as e:
         return f"ERROR reshaping {source}: {e}"
+    result = _record_edit(source, out, "reshape_pptx", result, note)
     return json.dumps(result, ensure_ascii=False, indent=2, default=str)
 
 
-def _read_document_window(p: Path, suffix: str, *, offset: int, limit: int) -> str:
+def _read_document_window(text: str, name: str, *, offset: int, limit: int) -> str:
     """Return a line window of a document's extracted text.
 
     Paging exists so a tool result that spilled to a file (see
@@ -1453,63 +1571,131 @@ def _read_document_window(p: Path, suffix: str, *, offset: int, limit: int) -> s
     context whole — the read that recovers an over-budget result must not
     itself be over budget.
     """
-    try:
-        if suffix in {".txt", ".md", ".csv"}:
-            text = p.read_text(encoding="utf-8", errors="replace")
-        elif suffix == ".pdf":
-            text = _read_pdf(p)
-        elif suffix == ".docx":
-            text = _read_docx(p)
-        elif suffix == ".xlsx":
-            text = _read_xlsx(p)
-        elif suffix == ".pptx":
-            text = _read_pptx(p)
-        else:
-            text = p.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:  # noqa: BLE001 — same contract as the whole-file path
-        return f"ERROR reading {p}: {e}"
     lines = text.splitlines()
     start = max(0, int(offset))
     end = len(lines) if int(limit) <= 0 else min(len(lines), start + int(limit))
     if start >= len(lines):
-        return f"[No content: requested line {start} of {len(lines)} in {p.name}]"
+        return f"[No content: requested line {start} of {len(lines)} in {name}]"
     body = "\n".join(lines[start:end])
-    header = f"[{p.name}: lines {start}-{end - 1} of {len(lines)}]"
+    header = f"[{name}: lines {start}-{end - 1} of {len(lines)}]"
     return f"{header}\n{body}"
 
 
+def _no_section(section: str, clauses: list[Any], name: str) -> str:
+    labels = [c.heading()[:40] for c in clauses if c.depth <= 1][:25]
+    if labels:
+        return (
+            f"ERROR: no clause or section matching {section!r} in {name}. Labelled clauses: "
+            + "; ".join(labels)
+        )
+    return (
+        f"ERROR: no clause or section matching {section!r} in {name}, and the document has no labelled "
+        "clauses; read it with offset/limit instead."
+    )
+
+
+def _read_section(p: Path, section: str, *, pages: str = "") -> str:
+    """One clause/section by label (第三条 = 第3条, "3.2", "Article 5") or heading words."""
+    from ..documents.clauses import clause_index_from_text, find_clauses
+    from ..documents.docx_reader import read_docx
+    from ..documents.intake import (
+        WORD_LEGACY_SUFFIXES,
+        WORD_SUFFIXES,
+        effective_suffix,
+        read_any,
+        read_legacy_word,
+    )
+
+    suffix = effective_suffix(p)
+    docx: Path | None = None
+    if suffix in WORD_SUFFIXES:
+        docx = p
+    elif suffix in WORD_LEGACY_SUFFIXES:
+        docx = read_legacy_word(p)[1]
+    if docx is not None:
+        reading = read_docx(docx)
+        clauses = reading.clauses()
+        hits = find_clauses(clauses, section)
+        if not hits:
+            return _no_section(section, clauses, p.name)
+        clause = hits[0]
+        blocks = reading.blocks[clause.start:clause.end]
+        paragraphs = [b.paragraph for b in blocks if b.paragraph is not None]
+        where = f"paragraphs {paragraphs[0]}–{paragraphs[-1]}" if paragraphs else "a table"
+        header = [f"[{clause.heading()} — {p.name}, {where}]"]
+        if len(hits) > 1:
+            others = ", ".join(str(h.paragraph) for h in hits[1:6] if h.paragraph is not None)
+            header.append(f"[{len(hits)} clauses match {section!r}; showing the longest. Others start at paragraph(s) {others}]")
+        summary = reading.revisions.header_line()
+        if summary:
+            header.append(summary)
+        return "\n".join(header) + "\n\n" + reading.render_blocks(blocks)
+    text = read_any(p, pages=pages)
+    units, clauses = clause_index_from_text(text)
+    hits = find_clauses(clauses, section)
+    if not hits:
+        return _no_section(section, clauses, p.name)
+    clause = hits[0]
+    lines = text.splitlines()
+    header = f"[{clause.heading()} — {p.name}, lines {clause.start}-{clause.end - 1} of {len(lines)}]"
+    if len(hits) > 1:
+        header += f"\n[{len(hits)} clauses match {section!r}; showing the longest]"
+    return header + "\n" + "\n".join(lines[clause.start:clause.end])
+
+
 @beta_tool
-def read_document(path: str, offset: int = 0, limit: int = 0) -> str:
-    """Read .txt, .md, .pdf, .docx, .xlsx, .pptx, or .csv and return text content.
+def read_document(
+    path: str,
+    offset: int = 0,
+    limit: int = 0,
+    pages: str = "",
+    section: str = "",
+    member: str = "",
+) -> str:
+    """Read a document as text: Word (.docx .doc .rtf .odt .wps), spreadsheets
+    (.xlsx .xls .ods .et), presentations (.pptx .ppt .odp), PDF (scanned pages
+    are OCR'd), OFD, EPUB, images (OCR), text files, and .zip archives.
+
+    Word files show tracked changes as {++inserted++} / {--deleted--} under a
+    one-line summary of who changed what, headers and footers as [Header] /
+    [Footer], and auto-numbering as Word renders it (第一条, not 第1条). PDF
+    and OFD text is marked [page N]; OCR'd pages say so. A .zip lists its
+    members — read one with ``member`` or ``path="archive.zip::inner.docx"``.
+    A binary format that cannot be read returns an error naming what can.
 
     Args:
-        path: Absolute or project-relative path to the file.
+        path: Absolute or project-relative path to the file; ``archive.zip::member`` reads a zip member.
         offset: First line to return (0-based). Use to page through a long file.
         limit: Maximum number of lines to return; 0 returns the rest of the file.
+        pages: PDF/OFD pages or presentation slides to read, 1-based, e.g. "3-5,8"; empty reads all.
+        section: Return one clause or section: its label as the document shows it ("第三条",
+            "3.2", "Article 5", "（二）") or words of its heading.
+        member: A member of a .zip archive to read instead of listing the archive.
     """
-    p = _resolve_read_path(path)
+    import zipfile
+
+    from ..documents.intake import UnsupportedFormat, read_any, resolve_member_path
+    from ..documents.lineage import stale_source_warning
+
+    raw = str(path or "")
+    base, _, inner = raw.partition("::")
+    p = _resolve_read_path(base)
     if not p.is_file():
         return f"ERROR: File not found: {p}"
-    suffix = p.suffix.lower()
-    if offset or limit:
-        return _read_document_window(p, suffix, offset=offset, limit=limit)
+    if inner or member:
+        try:
+            p = resolve_member_path(Path(f"{p}::{inner}") if inner else p, member)
+        except (FileNotFoundError, ValueError, zipfile.BadZipFile) as e:
+            return f"ERROR: {e}"
     try:
-        if suffix in {".txt", ".md"}:
-            return p.read_text(encoding="utf-8", errors="replace")
-        if suffix == ".pdf":
-            return _read_pdf(p)
-        if suffix == ".docx":
-            return _read_docx(p)
-        if suffix == ".xlsx":
-            return _read_xlsx(p)
-        if suffix == ".pptx":
-            return _read_pptx(p)
-        if suffix == ".csv":
-            return p.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:
+        text = _read_section(p, section, pages=pages) if section else read_any(p, pages=pages)
+    except UnsupportedFormat as e:
+        return f"ERROR: {e}"
+    except Exception as e:  # noqa: BLE001 — every reader failure is an ERROR string
         return f"ERROR reading {p}: {e}"
-    # Fallback: attempt text read
-    try:
-        return p.read_text(encoding="utf-8", errors="replace")
-    except Exception as e:
-        return f"ERROR: Unsupported file type {suffix}: {e}"
+    if text.startswith("ERROR"):
+        return text
+    if offset or limit:
+        text = _read_document_window(text, p.name, offset=offset, limit=limit)
+    warning = stale_source_warning(p)
+    return f"{warning}\n{text}" if warning else text

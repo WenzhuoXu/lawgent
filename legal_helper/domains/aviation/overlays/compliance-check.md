@@ -5,6 +5,10 @@ generic regulatory hierarchy and workflow.
 
 ## Authority hierarchy (additions)
 
+Sources to add; rank, version and applicability follow general playbook §0
+(conventions bind through their domestic hook; SARPs reach operators only
+through national rules, net of filed differences).
+
 - International: Chicago Convention; ICAO Annexes 1–19 + SARPs (esp.
   Annex 6 ops, Annex 8 airworthiness, Annex 13 accident investigation,
   Annex 16 environmental, Annex 17 security); Tokyo Convention + MP14;

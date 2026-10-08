@@ -13,6 +13,13 @@ from typing import Any, Iterable, Iterator, Optional, Protocol, runtime_checkabl
 
 from ..config import Settings
 
+#: ``structured_output`` value asking for syntactically valid JSON with no
+#: schema. OpenAI maps it to ``text.format = {"type": "json_object"}`` (the
+#: input must mention JSON); Anthropic ignores it. Plain-JSON plans from luna
+#: ended in a trailing comma or a stray, unterminated key in 3 of ~45 routing
+#: calls, and each one dropped the turn to the heuristic plan.
+JSON_OBJECT = "json_object"
+
 
 Message = dict[str, Any]
 Tool = Any  # BetaFunctionTool / dict / hosted-tool param
@@ -46,11 +53,25 @@ class RunResult:
 
 @dataclass
 class StreamEvent:
-    """Normalized streaming event emitted by both providers."""
+    """Normalized streaming event emitted by both providers.
 
-    kind: str          # "delta" | "tool_call" | "hosted_tool_call" | "artifact" |
-                       # "skill_started" | "skill_finished" | "done" | "error"
+    Provider kinds: ``delta``, ``reasoning_delta``, ``tool_call``,
+    ``hosted_tool_call``, ``tool_progress`` and ``hosted_tool_progress`` (both
+    transient previews — see ``providers/progress.py``), and a final ``done``
+    whose ``usage`` also carries ``last_request_input_tokens``: the input of
+    the turn's last request, i.e. how full the context window actually is,
+    as opposed to the turn-summed ``input_tokens`` that billing needs. The
+    workflow layer adds its own kinds (``skill_started``, ``artifact``, …).
+    """
+
+    kind: str
     data: dict[str, Any] = field(default_factory=dict)
+
+
+# Accepted values for the optional ``verbosity`` argument every provider takes.
+# OpenAI maps it onto ``text.verbosity`` where the model supports it; Anthropic
+# has no such parameter, so the caller's instruction sentence is what carries it.
+VERBOSITY_LEVELS = ("low", "medium", "high")
 
 
 @runtime_checkable
@@ -69,6 +90,7 @@ class Provider(Protocol):
         *,
         max_iterations: Optional[int] = None,
         structured_output: Optional[type] = None,
+        verbosity: Optional[str] = None,
     ) -> RunResult: ...
 
     def stream(
@@ -78,6 +100,7 @@ class Provider(Protocol):
         tools: Iterable[Tool] = (),
         *,
         max_iterations: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Iterator[StreamEvent]: ...
 
     def tool_runner(
@@ -88,6 +111,7 @@ class Provider(Protocol):
         *,
         max_iterations: int,
         structured_output: Optional[type] = None,
+        verbosity: Optional[str] = None,
     ) -> RunResult: ...
 
 

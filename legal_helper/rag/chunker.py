@@ -1,10 +1,15 @@
 r"""Legal-aware hierarchical chunker.
 
 Preserves article / section / clause boundaries:
-- 第\d+条 (PRC statute articles)
+- 第\d+条 (PRC statute articles), incl. 第十二条之一
 - Article \d+ / § \d+
 - ##/### markdown headings
-- Numbered legal clauses (1.1, 1.1.1)
+- Numbered legal clauses (1., 1.1, 1.1.1, 1、)
+
+A label may sit behind a markdown list or heading marker. Converters emit
+``- 第1条 总则`` and ``1. Definitions``; patterns that only accepted a bare
+``第X条`` / ``N Title`` at the start of a line found no landmark in 36 of 52
+real uploads, so the attachment outline built on them was empty.
 """
 
 from __future__ import annotations
@@ -13,11 +18,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+_LIST_MARK = r"(?:[-*+]\s+|#{1,6}\s+)?"
 _ARTICLE_RES = [
-    re.compile(r"(?m)^\s*(第[一二三四五六七八九十百千零0-9]+条)"),
-    re.compile(r"(?m)^\s*(Article\s+\d+)"),
-    re.compile(r"(?m)^\s*(§\s*\d+(?:\.\d+)*)"),
-    re.compile(r"(?m)^\s*(\d+(?:\.\d+){0,3})\s+[A-Z一-鿿]"),
+    re.compile(rf"(?m)^\s*{_LIST_MARK}(第[一二三四五六七八九十百千万零〇两0-9０-９]+条(?:之[一二三四五六七八九十]+)?)"),
+    re.compile(rf"(?m)^\s*{_LIST_MARK}((?:Article|ARTICLE)\s+\d+[A-Za-z]?)"),
+    re.compile(rf"(?m)^\s*{_LIST_MARK}(§\s*\d+(?:\.\d+)*)"),
+    # "1 Title", "1. Title", "1.1 Title", "1、标题" — never "1.5 million".
+    re.compile(rf"(?m)^\s*{_LIST_MARK}(\d+(?:\.\d+){{0,3}})(?:\.(?!\d)\s*|、\s*|\s+)(?=[A-Z一-鿿（(])"),
     re.compile(r"(?m)^#{2,6}\s+(\S[^\n]*)"),
 ]
 _CJK_RE = re.compile(

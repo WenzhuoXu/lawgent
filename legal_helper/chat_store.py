@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -116,14 +117,36 @@ def _row_to_artifact(row: sqlite3.Row) -> ArtifactRecord:
     )
 
 
+# How long a write waits for another writer before giving up. The default
+# (5 s) was exceeded under three concurrent runs — every streamed event is a
+# write — and the run died with "database is locked".
+_BUSY_TIMEOUT_SECONDS = 30.0
+
+# Schema setup runs once per database per process. The server builds a
+# ChatStore per request, and re-running the DDL on every request took write
+# locks the event stream was waiting on.
+_INITIALIZED: set[str] = set()
+_INIT_LOCK = threading.Lock()
+
+
 class ChatStore:
     def __init__(self, settings: Optional[Settings] = None, db_path: Optional[Path] = None) -> None:
         self.settings = settings or current_settings()
         self.db_path = db_path or (self.settings.state_dir / "chat_sessions.sqlite3")
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        if db_path is None:
-            self._migrate_legacy_output_db()
-        self.init_db()
+        key = str(self.db_path.resolve())
+        with _INIT_LOCK:
+            fresh = key not in _INITIALIZED or not self.db_path.exists()
+            if fresh:
+                if db_path is None:
+                    self._migrate_legacy_output_db()
+                self.init_db()
+                _INITIALIZED.add(key)
+        if not fresh:
+            # Read-only unless a stored selection is on a model no longer
+            # offered: a store opened after a retirement still migrates rows.
+            with self._connect() as con:
+                self._migrate_unoffered_models(con)
 
     def _migrate_legacy_output_db(self) -> None:
         legacy = self.settings.outputs_dir / "chat_sessions.sqlite3"
@@ -169,7 +192,7 @@ class ChatStore:
                 shutil.move(str(source_sidecar), str(target.parent / f"{target.name}{suffix}"))
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.db_path)
+        con = sqlite3.connect(self.db_path, timeout=_BUSY_TIMEOUT_SECONDS)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA foreign_keys=ON")
@@ -295,6 +318,7 @@ class ChatStore:
             provider=self.settings.provider,
             model=self.settings.model_for_provider(),
             reasoning_effort=self.settings.openai_reasoning_effort,
+            answer_length=self.settings.answer_length,
             enable_web_search=self.settings.enable_web_search,
             enable_web_fetch=self.settings.enable_web_fetch,
         )
@@ -601,7 +625,3 @@ class ChatStore:
 
     def existing_artifact_paths(self, chat_id: str) -> set[str]:
         return {a.path for a in self.list_artifacts(chat_id)}
-
-    def first_nonempty_assistant_message(self, chat_id: str) -> Optional[ChatMessage]:
-        messages = [m for m in self.list_messages(chat_id) if m.role == "assistant" and m.content.strip()]
-        return messages[-1] if messages else None

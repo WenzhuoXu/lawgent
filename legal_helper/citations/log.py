@@ -58,12 +58,3 @@ def read_entries(path: Path | str | None = None) -> list[dict]:
     return out
 
 
-def is_already_verified(cite: str, path: Path | str | None = None) -> bool:
-    """True iff the same cite has been confirmed/verified previously."""
-    target = cite.strip()
-    for e in read_entries(path):
-        if e["cite"] == target and (
-            "confirm" in e["verdict"].lower() or "verified" in e["verdict"].lower()
-        ):
-            return True
-    return False

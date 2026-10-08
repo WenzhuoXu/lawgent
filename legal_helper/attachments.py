@@ -4,9 +4,13 @@ Single source of truth for converting an uploaded file path into the
 structured content the provider expects:
 
 - PDFs              → Anthropic `document` (Files API) / OpenAI `input_file`
-- Images            → base64 `image` / `input_image`
-- DOCX/XLSX/CSV     → server-side text extraction wrapped in a labeled block
-- TXT/MD/code       → inlined as a labeled text block
+- Images            → base64 `image` / `input_image` (HEIC/HEIF, BMP and TIFF
+                      are converted to JPEG first — providers take neither)
+- Office documents  → server-side text extraction wrapped in a labeled block,
+  incl. legacy        through the same reader as ``read_document``
+  (.doc .xls .wps …), (``documents/intake.py``): tracked changes, headers and
+  OFD, EPUB, .zip     footers and numbering labels kept; a .zip lists members
+- TXT/MD/code       → inlined as a labeled text block (UTF-8/UTF-16/GB18030)
 - Opaque binary     → metadata stub; model can still call `read_document`
 
 Both providers consume the same call site via `build_user_content(text,
@@ -22,25 +26,33 @@ import hashlib
 import mimetypes
 import os
 import re
-import shutil
-import subprocess
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Literal, Optional, Union
 
 from .config import current_settings
-from .documents import extract_docx_text, extract_pptx_text, extract_xlsx_text
+from .documents import extract_pptx_text
 
 
 Category = Literal["native_pdf", "native_image", "text_inline", "binary_stub"]
 # .pptx is treated as a "convert-to-PDF" attachment so both providers see the
 # slides as vision content. The text fallback is kept as a companion block.
-_PPTX_EXTS = {".pptx", ".ppt"}
+_PPTX_EXTS = {".pptx", ".ppt", ".pptm", ".ppsx", ".pps", ".odp", ".dps"}
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+# Formats the providers do not take: converted to JPEG before sending. 17
+# iPhone photos in one chat never reached the model because .heic was not an
+# image extension at all.
+_CONVERTED_IMAGE_EXTS = {".heic", ".heif", ".bmp", ".tif", ".tiff"}
 _IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-_OFFICE_EXTS = {".docx", ".xlsx", ".pptx", ".csv"}
+_OFFICE_EXTS = {
+    ".docx", ".docm", ".xlsx", ".xlsm", ".pptx", ".csv",
+    # Legacy and national formats, read through documents/intake (LibreOffice
+    # conversion for word processing, the tiered converter otherwise).
+    ".doc", ".dot", ".rtf", ".odt", ".wps", ".xls", ".ods", ".et", ".ofd", ".epub", ".zip",
+}
 _TEXT_EXTS = {".txt", ".md", ".rst", ".log"}
 _CODE_EXTS = {
     ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".yaml", ".yml", ".toml",
@@ -66,26 +78,46 @@ _MAX_TOTAL_INLINE_BYTES = 10_000_000
 # roughly a 56x smaller answering context, and embedding retrieval alone tied
 # on 16 of 18 at 17.3x fewer tokens — while the honest counter-case (Thomson
 # Reuters' production finding that full-document context beats RAG for
-# document-bound legal skills) holds for the single-document case. The break-
-# even given in the paper is corpus size relative to the retrieval payload.
+# document-bound legal skills) holds for the single-document case.
 #
-# So: below the threshold, inline as before. Above it, every text attachment is
-# replaced by a navigable OUTLINE — headings and 第X条 / Article N labels, which
-# the chunker already knows how to find — plus the tool call that opens it. The
-# model then reads what it needs instead of everything, and nothing becomes
-# unreachable. Set LEGAL_HELPER_INLINE_CORPUS_BYTES=0 to disable.
-_NAVIGATE_CORPUS_BYTES = 400_000
+# The decision is made in extracted *tokens*, against a share of the turn's
+# input ceiling (``context.turn_input_ceiling_for``), and it applies to one
+# attachment as much as to many. It used to sum file *bytes* and always inline
+# a lone attachment: a 353 KB workbook extracted to ~367K tokens — over the
+# 259K OpenAI working ceiling on its own — and was rebuilt into every
+# sub-agent. Text attachments are inlined in order while they fit the share;
+# the rest are replaced by a navigable OUTLINE (clause labels from the clause
+# index, headings) plus the call that opens them, so nothing is unreachable.
+#
+# The share leaves the rest of the ceiling to what it is already divided
+# among: ~21K of fixed overhead, 30% for the transcript digest, and the tool
+# results of the turn. LEGAL_HELPER_INLINE_ATTACHMENT_TOKENS sets the budget
+# in tokens instead; 0 turns outlining off (everything inlines).
+_INLINE_SHARE_OF_TURN_CEILING = 0.4
 _OUTLINE_MAX_ENTRIES = 60
+# Office files carry images; their text is what is measured, so the byte cap
+# only guards extraction cost. Plain text is bounded by _MAX_INLINE_BYTES.
+_MAX_EXTRACT_BYTES = 25_000_000
 
 
-def _navigate_threshold() -> int:
-    raw = os.getenv("LEGAL_HELPER_INLINE_CORPUS_BYTES")
-    if raw is None:
-        return _NAVIGATE_CORPUS_BYTES
+def _inline_token_budget() -> int:
+    """Tokens of attachment text one turn may inline; 0 means unlimited."""
+    raw = os.getenv("LEGAL_HELPER_INLINE_ATTACHMENT_TOKENS")
+    if raw is not None:
+        try:
+            return max(int(raw), 0)
+        except ValueError:
+            pass
+    # The byte-based predecessor's documented off switch keeps working.
+    if os.getenv("LEGAL_HELPER_INLINE_CORPUS_BYTES", "").strip() == "0":
+        return 0
+    from .context import turn_input_ceiling_for
+
     try:
-        return max(int(raw), 0)
-    except ValueError:
-        return _NAVIGATE_CORPUS_BYTES
+        ceiling = turn_input_ceiling_for(current_settings())
+    except Exception:  # noqa: BLE001 — settings unreadable: a conservative default
+        ceiling = 200_000
+    return max(1_000, int(_INLINE_SHARE_OF_TURN_CEILING * ceiling))
 
 
 @dataclass
@@ -108,7 +140,7 @@ def detect_category(path: Path) -> Category:
     ext, mime = _ext_mime(path)
     if ext == ".pdf" or mime == "application/pdf":
         return "native_pdf"
-    if ext in _IMAGE_EXTS or mime in _IMAGE_MIMES:
+    if ext in _IMAGE_EXTS or ext in _CONVERTED_IMAGE_EXTS or mime in _IMAGE_MIMES:
         return "native_image"
     if ext in _INLINE_EXTS or mime.startswith("text/"):
         return "text_inline"
@@ -139,52 +171,59 @@ def describe(path: Union[str, Path]) -> AttachmentInfo:
 # ---------- text extraction for inlined formats ----------------------------
 
 
-def _extract_docx(path: Path) -> str:
-    return extract_docx_text(path, include_comments=True)
-
-
-def _extract_xlsx(path: Path) -> str:
-    return extract_xlsx_text(path)
-
-
-def _extract_pptx(path: Path) -> str:
-    return extract_pptx_text(path)
-
-
 def _extract_csv(path: Path) -> str:
     import csv
 
+    from .documents.intake import sniff_text_encoding
+
+    encoding = sniff_text_encoding(path) or "utf-8"
     out: list[str] = []
-    with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
+    with path.open("r", encoding=encoding, errors="replace", newline="") as f:
         reader = csv.reader(f)
         for row in reader:
             out.append(" | ".join(row))
     return "\n".join(out)
 
 
-def _extract_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+_TEXT_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_TEXT_CACHE_LOCK = threading.Lock()
+_TEXT_CACHE_SIZE = 64
 
 
 def extract_inline_text(info: AttachmentInfo) -> str:
+    """Text of a text-category attachment, through the same reader as
+    ``read_document`` (cached by content hash: a turn's attachments are
+    re-extracted for every sub-agent otherwise)."""
     ext = info.path.suffix.lower()
-    if info.size > _MAX_INLINE_BYTES:
+    plain = ext in _TEXT_EXTS or ext in _CODE_EXTS or ext == ".csv"
+    limit = _MAX_INLINE_BYTES if plain else _MAX_EXTRACT_BYTES
+    if info.size > limit:
         return (
-            f"[file too large to inline ({info.size} bytes > {_MAX_INLINE_BYTES}). "
+            f"[file too large to inline ({info.size} bytes > {limit}). "
             f"Call `read_document(path={str(info.path)!r})` to read in chunks.]"
         )
+    key = f"{info.sha256}:{ext}" if info.sha256 else ""
+    if key:
+        with _TEXT_CACHE_LOCK:
+            cached = _TEXT_CACHE.get(key)
+            if cached is not None:
+                _TEXT_CACHE.move_to_end(key)
+                return cached
     try:
-        if ext == ".docx":
-            return _extract_docx(info.path)
-        if ext == ".xlsx":
-            return _extract_xlsx(info.path)
-        if ext == ".pptx":
-            return _extract_pptx(info.path)
         if ext == ".csv":
-            return _extract_csv(info.path)
-        return _extract_text(info.path)
+            text = _extract_csv(info.path)
+        else:
+            from .documents.intake import read_any
+
+            text = read_any(info.path)
     except Exception as exc:
         return f"[error extracting text from {info.filename}: {exc}]"
+    if key:
+        with _TEXT_CACHE_LOCK:
+            _TEXT_CACHE[key] = text
+            while len(_TEXT_CACHE) > _TEXT_CACHE_SIZE:
+                _TEXT_CACHE.popitem(last=False)
+    return text
 
 
 def _wrap_inline(info: AttachmentInfo, text: str) -> str:
@@ -224,11 +263,24 @@ def _deferred_text(info: AttachmentInfo) -> str:
 
 
 def _outline_entries(text: str) -> list[str]:
-    """Navigable landmarks in a document: headings and article/section labels.
+    """Navigable landmarks in a document: clause labels with their titles
+    (第一条 总则, 1.1 Definitions, Article 5 …) and headings.
 
-    Reuses the RAG chunker's boundary patterns so the labels the outline
-    advertises are the same ones retrieval can actually seek to.
+    Built from the shared clause index, which accepts the forms converters
+    actually emit (``- 第1条``, ``1. Heading``); the bare-line regexes it
+    replaces found nothing in 36 of 52 real uploads. The RAG chunker's
+    boundary patterns remain the fallback, so the labels the outline
+    advertises are ones retrieval can seek to as well.
     """
+    try:
+        from .documents.clauses import clause_index_from_text, outline_labels
+
+        _, clauses = clause_index_from_text(text)
+        entries = outline_labels(clauses, max_entries=_OUTLINE_MAX_ENTRIES)
+        if entries:
+            return entries
+    except Exception:  # noqa: BLE001 — fall back to the chunker's patterns
+        pass
     try:
         from .rag.chunker import _ARTICLE_RES  # type: ignore[attr-defined]
 
@@ -253,41 +305,68 @@ def _outline_entries(text: str) -> list[str]:
     return entries
 
 
-def _outline_text(info: AttachmentInfo) -> str:
+def _outline_text(info: AttachmentInfo, body: Optional[str] = None, *, tokens: int = 0, budget: int = 0) -> str:
     """Navigable map of a text attachment, in place of its full body."""
-    body = extract_inline_text(info)
+    if body is None:
+        body = extract_inline_text(info)
+    tokens = tokens or _estimate_tokens(body)
     entries = _outline_entries(body)
     head = " ".join(body[:400].split())
+    why = (
+        f"≈{tokens:,} tokens of text, more than this turn's attachment budget"
+        + (f" of {budget:,}" if budget else "")
+    )
     lines = [
-        f"[attachment not inlined — this turn carries a document corpus, so it is "
-        f"indexed rather than pasted: {info.filename} ({info.mime}, {info.size} bytes). "
-        f"Saved at {info.path}.]",
+        f"[attachment not inlined — {why}, so it is indexed rather than pasted: "
+        f"{info.filename} ({info.mime}, {info.size} bytes). Saved at {info.path}.]",
         f"opens with: {head}…" if head else "",
     ]
     if entries:
-        shown = ", ".join(entries)
+        shown = "; ".join(entries)
         more = " …" if len(entries) >= _OUTLINE_MAX_ENTRIES else ""
         lines.append(f"sections: {shown}{more}")
     lines.append(
-        f"Read the parts you need with `read_document(path={str(info.path)!r})`, "
-        f"or search the corpus with the retrieval tools."
+        f"Read what you need with `read_document(path={str(info.path)!r}, section='<label>')` "
+        "(a label above, e.g. 第三条), or page through it with offset/limit; the retrieval tools "
+        "search it too."
     )
     return "\n".join(x for x in lines if x)
 
 
-def _should_navigate(infos: list[AttachmentInfo]) -> bool:
-    """True when the turn carries a corpus rather than a document.
+def _estimate_tokens(text: str) -> int:
+    from .context import estimate_tokens
 
-    One text attachment is always inlined regardless of size (the per-file cap
-    still applies) — that is the case the production evidence supports.
+    return estimate_tokens(text)
+
+
+def _plan_text_attachments(infos: list[AttachmentInfo]) -> dict[int, tuple[str, str]]:
+    """``{index: ("inline" | "outline", text)}`` for each text attachment.
+
+    Attachments are taken in the order given (the current turn's uploads
+    first); each one is inlined while its extracted tokens fit what is left
+    of :func:`_inline_token_budget`, and outlined otherwise — a single huge
+    attachment included.
     """
-    threshold = _navigate_threshold()
-    if threshold <= 0:
-        return False
-    text_infos = [i for i in infos if i.category == "text_inline"]
-    if len(text_infos) <= 1:
-        return False
-    return sum(i.size for i in text_infos) > threshold
+    budget = _inline_token_budget()
+    left = budget
+    plan: dict[int, tuple[str, str]] = {}
+    for idx, info in enumerate(infos):
+        if info.category != "text_inline" or _is_pptx(info):
+            continue
+        text = extract_inline_text(info)
+        tokens = _estimate_tokens(text)
+        if budget <= 0 or tokens <= left:
+            if budget > 0:
+                left -= tokens
+            plan[idx] = ("inline", text)
+        else:
+            plan[idx] = ("outline", _outline_text(info, text, tokens=tokens, budget=budget))
+    return plan
+
+
+def _should_navigate(infos: list[AttachmentInfo]) -> bool:
+    """True when at least one text attachment will be outlined, not inlined."""
+    return any(kind == "outline" for kind, _ in _plan_text_attachments(infos).values())
 
 
 def _stub_text(info: AttachmentInfo) -> str:
@@ -310,16 +389,18 @@ def _pptx_to_pdf(info: AttachmentInfo) -> Path:
 
     Raises RuntimeError if soffice is not on PATH or conversion fails. The
     output lives under ``outputs_dir/_pptx_pdf_cache/<sha256>.pdf`` so it is
-    re-used across requests in the same project.
+    re-used across requests in the same project. Runs under a per-call
+    LibreOffice profile, so two uploads converting at once do not collide.
     """
+    import subprocess
+
+    from .documents.soffice import SofficeNotInstalled, convert
+
     cache_key = info.sha256 or _sha256_of(info.path)
     with _PPTX_PDF_LOCK:
         cached = _PPTX_PDF_CACHE.get(cache_key)
     if cached and cached.is_file():
         return cached
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
-    if not soffice:
-        raise RuntimeError("soffice/libreoffice not found on PATH; cannot convert .pptx to PDF")
     settings = current_settings()
     out_dir = settings.outputs_dir / "_pptx_pdf_cache" / cache_key
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -329,23 +410,13 @@ def _pptx_to_pdf(info: AttachmentInfo) -> Path:
             _PPTX_PDF_CACHE[cache_key] = on_disk
         return on_disk
     try:
-        subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out_dir), str(info.path)],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
+        pdf = convert(info.path, out_dir, "pdf", timeout=120)
+    except SofficeNotInstalled as exc:
+        raise RuntimeError("soffice/libreoffice not found on PATH; cannot convert .pptx to PDF") from exc
     except subprocess.CalledProcessError as exc:
         raise RuntimeError(
             f"soffice failed converting {info.filename}: {(exc.stderr or exc.stdout or str(exc)).strip()[:400]}"
         ) from exc
-    pdf = out_dir / f"{info.path.stem}.pdf"
-    if not pdf.is_file():
-        candidates = sorted(out_dir.glob("*.pdf"))
-        if not candidates:
-            raise RuntimeError(f"soffice did not produce a PDF for {info.filename}")
-        pdf = candidates[0]
     with _PPTX_PDF_LOCK:
         _PPTX_PDF_CACHE[cache_key] = pdf
     return pdf
@@ -420,6 +491,43 @@ def _image_base64(info: AttachmentInfo) -> str:
         return base64.standard_b64encode(f.read()).decode("ascii")
 
 
+_IMAGE_CONVERT_LOCK = threading.Lock()
+# Long edge for converted photos: legible for a photographed page, ~1 MB.
+_CONVERTED_IMAGE_EDGE = 2048
+
+
+def _provider_image(info: AttachmentInfo) -> AttachmentInfo:
+    """``info`` itself, or a JPEG rendering of it when the providers cannot
+    take its format (HEIC/HEIF phone photos, BMP, TIFF). Cached by sha256."""
+    if info.path.suffix.lower() not in _CONVERTED_IMAGE_EXTS:
+        return info
+    from PIL import Image, ImageOps
+
+    sha = info.sha256 or _sha256_of(info.path)
+    # Under state/, not outputs/: everything in a chat's outputs directory is
+    # listed to the user as an artifact.
+    out = current_settings().state_dir / "image_cache" / f"{sha}.jpg"
+    with _IMAGE_CONVERT_LOCK:
+        if not out.is_file():
+            from .documents.images import register_heif_opener
+
+            register_heif_opener()
+            out.parent.mkdir(parents=True, exist_ok=True)
+            with Image.open(info.path) as im:
+                im = ImageOps.exif_transpose(im).convert("RGB")
+                if max(im.size) > _CONVERTED_IMAGE_EDGE:
+                    im.thumbnail((_CONVERTED_IMAGE_EDGE, _CONVERTED_IMAGE_EDGE), Image.LANCZOS)
+                im.save(out, format="JPEG", quality=88, optimize=True)
+    return AttachmentInfo(
+        path=out,
+        filename=f"{info.path.stem}.jpg",
+        size=out.stat().st_size,
+        mime="image/jpeg",
+        sha256=_sha256_of(out),
+        category="native_image",
+    )
+
+
 # ---------- block builders -------------------------------------------------
 
 
@@ -427,9 +535,19 @@ def _is_pptx(info: AttachmentInfo) -> bool:
     return info.path.suffix.lower() in _PPTX_EXTS
 
 
+def _deck_text(info: AttachmentInfo) -> str:
+    """Slide text for the companion block; legacy decks (.ppt, .odp, Kingsoft
+    .dps) go through the same reader as read_document."""
+    if info.path.suffix.lower() == ".pptx":
+        return extract_pptx_text(info.path)
+    from .documents.intake import read_any
+
+    return read_any(info.path)
+
+
 def _pptx_text_companion_anthropic(info: AttachmentInfo) -> dict[str, Any]:
     try:
-        text = extract_pptx_text(info.path)
+        text = _deck_text(info)
     except Exception as exc:
         text = f"[text extraction failed: {exc}]"
     return {"type": "text", "text": _wrap_inline(info, text)}
@@ -437,7 +555,7 @@ def _pptx_text_companion_anthropic(info: AttachmentInfo) -> dict[str, Any]:
 
 def _pptx_text_companion_openai(info: AttachmentInfo) -> dict[str, Any]:
     try:
-        text = extract_pptx_text(info.path)
+        text = _deck_text(info)
     except Exception as exc:
         text = f"[text extraction failed: {exc}]"
     return {"type": "input_text", "text": _wrap_inline(info, text)}
@@ -470,6 +588,10 @@ def build_anthropic_block(info: AttachmentInfo) -> dict[str, Any]:
         except Exception as exc:
             return {"type": "text", "text": f"[failed to upload PDF {info.filename}: {exc}. Saved at {info.path}.]"}
     if info.category == "native_image":
+        try:
+            info = _provider_image(info)
+        except Exception as exc:
+            return {"type": "text", "text": f"[could not convert image {info.filename} for the model: {exc}. Saved at {info.path}.]"}
         if info.size > _MAX_INLINE_IMAGE_BYTES:
             try:
                 file_id = upload_to_anthropic(info)
@@ -508,6 +630,10 @@ def build_openai_block(info: AttachmentInfo) -> dict[str, Any]:
         except Exception as exc:
             return {"type": "input_text", "text": f"[failed to upload PDF {info.filename}: {exc}. Saved at {info.path}.]"}
     if info.category == "native_image":
+        try:
+            info = _provider_image(info)
+        except Exception as exc:
+            return {"type": "input_text", "text": f"[could not convert image {info.filename} for the model: {exc}. Saved at {info.path}.]"}
         if info.size > _MAX_INLINE_IMAGE_BYTES:
             try:
                 file_id = upload_to_openai(info, purpose="vision")
@@ -526,7 +652,7 @@ def build_openai_block(info: AttachmentInfo) -> dict[str, Any]:
 
 def _safe_pptx_text(info: AttachmentInfo) -> str:
     try:
-        return extract_pptx_text(info.path)
+        return _deck_text(info)
     except Exception as exc:
         return f"[text extraction failed: {exc}]"
 
@@ -587,16 +713,13 @@ def build_user_content(
     # Aggregate inline budget, spent in the order given (the current turn's
     # own uploads come first). Overflow degrades to a path stub the model can
     # open with a tool, so a large batch costs a tool call instead of the
-    # whole context window.
+    # whole context window. Text attachments are additionally planned in
+    # tokens: past the turn's attachment share they become outlines.
     budget_left = _MAX_TOTAL_INLINE_BYTES
-    navigate = _should_navigate(infos)
+    plan = _plan_text_attachments(infos)
 
     def fits(info: AttachmentInfo) -> bool:
         nonlocal budget_left
-        # Corpus mode: text documents are indexed, not pasted. Images and
-        # provider-side PDFs are unaffected — they are not the bloat here.
-        if navigate and info.category == "text_inline":
-            return False
         cost = _inline_cost(info)
         if cost == 0:
             return True
@@ -605,15 +728,23 @@ def build_user_content(
         budget_left -= cost
         return True
 
-    def not_inlined(info: AttachmentInfo) -> str:
-        if navigate and info.category == "text_inline":
-            return _outline_text(info)
-        return _deferred_text(info)
+    def block_text(idx: int, info: AttachmentInfo) -> Optional[str]:
+        """Outline or deferred-stub text when ``info`` is not inlined, else None."""
+        decision = plan.get(idx)
+        if decision is not None and decision[0] == "outline":
+            return decision[1]
+        if not fits(info):
+            return _deferred_text(info)
+        return None
 
     if provider == "anthropic":
-        for info in infos:
-            if not fits(info):
-                blocks.append({"type": "text", "text": not_inlined(info)})
+        for idx, info in enumerate(infos):
+            replacement = block_text(idx, info)
+            if replacement is not None:
+                blocks.append({"type": "text", "text": replacement})
+                continue
+            if idx in plan:
+                blocks.append({"type": "text", "text": _wrap_inline(info, plan[idx][1])})
                 continue
             blocks.append(build_anthropic_block(info))
             if _is_pptx(info):
@@ -626,9 +757,13 @@ def build_user_content(
         if text and text.strip():
             blocks.append({"type": "text", "text": text})
     else:
-        for info in infos:
-            if not fits(info):
-                blocks.append({"type": "input_text", "text": not_inlined(info)})
+        for idx, info in enumerate(infos):
+            replacement = block_text(idx, info)
+            if replacement is not None:
+                blocks.append({"type": "input_text", "text": replacement})
+                continue
+            if idx in plan:
+                blocks.append({"type": "input_text", "text": _wrap_inline(info, plan[idx][1])})
                 continue
             blocks.append(build_openai_block(info))
             if _is_pptx(info):

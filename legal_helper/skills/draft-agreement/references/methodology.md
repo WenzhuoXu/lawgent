@@ -124,5 +124,5 @@ renumber articles.
    unavailable` clause appears in Findings.
 4. **Bundle.** Findings are drafting decisions and gaps, not clause
    restatements. `Sources` lists each statute/authority once in the
-   general playbook §5 line format — this is what `audit_citations` and
+   bundle contract's `## Sources` line format — this is what `audit_citations` and
    the downstream `/cite-check` gate see; never bypass either.

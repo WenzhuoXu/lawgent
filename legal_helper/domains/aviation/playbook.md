@@ -40,8 +40,10 @@ Transport Canada CARs, DOT Aviation Consumer, ANAC/CASA/JCAB), see the
 
 ## 0b. Treaty corpus (aviation_treaties RAG collection)
 
-The aviation legal system has a layered structure: **treaty → ICAO
-Annex/SARP → national implementing law → operator manual → contract**.
+Aviation sources are layered — **treaty, ICAO Annex / SARP, national
+implementing law, operator manual, contract** — but the layers are not a
+rank order: whether and how a treaty or SARP binds in a forum is decided by
+general playbook §0 (domestic hook, version at the event date) and §0 below.
 The treaty layer is rarely accessed via a live API; we ingest the
 authoritative texts once into the ``aviation_treaties`` RAG collection
 and access them via ``retrieve_legal``. Cite formats are documented in
@@ -59,27 +61,36 @@ Core treaties seeded:
 - **Beijing Convention 2010 + Beijing Protocol 2010** — modernised
   unlawful-acts regime; aircraft as weapon, BCN/CBR threats.
 - **Montreal Convention 1999 (MC99)** — passenger / baggage / cargo
-  liability. Implemented in EU via Reg (EC) 2027/97 (as amended by
-  889/2002); in the US via 49 USC § 40105 + § 41310. Default global
-  forum-choice + damage-cap framework.
+  liability; forum (art. 33) and limits framework. In force 4 Nov 2003; for
+  the US from 4 Nov 2003; for the PRC from 31 Jul 2005 (declaration: not
+  applied to Hong Kong until notified; applies to Macao) — ICAO status list.
+  The EU applies its rules to EU carriers' domestic and international flights
+  through Reg (EC) 2027/97 as amended by 889/2002. Check each state's status
+  on the event date before choosing MC99 over Warsaw.
 - **Warsaw System** (Warsaw 1929 + Hague 1955 + Guadalajara 1961 +
-  Montreal Protocols 1, 2, 3, 4) — pre-MC99 liability regime. Still
-  applicable to flights between a Warsaw-only state and any other state.
+  Montreal Protocols 1, 2, 3, 4) — pre-MC99 liability regime. MC99 prevails
+  only between MC99 States Parties (MC99 art. 55), so Warsaw still governs
+  carriage between states bound by a common Warsaw instrument when MC99 is
+  not in force for both ends.
 - **Cape Town Convention 2001 + Aircraft Equipment Protocol** — secured
-  international interests in aircraft objects; IDERA; Article 13 advance
-  remedies. Maintain a working table of state declarations (esp.
-  Article 13 advance-remedies opt-in).
+  international interests in aircraft objects. Key remedies turn on each
+  state's Protocol declarations: IDERA (art. XIII) only where the state
+  opted in under art. XXX(1); speedy interim relief (Convention art. 13 as
+  modified by Protocol art. X) per its art. XXX(2) declaration; insolvency
+  Alternative A / B (art. XI) per art. XXX(3). Maintain a working table of
+  state declarations.
 - **Rome Convention 1952** + **Montreal Convention 2009 (General Risks
   + Unlawful Interference)** — third-party surface-damage liability.
   Relevance varies; only Reg (EC) 785/2004 minima are universally
   binding in the EU. Most states have not ratified MC2009.
 
-## 0d. Research order (treaty → SARP → national → operator)
+## 0d. Research order (search sequence, not rank)
 
-For any aviation legal question, work the authority hierarchy in order
-and call tools in this sequence. **Do not skip to a live connector
-without first checking the RAG corpus** — the treaty layer is canon and
-the connectors are noisier.
+For any aviation legal question, search in this sequence. It is where to
+look first, not what prevails: rank and applicability come from general
+playbook §0 and §0 below. **Do not skip to a live connector without first
+checking the RAG corpus** — the curated treaty texts are cleaner than
+connector hits.
 
 1. **`retrieve_legal(collection="aviation_treaties", filters_json='{"language": "<en|zh>"}')`**
    — first stop for any question that could touch carrier/passenger
@@ -112,13 +123,17 @@ before falling through to step 3 — that absence is itself a finding.
 
 ## 0c. ICAO Annexes & Docs (icao_doc RAG collection)
 
-ICAO SARPs are non-self-executing — they bind contracting states, who
-implement them through national law. They are still the **interpretive
-canon** when a national rule is ambiguous. Cite from this RAG when:
-(i) reasoning about a state that has not yet fully implemented the
-relevant SARP, (ii) drafting an operational requirement that should be
-ICAO-aligned, or (iii) explaining the upstream rationale for an
-implementing rule.
+ICAO SARPs are not law in any forum by themselves: contracting states
+undertake to pursue uniformity (Chicago Convention art. 37) and implement
+SARPs through national regulations (CCAR, 14 CFR, EASA Implementing Rules +
+AMC/GM), which is how a SARP reaches an operator. A state that departs from
+a Standard must notify ICAO (art. 38 — immediately; within 60 days of an
+amendment), so check its filed differences (Annex supplements / ICAO EFOD)
+before treating a SARP as the local rule. Use SARPs as context when a
+national rule is ambiguous. Cite from this RAG when: (i) reasoning about a
+state that has not yet fully implemented the relevant SARP, (ii) drafting
+an operational requirement that should be ICAO-aligned, or (iii) explaining
+the upstream rationale for an implementing rule.
 
 Annexes most relevant to a commercial airline:
 
@@ -145,11 +160,21 @@ Manual).
 The generic enquiry and citation standard in `playbook/general_playbook.md`
 applies. The aviation-specific additions are:
 
-- **Authority hierarchy** for aviation legal analysis: international convention
-  / ICAO Annex → national implementing law (e.g. CCAR for PRC, 14 CFR for US,
-  EASA Implementing Rules + AMC/GM for EU) → operator manuals (OM-A/B/C/D,
-  MEL, FCOM, MCM, CAME) → carrier conditions of carriage → airport / border
-  procedures.
+- **Authority path** for aviation legal analysis (rank, version and
+  conflicts per general playbook §0):
+  - A convention binds through its **domestic hook**, never by sitting atop
+    the stack. PRC: the 民用航空法 treaty-priority clause (声明保留的条款
+    excepted) — 第二百六十条 of the 2025 revision, in 附则 (in force
+    2026-07-01); 第一百八十四条 of the earlier text, in the 涉外 chapter. Pick by
+    the event date; 法释〔2023〕15号 第1条 still cites 第一百八十四条. 涉外
+    choice-of-law rules: 第二百一十四至二百一十九条 (2025 text). For a PRC-registered
+    aircraft operated from abroad, a Chicago art. 83 bis transfer of functions
+    rests on a government agreement under 第二百五十九条 (2025 text).
+  - SARPs reach an operator only through national implementing law (CCAR for
+    PRC, 14 CFR for US, EASA Implementing Rules + AMC/GM for EU), subject to
+    that state's filed differences (§0c).
+  - Below national law: operator manuals (OM-A/B/C/D, MEL, FCOM, MCM, CAME),
+    carrier conditions of carriage, airport / border procedures.
 - **Aircraft context** every enquiry must restate: aircraft location,
   nationality/registry, state of operator, flight route (domestic / international),
   phase (in-flight / on-ground), AOC / AOC-equivalent holder.
@@ -189,10 +214,10 @@ applies. The aviation-specific additions are:
 
 ## 2. Cape Town Convention / IDERA
 
-- IDERA must be in approved Cape Town form, signed by registered owner **and** operator, irrevocable
+- IDERA substantially in the form annexed to the Protocol, issued by the debtor, irrevocable, and recorded with the registry authority (Protocol art. XIII(2)); playbook position: signed by registered owner **and** operator
 - DOR / DOR-EQ executed at the time of IDERA
 - International Registry filings made; priority searches before and after
-- State of registry must have made Article 13 advance-remedies declarations for IDERA to operate
+- State of registry must have declared under Protocol art. XXX(1) that it applies art. XIII, or the IDERA does not operate (art. XIII(1))
 - IDERA reissuance required on any novation or change of operator
 
 ## 3. Section 1110 (US Leases / Financings)

@@ -32,9 +32,12 @@ how to do the work well.
   relying on it.
 - Element-table columns (one row per element):
   `element | burden | supporting facts | contrary facts | evidence (pinpoint) | authority (verified) | strength`.
-- **Burden discipline** — default 谁主张、谁举证 (民事诉讼法 第67条,
-  2023 revision; re-verify the 条号, the 2021/2023 revisions renumbered
-  the law) with the reversal / presumption cases from
+- **Row order follows the claim lifecycle** — 产生 → 未消灭 → 可行使 →
+  抗辩 / 反抗辩 — and a denial (否认) is never written as a defence (抗辩).
+  Issue tree, lifecycle, contradiction handling and the 真伪不明 rule:
+  `references/issue_element_method.md` §1–3.
+- **Burden discipline** — default 谁主张、谁举证 (民事诉讼法 2023修正 第67条)
+  with the reversal / presumption cases from
   《最高人民法院关于民事诉讼证据的若干规定》. Record burden per element,
   not per claim: a claimant can carry four elements and the respondent
   the fifth.
@@ -90,21 +93,26 @@ Verify every article below via `pkulaw_fatiao` before relying on it.
 - **Special periods (特别法优先)** — special laws displace 第188条:
   labor-arbitration one year (劳动争议调解仲裁法 第27条), one-year
   carriage-of-goods-by-sea claims (海商法), insurance-claim periods
-  (保险法), the two-year 申请执行 period in the 民事诉讼法 (renumbered
-  across recent revisions — resolve the current 条号 via
-  `pkulaw_fatiao`). Active domain packs may add their own; check the
-  pack overlay before concluding the general period applies.
+  (保险法), the two-year 申请执行 period (民事诉讼法 2023修正 第250条, from
+  the last day of the performance period the judgment sets). Active domain
+  packs may add their own; check the pack overlay before concluding the
+  general period applies.
+- **Counting** — periods run under 民法典 第200–204条 (start day excluded;
+  对应日 / month-end; last day on a 法定休假日 moves to the next working
+  day). Compute dates with `compute_period(..., rule="prc_civil_code")`
+  where the tool is available, and record the steps it reports.
 - State the limitation position as operative dates: accrual date, any
   中止 / 中断 events with dates, computed expiry, and today's status
   (`ok / at-risk / expired / n/a`), each date pinned to a chronology row.
 
 ## 5. Authority weight and treatment
 
-- PRC weight order: 指导案例 (courts 应当参照 per
-  《最高人民法院关于案例指导工作的规定》第7条) > 公报案例 / SPC 典型案例
-  (persuasive) > higher-court judgments in the same province > other
-  judgments. 类案检索 discipline follows
-  《关于统一法律适用加强类案检索的指导意见（试行）》.
+- Weight-label every case per general playbook §0: `应当参照` 指导性案例 →
+  `参考` 人民法院案例库 参考案例 → `persuasive` 公报 / 典型案例 and other 生效
+  类案 (court level, date and 审委会 discussion decide between them). No case
+  is 裁判依据. 类案 search follows the SPC 2020 guidance (articles 一、四、五、
+  六、八、九、十、十一) as a checklist, with three search rounds per issue and a
+  类案 matrix: `references/issue_element_method.md` §4–6.
 - Record treatment per authority: `followed / distinguished /
   superseded (law amended or 司法解释 replaced) / conflicting-line`.
   A case decided under a repealed provision is a trap — check the
@@ -129,4 +137,8 @@ is a Finding or an `Out of scope` line, never silence:
    recorded; no `unverified` authority inside a strength rationale.
 6. Relief matches posture (damages vs specific performance vs 撤销;
    appeal grounds vs first-instance claims).
-7. Bundle ≤ 2000 characters; detail lives in the workbook / table.
+7. Contradictory facts are listed as `disputed` rows with each version's
+   effect on the outcome, not resolved silently.
+8. The eight-point consistency check (`references/issue_element_method.md`
+   §7) has been run.
+9. Bundle ≤ 2000 characters; detail lives in the workbook / table.

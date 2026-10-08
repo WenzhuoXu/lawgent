@@ -146,9 +146,6 @@ class McpManager:
         except Exception as e:  # noqa: BLE001
             return McpClient(spec=spec, tools=[{"error": f"http connect failed: {e!s}"}])
 
-    def all_clients(self) -> dict[str, McpClient]:
-        return dict(self._clients)
-
     async def call_tool(
         self,
         server_name: str,

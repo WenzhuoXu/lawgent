@@ -53,7 +53,7 @@ def test_an_unlisted_tool_gets_the_default_budget():
 
 def test_deliverables_are_never_budgeted():
     """Truncating these would shorten the memo, not the evidence behind it."""
-    for tool in ("run_skill", "cite_check_report_tool", "ground_answer_tool"):
+    for tool in ("cite_check_report_tool", "ground_answer_tool", "quote_roundtrip_tool"):
         assert budget_for(tool) is None
         result = apply_result_budget(tool, _STATUTE)
         assert not result.applied
@@ -78,7 +78,7 @@ def test_many_results_are_never_replaced_by_a_stop_notice():
 
 
 def test_budget_log_fields_are_empty_when_nothing_was_cut():
-    untouched = apply_result_budget("run_skill", "short")
+    untouched = apply_result_budget("cite_check_report_tool", "short")
     assert budget_log_fields(untouched) == {}
     assert budget_log_fields(None) == {}
     cut = apply_result_budget("legal_source_search", _STATUTE)

@@ -23,9 +23,9 @@ Two exemption rules matter more than the numbers:
 - a result carrying inline images is never budgeted — the providers split the
   text half out before this runs, and re-serialising the JSON would break the
   image protocol;
-- a result that *is* the deliverable (a sub-agent answer from ``run_skill``, a
-  cite-check report the workflow parses) is never budgeted, because truncating
-  it would silently shorten the memo rather than the evidence behind it.
+- a result that *is* the deliverable (a cite-check report the workflow parses,
+  a grounding verdict) is never budgeted, because truncating it would silently
+  shorten the answer rather than the evidence behind it.
 """
 
 from __future__ import annotations
@@ -65,7 +65,6 @@ DEFAULT_BUDGET = ResultBudget(max_tokens=16_000, strategy="truncate", preview="h
 # Result *is* the deliverable, or is a structured payload another layer parses.
 EXEMPT_TOOLS = frozenset(
     {
-        "run_skill",  # a sub-agent's finished answer — becomes the memo
         "cite_check_report_tool",  # workflow parses the report markdown
         "ground_answer_tool",  # grounding verdicts feed the verification table
         "quote_roundtrip_tool",
@@ -74,7 +73,6 @@ EXEMPT_TOOLS = frozenset(
         "extract_citations_tool",
         "validate_citations_tool",
         "view_image",
-        "read_deck_stylesheet",
     }
 )
 

@@ -9,35 +9,20 @@ rag_collections: [general]
 # /tabular-review — Multi-Document Grid Review
 
 Docs-as-rows, questions-as-columns. Produce an auditable review grid where
-every substantive answer carries its own pinpoint, plus a compact findings
-bundle for the orchestrator.
+every substantive answer carries its own pinpoint, plus portfolio-level
+findings.
 
 **Not legal advice.** The grid is review work product; qualified counsel
 must verify flagged cells before reliance.
 
 ## Output Contract (binding)
 
-Emit exactly one block — nothing before, nothing after:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Grid
-- path: <absolute .xlsx path under outputs/>
-- rows: <document count>  columns: <question count>
-- unresolved_cells: <count marked NOT FOUND / AMBIGUOUS / UNREADABLE>
-
-## Findings
-- [portfolio-level claim, ONE sentence, inline pinpoint `[Doc, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-
-## Out of scope
-- ...
-
-## Sources
-- [document or authority] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. Cell-level detail lives in the
-workbook, not the bundle — per general playbook §4 the orchestrator owns
-the user-facing presentation.
+Artefacts this skill produces: the grid header block — `path` (absolute .xlsx under outputs/), `rows`, `columns`, `unresolved_cells` (NOT FOUND / AMBIGUOUS / UNREADABLE count); cell-level detail lives in the workbook.
 
 ## Per-cell citation contract (binding)
 
@@ -50,7 +35,7 @@ the user-facing presentation.
   Never leave a cell blank.
 - Verbatim quotes in cells must round-trip against the document text.
 - Columns that test external law (e.g. enforceability of a clause) cite
-  the authority in the `Sources` block per general playbook §2 + §5.
+  the authority in the `Sources` block per general playbook §2 and the bundle contract.
 
 ## Inputs
 
@@ -86,7 +71,7 @@ the user-facing presentation.
 - Column presets: `resources/grid_templates/` (read via `read_document`;
   schema in that directory's `README.md`).
 - Authority hierarchy + citation: `/playbook/general_playbook.md` §0 + §2;
-  sanity check §3; sources line format §5.
+  sanity check §3.
 - When the **aviation** pack is active, also apply
   `/domains/aviation/overlays/tabular-review.md` (portfolio presets and
   document-set intake deltas).

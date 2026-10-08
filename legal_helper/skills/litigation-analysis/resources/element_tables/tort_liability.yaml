@@ -44,6 +44,7 @@ defenses:
     element_zh: 被侵权人对损害的发生或扩大也有过错，应减轻责任
     element_en: Claimant's own fault contributed — reduce liability
     burden: respondent
+    stage: quantum
     evidence_hints: [受害人违规证据, 事故责任划分认定]
     authority:
       - source: 《中华人民共和国民法典》
@@ -52,6 +53,7 @@ defenses:
     element_zh: 损害系受害人故意造成，行为人不承担责任
     element_en: Harm was caused intentionally by the claimant
     burden: respondent
+    stage: arises
     evidence_hints: [受害人行为记录, 目击证言]
     authority:
       - source: 《中华人民共和国民法典》
@@ -60,6 +62,7 @@ defenses:
     element_zh: 受害人自甘风险参加具有一定风险的文体活动
     element_en: Voluntary assumption of risk in the activity
     burden: respondent
+    stage: arises
     evidence_hints: [活动性质证据, 报名/知情记录]
     authority:
       - source: 《中华人民共和国民法典》
@@ -68,6 +71,7 @@ defenses:
     element_zh: 诉讼时效已经届满
     element_en: The limitation period has expired
     burden: respondent
+    stage: exercisable
     evidence_hints: [知道或应当知道损害及义务人的时点证据]
     authority:
       - source: 《中华人民共和国民法典》

@@ -30,8 +30,10 @@ generic 3-year period:
   arrival / scheduled arrival. Widely treated as a condition precedent /
   除斥期间-like bar, not an ordinary limitation open to 中止 / 中断 —
   flag any tolling argument as contested and cite forum case law.
-- **民用航空法 第135条** — two-year 诉讼时效 for carriage claims under
-  the domestic regime (re-verify the 条号 against the current revision).
+- **民用航空法 two-year 诉讼时效** for carriage claims, running from
+  arrival, scheduled arrival or end of carriage — 第一百四十三条 of the 2025
+  revision (in force 2026-07-01), 第一百三十五条 of the earlier text; pick
+  the version by the event date (general playbook §0).
 - **Administrative track** — 行政复议 within 60 days
   (行政复议法, 2023 revision); 行政诉讼 within six months
   (行政诉讼法 第46条). Missing the reconsideration window can foreclose
@@ -76,8 +78,10 @@ generic 3-year period:
   US comparative via `courtlistener_search` (MC99 interpretation,
   Section 1110, Cape Town enforcement).
 - Treaty interpretation questions cite the treaty article first, then
-  forum case law on it — treaty > national statute per the pack
-  playbook §0d research order.
+  forum case law on it. A treaty displaces a conflicting statute only
+  through its domestic hook (PRC: the 民用航空法 treaty-priority clause,
+  声明保留的条款 excepted — pack playbook §0; general playbook §0); §0d is a
+  search order, not a rank.
 - Escalate per pack playbook §14 when the matter involves an accident,
   a regulator enforcement action, or repossession against an operating
   carrier.

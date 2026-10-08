@@ -1,142 +1,109 @@
-## Computed keys — do not author these
+# Flowchart authoring — what the renderers understand
 
-The layout engine injects three keys into a `flowchart` block that the tool
-schema deliberately does not carry, so nothing tries to write them by hand:
+This is the deep reference for the `/flowchart` skill: the Mermaid this
+harness draws, and how to hand a diagram to a deck.
 
-| key | on | what it is |
+## Two destinations
+
+| Destination | Tool | Who draws it |
 |---|---|---|
-| `points` | each edge | the routed polyline in slide inches, ending at the arrowhead tip |
-| `label_x` / `label_y` | each edge | where Graphviz reserved room for the edge label |
-| `font_pt` | the block | the type size the node boxes were measured at; the emitter must draw labels at exactly this size or they will not fit |
+| A slide or a deck | `create_deck` | ppt-master, as editable native shapes on the slide |
+| A picture (Word document, chat, email) | `render_flowchart_image` | Graphviz for `flowchart`/`graph`/`mindmap`; mermaid-cli for other Mermaid types; d2 for nested containers |
 
-Author `mermaid` (or `outline` for `kind: mindmap` / `structure`) and leave the
-geometry alone. `direction: "auto"` is the default and is almost always right:
-it tries both rank directions and keeps whichever fills the box, which is how a
-long chain ends up on its side on a 16:9 slide instead of drawn down a column
-of dead canvas. Pin a direction only when reading order matters more than fit.
+## Mermaid flowcharts → Graphviz
 
-Labelled branches work in both Mermaid forms — `B -- 是 --> C` and
-`B -->|是| C`.
+`render_flowchart_image(filename, source)` with a `flowchart` or `graph`
+source is parsed here and laid out by Graphviz `dot` in an installed CJK
+font. No browser is involved, and Graphviz measures each label in the font
+it draws, so boxes fit their text.
 
-# Flowchart authoring — Mermaid → native PPTX shapes
+### Node shapes
 
-This file is the **deep reference** for the `/flowchart` skill. SKILL.md
-delegates here for schema details, shape kind selection, and limits.
-
-## The `SlideFlowchart` block
-
-Attach to any `Slide` in a `write_pptx` call:
-
-```python
-Slide(
-    title="制度治理流程",
-    layout="bullets",        # any layout works; flowchart overlays on top
-    bullets=[],              # leave empty when the flowchart IS the content
-    flowchart=SlideFlowchart(
-        mermaid="""flowchart TB
-            S([提交制度起草]) --> A[法务审查]
-            A --> D{合规通过?}
-            D -->|是| E([发布])
-            D -->|否| A""",
-        layout="auto",       # auto = let mermaid+dagre solve positions
-        direction="TB",      # TB | BT | LR | RL
-        x=0.55, y=1.25,      # bounding-box (inches) on the slide
-        w=12.2, h=5.6,
-        node_w=2.2, node_h=0.9,   # default node size when not per-node
-    ),
-)
-```
-
-### Mermaid → kind mapping
-
-| Mermaid syntax     | FlowNode.kind | OOXML shape                  |
+| Mermaid | Drawn as | Use for |
 |---|---|---|
-| `A[label]`         | `process`     | `flowChartProcess`           |
-| `A{label}`         | `decision`    | `flowChartDecision`          |
-| `A([label])`       | `terminator`  | `flowChartTerminator`        |
-| `A((label))`       | `terminator`  | `flowChartTerminator`        |
-| `A[/label/]`       | `io`          | `flowChartInputOutput`       |
-| `A[[label]]`       | `subprocess`  | `flowChartPredefinedProcess` |
-| `A>label]`         | `data`        | `flowChartManualInput`       |
-| `A` (bare)         | `process`     | `flowChartProcess`           |
+| `A[label]` | rectangle | an ordinary step |
+| `A([label])`, `A(label)`, `A((label))` | rounded box | start / end |
+| `A{label?}` | diamond | a decision |
+| `A[/label/]` | parallelogram | a document or form in / out |
+| `A[[label]]` | double-bordered box | a sub-procedure |
+| `A>label]` | note | a side note |
+| `A` (bare) | rectangle | a step whose label is its id |
 
-### Edge syntax we handle
+`A["quoted label"]` and `<br/>` inside a label work. Node ids are ASCII
+(`A`, `step_2`); labels can be any language.
 
-- `A --> B` solid arrow
-- `A -.-> B` dashed arrow
-- `A --> |label| B` arrow with label
-- `A --- B` solid line, no arrow
-- `A ==> B` thick arrow (rendered as solid)
+### Edges
 
-Anything fancier (subgraphs, `classDef`, `linkStyle`, click bindings) is
-**ignored** by the layout helper. The shapes still draw; the styling
-just falls back to the deck's accent color.
-
-## Explicit nodes/edges (skip the parser)
-
-When you need full control over per-node fill or kind override:
-
-```python
-SlideFlowchart(
-    nodes=[
-        FlowNode(id="S", kind="terminator", text="Start"),
-        FlowNode(id="A", kind="process",  text="审查"),
-        FlowNode(id="D", kind="decision", text="批准?", fill="FFF3CD"),
-        FlowNode(id="E", kind="terminator", text="End"),
-    ],
-    edges=[
-        FlowEdge(from_id="S", to_id="A"),
-        FlowEdge(from_id="A", to_id="D"),
-        FlowEdge(from_id="D", to_id="E", label="是"),
-        FlowEdge(from_id="D", to_id="A", label="否", style="dashed"),
-    ],
-    layout="auto",
-    direction="TB",
-)
-```
-
-When both `mermaid` and `nodes` are set, the explicit nodes/edges win.
-
-## Manual coordinates
-
-Set `layout="manual"` and supply `x`, `y`, `w`, `h` on every node (inches
-from slide top-left). Useful when matching a fixed corporate template.
-Skipping any of the four falls back to auto.
-
-## Known limitations
-
-1. **Connector arrows do not snap.** The helper draws each edge as a
-   pptxgenjs `ShapeType.line` with an arrowhead, not a true OOXML
-   `<p:cxnSp>`. When the user drags a node in PowerPoint, the arrow
-   stays put. Workaround: re-emit the deck rather than dragging.
-2. **Direction-only arrowheads on diagonals.** Lines that flip both
-   horizontally and vertically may render the arrow at the wrong end
-   for loopback edges. Use `arrow="both"` to be safe.
-3. **Mermaid layout requires Chrome.** `mmdc` runs headless Chrome via
-   puppeteer. The helper auto-detects `/usr/bin/google-chrome`; if
-   that is missing, the deck still writes but with a vertical stack
-   fallback layout (still real shapes, just not graph-aware).
-4. **CJK labels are supported** as long as the system font stack has a
-   CJK fallback; default mermaid CSS uses `sans-serif`, which inherits
-   the host browser's font. Verify in `outputs/` after generation.
-
-## Decision: native shapes vs. image
-
-| Editable in PowerPoint? | Path |
+| Mermaid | Meaning |
 |---|---|
-| Yes (default) | `write_pptx(..., flowchart=SlideFlowchart(mermaid="..."))` |
-| No, but pixel-perfect | `render_flowchart_image("foo.png", source="flowchart ...")` then embed via `Slide(images=[SlideImage(path="<png>")])` |
+| `A --> B` | step to step |
+| `A -->|是| B`, `A -- 是 --> B` | a labelled branch |
+| `A -.-> B`, `A -. 可选 .-> B` | dashed: optional or conditional |
+| `A ==> B` | thick: the main path |
+| `A --- B`, `A -.- B` | a tie with no arrowhead |
+| `A --> B --> C` | a chain (two edges) |
 
-Use the image path for >12 nodes, swimlanes (mermaid `subgraph`),
-multi-column layouts, or when matching a corporate diagram template.
+### Lanes
 
-## Verification checklist (before reporting success)
+```
+flowchart TB
+  subgraph legal [法务部]
+    A([受理]) --> B[合规审查]
+  end
+  subgraph biz [业务部门]
+    C[补充材料]
+  end
+  B -->|材料不全| C
+  C --> B
+```
 
-1. `inspect_pptx(<path>)` reports `flowchart_node_count == authored
-   node count` for the relevant slide.
-2. `inspect_pptx` reports `flowchart_edge_count == authored edge
-   count`. If lower, an edge endpoint missed a node center — re-run
-   `autolayout_flowchart` (most likely the node ID had a typo).
-3. Edge `confidence` averages > 0.85. Lower means lines didn't land
-   on node centers — usually fine visually but flag low confidence in
-   the Artifact block.
+Each `subgraph` becomes a labelled cluster; nesting works. A step belongs to
+the lane it is first written in, so declare each step inside its lane.
+
+### Direction and page shape
+
+`TB` for an approval chain and for anything pasted into a portrait Word page;
+`LR` for a short hand-off timeline in a chat image. A long chain drawn `LR`
+becomes a strip too wide to read on a page.
+
+## Mind maps (思维导图)
+
+```
+mindmap
+  root((个人信息出境))
+    安全评估
+      重要数据
+    标准合同
+    个人信息保护认证
+```
+
+Indentation is the hierarchy (any consistent depth). Drawn left to right with
+plain ties: a branch is a relationship, not a step.
+
+## Other diagram types
+
+`sequenceDiagram`, `classDiagram`, `stateDiagram`, `erDiagram`, `gantt` and
+`pie` are drawn by mermaid-cli, which needs Node and a Chrome on the host; the
+tool returns an `ERROR:` naming what to install when it is missing. A 结构图
+whose boxes sit inside boxes is a D2 source with `engine: "d2"`.
+
+## Handing a diagram to a deck
+
+`create_deck`'s sub-agent cannot see the conversation. Its `brief` must state:
+
+1. every step, in order, with who owns it (the lanes);
+2. every decision and the label on each branch;
+3. timed steps with their period (`10个工作日内备案`) and the rule that sets it;
+4. the citation, with pinpoint, for every statutory step;
+5. the Mermaid source, which pins the structure exactly.
+
+ppt-master then decides the slide's layout and draws the diagram as native,
+editable shapes, and runs its own quality gate before exporting.
+
+## Verification
+
+- Picture: `view_image` on the returned PNG. A branch that is missing almost
+  always means a node id was typed two ways; an unexpected extra box means a
+  label was written where an id belongs.
+- Deck: `create_deck` returns `status`, `slides`, `gate_verdict` and
+  `lint_summary`; `render_pptx_slides` shows the pages.

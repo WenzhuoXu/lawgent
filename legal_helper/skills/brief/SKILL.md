@@ -11,31 +11,17 @@ rag_collections: [general]
 Generate contextual briefings for legal work. Supports three modes: daily,
 topic / standalone legal enquiry, and incident.
 
-**Not legal advice.** Briefings are work product for the orchestrator;
-qualified counsel must review before reliance.
+**Not legal advice.** Briefings are work product; qualified counsel must
+review before reliance.
 
 ## Output Contract (binding)
 
-You are a specialist sub-agent. Your output is **internal raw material** for
-the orchestrator, not a user-facing answer. Emit exactly one block — nothing
-before, nothing after:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- [angles the assigning task named but this bundle did not cover]
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X, #Y[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling: **≤ 2000 characters**. No executive summary, scenario
-walkthrough, action matrix, evidence verification log, or claim-level
-sanity check may appear in your output. Each bullet stands alone. The
-orchestrator authors the user-facing `资料来源与核验` table.
+Artefacts this skill produces: none beyond the bundle.
 
 ## Invocation
 
@@ -83,8 +69,8 @@ response, key contacts, recommended immediate actions, information gaps.
 ## Pointers
 
 - General language + citation rules: `/playbook/general_playbook.md` §1, §2.
-- Authority labels and sanity-check contract: general playbook §3, §4.
-- Sources line format: general playbook §5.
+- Sanity checks: general playbook §3; finding labels: the bundle contract.
+- Sources line format: the specialist bundle contract (supplied with the task).
 - When the **aviation** domain pack is active, also apply
   `/domains/aviation/overlays/brief.md`.
 

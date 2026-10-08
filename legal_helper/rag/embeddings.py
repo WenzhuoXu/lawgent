@@ -56,31 +56,6 @@ class BgeM3Embedder:
         return out.tolist() if hasattr(out, "tolist") else [list(v) for v in out]
 
 
-class OpenAIEmbedder:
-    """text-embedding-3-large (3072 dim). Used only when explicitly configured."""
-
-    name = "openai/text-embedding-3-large"
-    dim = 3072
-
-    def __init__(self) -> None:
-        self._client = None
-
-    def _load(self) -> None:
-        if self._client is not None:
-            return
-        from openai import OpenAI
-
-        self._client = OpenAI()
-
-    def encode(self, texts: list[str]) -> list[list[float]]:
-        if not texts:
-            return []
-        self._load()
-        assert self._client is not None
-        resp = self._client.embeddings.create(model="text-embedding-3-large", input=texts)
-        return [d.embedding for d in resp.data]
-
-
 class LexicalSparseEncoder:
     """CJK-aware lexical sparse encoder for Qdrant hybrid retrieval.
 
@@ -142,9 +117,3 @@ def default_embedder() -> Embedder:
     return _DEFAULT_EMBEDDER
 
 
-def get_embedder(name: str | None = None) -> Embedder:
-    if name in (None, "", "bge-m3", "bge_m3", "BAAI/bge-m3"):
-        return default_embedder()
-    if name in ("openai", "text-embedding-3-large"):
-        return OpenAIEmbedder()
-    raise ValueError(f"unknown embedder: {name}")

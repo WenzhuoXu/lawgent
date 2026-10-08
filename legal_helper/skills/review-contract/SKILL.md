@@ -8,32 +8,20 @@ rag_collections: [general]
 
 # /review-contract — Contract Review
 
-Produce the analytical bundle the orchestrator turns into a redline +
-business-impact memo. The skill identifies deviations from the playbook,
-not user-facing prose.
+Produce the analysis behind a redline + business-impact memo: deviations
+from the playbook, clause by clause.
 
 **Not legal advice.** Drafts must be reviewed by qualified counsel before
 counter-signing.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. No redline tables or "must-have /
-should-have / nice-to-have" tier blocks in the bundle — those are the
-orchestrator's job at authoring time.
+Artefacts this skill produces: the clause table (clause · our position · deviation · tier must / should / nice · proposed redline language).
 
 ## Inputs
 
@@ -78,7 +66,7 @@ boilerplate (notices, severability, entire-agreement, counterparts).
 ## Pointers
 
 - Authority hierarchy + citation: `/playbook/general_playbook.md` §0 + §2.
-- Sanity-check + label set: general playbook §3 + §4.
+- Sanity checks: general playbook §3; finding labels: the bundle contract.
 - Universal risk defaults (data, sanctions, privilege, state secrets,
   regulator-disclosure): general playbook §6.
 - When the **aviation** pack is active, also apply

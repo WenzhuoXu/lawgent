@@ -20,7 +20,9 @@ active. Add the following aviation-specific scope to every brief mode.
 
 ## Topic-mode regulatory scope
 
-Add to the authority hierarchy:
+Add to the source map (rank and applicability per general playbook §0:
+conventions bind through their domestic hook; SARPs bind states and reach
+operators through national rules):
 
 - International conventions: Chicago Convention; ICAO Annexes 1–19 and
   SARPs (esp. Annex 6 ops, Annex 8 airworthiness, Annex 9 facilitation,

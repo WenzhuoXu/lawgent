@@ -9,34 +9,20 @@ rag_collections: [general]
 # /draft-agreement — Agreement & PRC Filing Drafting
 
 Produce a complete, clause-annotated first draft as a `.docx` artifact,
-plus a compact bundle for the orchestrator. Drafting decisions surface as
-Findings; the prose lives in the document, not the bundle.
+with the drafting decisions stated alongside it; the prose lives in the
+document.
 
 **Not legal advice.** Drafts must be reviewed and adapted by qualified
 counsel before signature or filing.
 
 ## Output Contract (binding)
 
-Emit exactly one block — nothing before, nothing after:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Draft
-- path: <absolute .docx path under outputs/>
-- type: <agreement or filing type>  language: <zh / en / bilingual — controlling version stated>
-- clauses: <operative clause count>  basis_verified: <count with verified legal basis>
-
-## Findings
-- [drafting decision, position taken, or gap needing client input, ONE sentence, inline pinpoint `[Source, art./§]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-
-## Out of scope
-- ...
-
-## Sources
-- [statute / authority backing operative clauses] — [URL or local path] — supports clause(s) X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. Per general playbook §4 the
-orchestrator owns the user-facing presentation.
+Artefacts this skill produces: the draft header block — `path` (absolute .docx under outputs/), `type`, `language` (controlling version stated), `clauses`, `basis_verified`.
 
 ## Clause-basis contract (binding)
 
@@ -80,7 +66,10 @@ orchestrator owns the user-facing presentation.
 5. Assemble with `write_docx`: title page, operative clauses in plan
    order, signature / 具状人 block, then a `Drafting Notes` annex listing
    each clause's basis and open points. State the controlling language.
-6. Sanity check per general playbook §3; the orchestrator's `/cite-check`
+   A filing (起诉状 / 答辩状 / 上诉状) or anything to be served or signed takes
+   `disclaimer="none"` with a `disclaimer_reason`; an AI notice never sits in
+   an instrument.
+6. Sanity check per general playbook §3; the automatic `/cite-check`
    gate runs on the final answer — never bypass it. Then emit the bundle.
 
 ## Pointers
@@ -91,7 +80,7 @@ orchestrator owns the user-facing presentation.
 - Clause presets: `resources/clause_library/` (schema in its `README.md`);
   filing skeletons: `resources/prc_filings/`.
 - Authority hierarchy + citation: `/playbook/general_playbook.md` §0 + §2;
-  sources line format §5; document production defaults §7.
+  document production defaults §7.
 - When the **aviation** pack is active, also apply
   `/domains/aviation/overlays/draft-agreement.md`.
 

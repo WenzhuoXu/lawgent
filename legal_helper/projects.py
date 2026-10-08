@@ -119,7 +119,8 @@ class ProjectStore:
         self.init_db()
 
     def _connect(self) -> sqlite3.Connection:
-        con = sqlite3.connect(self.db_path)
+        # Shares the chat database; same busy timeout as ChatStore.
+        con = sqlite3.connect(self.db_path, timeout=30.0)
         con.row_factory = sqlite3.Row
         con.execute("PRAGMA journal_mode=WAL")
         con.execute("PRAGMA foreign_keys=ON")
@@ -279,9 +280,6 @@ class ProjectStore:
                 (*fields.values(), project_id),
             )
         return self.get_project(project_id)
-
-    def archive_project(self, project_id: str) -> Project:
-        return self.update_project(project_id, status="archived")
 
     def delete_project(self, project_id: str) -> None:
         with self._connect() as con:

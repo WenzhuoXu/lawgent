@@ -240,14 +240,51 @@ def test_pdfs_do_not_draw_on_the_inline_budget(tmp_path, monkeypatch):
     assert att._inline_cost(att.describe(pdf)) == 0
 
 
-def test_single_large_document_is_still_inlined(tmp_path):
-    """One document belongs in the prompt — that is the case production evidence supports."""
-    from legal_helper.attachments import _should_navigate, _to_info
+def test_single_document_within_the_token_share_is_inlined(tmp_path):
+    """One document that fits the turn's attachment share belongs in the prompt."""
+    from legal_helper.attachments import _inline_token_budget, _should_navigate, _to_info
+
+    doc = tmp_path / "lease.md"
+    doc.write_text("第一条 " + "甲" * 20_000, encoding="utf-8")
+    assert _inline_token_budget() > 20_000
+    assert _should_navigate([_to_info(str(doc))]) is False
+
+
+def test_single_document_past_the_token_share_is_outlined(tmp_path):
+    """D-8: a lone attachment was always inlined, whatever its size — one
+    353 KB workbook extracted to ~367K tokens, over the 259K OpenAI working
+    ceiling on its own. The decision is now made in extracted tokens against a
+    share of the turn ceiling, for one attachment as for many."""
+    from legal_helper.attachments import (
+        _inline_token_budget,
+        _plan_text_attachments,
+        _should_navigate,
+        _to_info,
+    )
 
     big = tmp_path / "lease.md"
-    big.write_text("第一条 " + "甲" * 300_000, encoding="utf-8")
+    big.write_text("第一条 总则\n" + "甲" * 300_000 + "\n第二条 租金\n乙", encoding="utf-8")
     infos = [_to_info(str(big))]
-    assert _should_navigate(infos) is False
+    assert 300_000 > _inline_token_budget()
+    assert _should_navigate(infos) is True
+    kind, outline = _plan_text_attachments(infos)[0]
+    assert kind == "outline"
+    assert "第一条 总则" in outline and "第二条 租金" in outline
+    assert "section=" in outline and str(big) in outline
+    blocks = att.build_user_content("review", infos, "openai")
+    assert "甲" * 1000 not in blocks[0]["text"]
+
+
+def test_token_budget_can_be_set_and_disabled(tmp_path, monkeypatch):
+    from legal_helper.attachments import _inline_token_budget, _should_navigate, _to_info
+
+    big = tmp_path / "big.md"
+    big.write_text("x" * 400_000, encoding="utf-8")  # ~100K tokens of Latin text
+    monkeypatch.setenv("LEGAL_HELPER_INLINE_ATTACHMENT_TOKENS", "50000")
+    assert _inline_token_budget() == 50_000
+    assert _should_navigate([_to_info(str(big))]) is True
+    monkeypatch.setenv("LEGAL_HELPER_INLINE_ATTACHMENT_TOKENS", "0")
+    assert _should_navigate([_to_info(str(big))]) is False
 
 
 def test_document_corpus_switches_to_outline_navigation(tmp_path):
@@ -270,7 +307,7 @@ def test_document_corpus_switches_to_outline_navigation(tmp_path):
 
     outline = _outline_text(infos[0])
     # The outline advertises real landmarks and a way to read the rest.
-    assert "第一条" in outline and "第二条" in outline
+    assert "第一条 通则" in outline and "第二条 适用范围" in outline
     assert "read_document" in outline
     assert str(infos[0].path) in outline
     # …and is drastically smaller than the body it replaces.

@@ -44,6 +44,57 @@ RETIRED_MODELS: dict[str, str] = {
 }
 
 
+#: Reasoning-effort levels in increasing order. "none" omits the parameter (the
+#: model's own default), so it is never raised or lowered by a cap.
+EFFORT_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
+
+#: Which model tier and reasoning effort each role in a turn runs at.
+#:
+#: One table instead of three helper functions (``_planner_settings``,
+#: ``_research_settings``, ``_integration_settings``) whose comments had drifted
+#: from the code — two stated the role→model mapping backwards — whose effort
+#: caps covered {high, xhigh} but not ``max``, and which had no Anthropic branch,
+#: so Anthropic routing ran at the user's full effort.
+#:
+#: ``tier`` is ``fast`` or ``main``. ``effort`` is a level from EFFORT_LEVELS,
+#: ``user`` (the chat's own setting) or ``cap:<level>`` (the chat's setting, but
+#: no higher). ``config.yaml``'s ``role_profiles`` overrides entries by role.
+DEFAULT_ROLE_PROFILES: dict[str, dict[str, str]] = {
+    # One cheap classification call per turn.
+    "router": {"tier": "fast", "effort": "low"},
+    # Runs only for complex turns; the plan shape matters more than its depth.
+    "decomposer": {"tier": "fast", "effort": "low"},
+    # The single-pass author writes ~94% of legal answers.
+    "author": {"tier": "main", "effort": "user"},
+    # Specialists are tool-orchestration loops; N of them run at once, so a
+    # high tier multiplies latency for little research gain.
+    "specialist": {"tier": "main", "effort": "cap:medium"},
+    # Integration authors from finished research bundles.
+    "integrator": {"tier": "main", "effort": "cap:medium"},
+    "cite_check": {"tier": "fast", "effort": "user"},
+    # The two housekeeping calls after every turn run in the background once
+    # the user is released, but they still bill: a delta summary needs a
+    # little reasoning, a title none (Anthropic maps "none" to its lowest).
+    "summariser": {"tier": "fast", "effort": "low"},
+    "title": {"tier": "fast", "effort": "none"},
+    # ppt-master is a long procedure that authors every page itself.
+    "deck": {"tier": "main", "effort": "user"},
+}
+
+
+def _resolve_effort(spec: str, user_effort: str) -> str:
+    spec = (spec or "user").strip().lower()
+    user = (user_effort or "none").strip().lower()
+    if spec == "user":
+        return user
+    if spec.startswith("cap:"):
+        cap = spec.split(":", 1)[1]
+        if user == "none" or user not in EFFORT_LEVELS or cap not in EFFORT_LEVELS:
+            return user
+        return cap if EFFORT_LEVELS.index(user) > EFFORT_LEVELS.index(cap) else user
+    return spec if spec in EFFORT_LEVELS else user
+
+
 def _dedupe(values: "list[str]") -> list[str]:
     return list(dict.fromkeys(v for v in values if v))
 
@@ -68,6 +119,23 @@ def _max_concurrent_agents_value(raw: object) -> int | Literal["auto"]:
     if isinstance(raw, str) and raw.strip().lower() in {"", "auto", "default"}:
         return "auto"
     return max(1, int(raw))
+
+
+def _answer_length_value(raw: object) -> str:
+    value = str(raw or "auto").strip().lower()
+    return value if value in {"auto", "brief", "focused", "full"} else "auto"
+
+
+def _role_profiles_value(raw: object) -> dict[str, dict[str, str]]:
+    """Defaults with ``config.yaml``'s per-role overrides laid over them."""
+    merged = {k: dict(v) for k, v in DEFAULT_ROLE_PROFILES.items()}
+    if isinstance(raw, dict):
+        for role, override in raw.items():
+            if isinstance(override, dict):
+                merged.setdefault(str(role), {}).update(
+                    {str(k): str(v) for k, v in override.items() if v is not None}
+                )
+    return merged
 
 
 def _read_dotenv_values(path: Path) -> dict[str, str]:
@@ -158,6 +226,27 @@ class Settings(BaseModel):
     # synthesis turn plus one re-audit, so this is a cost dial as much as a
     # quality one; 0 disables repair and keeps the audit advisory.
     max_repair_rounds: int = 1
+    # Default answer length. "auto" derives it from the router's complexity
+    # (simple → brief, standard → focused, complex → full); a chat can pin one.
+    # It sets only the provider's verbosity and one instruction sentence — never
+    # an output-token limit, a tool-round limit or a tool budget.
+    answer_length: Literal["auto", "brief", "focused", "full"] = "auto"
+    role_profiles: dict[str, dict[str, str]] = Field(
+        default_factory=lambda: {k: dict(v) for k, v in DEFAULT_ROLE_PROFILES.items()}
+    )
+
+    def for_role(self, role: str) -> tuple["Settings", bool]:
+        """Settings for one role in a turn, and whether it runs on the fast tier.
+
+        The effort dial is shared by both providers (``openai_reasoning_effort``
+        is also what ``anthropic_provider._thinking_kwargs`` reads).
+        """
+        profile = self.role_profiles.get(role) or DEFAULT_ROLE_PROFILES.get(role) or {}
+        effort = _resolve_effort(profile.get("effort", "user"), self.openai_reasoning_effort)
+        fast = (profile.get("tier") or "main") == "fast"
+        if effort == self.openai_reasoning_effort:
+            return self, fast
+        return self.model_copy(update={"openai_reasoning_effort": effort}), fast
 
     def model_for_provider(self, fast: bool = False) -> str:
         if self.provider == "anthropic":
@@ -319,6 +408,8 @@ def load_settings(*, refresh: bool = False) -> Settings:
         max_repair_rounds=int(
             os.getenv("LEGAL_HELPER_MAX_REPAIR_ROUNDS", cfg.get("max_repair_rounds", 1))
         ),
+        answer_length=_answer_length_value(cfg.get("answer_length", "auto")),
+        role_profiles=_role_profiles_value(cfg.get("role_profiles")),
         default_jurisdiction=cfg.get("default_jurisdiction", "CN"),
         secondary_jurisdictions=list(cfg.get("secondary_jurisdictions", ["US", "EU"]) or []),
         default_language=cfg.get("default_language", "zh"),

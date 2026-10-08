@@ -12,55 +12,79 @@ file when the corresponding pack is active.
 
 ## 0. Jurisdiction & Source Hierarchy
 
-### Scope the applicable-law stack first
-Before researching any issue, determine **which bodies of law control it and at
-what level** — then cover every live level, not just the most familiar one. The
-binding stack runs:
+For each issue settle **which law controls, in which version, at what level**
+before researching, then cover every live level. A sourced "does not apply /
+this party is not bound" is a finding, not a gap.
 
-1. **International / supranational instruments and agreements between the
-   involved parties** — multilateral conventions and treaties, and any
-   bilateral or regional agreement between the specific states/parties at issue.
-   For any such instrument, state each relevant party's participation /
-   ratification status, because that status can decide whether the instrument
-   applies at all.
-2. **National law** — the per-jurisdiction hierarchy below.
-3. **Subordinate / sectoral rules and standards**, then **contractual and
-   industry standards**.
+### Date before text
+Apply the version in force on the date of the operative facts (or the date
+asked about), not today's, and say whether a later or pending version changes
+the answer. No retroactivity except provisions made to better protect rights
+(立法法 第104条); transition rules decide the rest (Civil Code: 法释〔2020〕15号
+第1–4条).
 
-Identify the **highest controlling source** for each issue and pin it. A
-sourced "this instrument does not bind this party / does not apply here" is a
-finding, not a gap. This is general method, not a cross-border special case: it
-surfaces a controlling convention or inter-party agreement for an international
-question exactly as it surfaces a controlling 司法解释 or national standard for a
-domestic one. Domestic statutes are frequently **not** the whole answer.
+### PRC legislation (立法法 2023修正 第98–102条)
+宪法 > 法律 (NPCSC 法律解释 = 法律, 第53条) > 行政法规 > 地方性法规 > 本级和下级
+地方政府规章 (省级 > 设区的市). 部门规章 = 地方政府规章, each within its remit.
+地方性法规 vs 部门规章: no fixed rank — conflicts go to 国务院 / 全国人大常委会
+(第106条). 自治条例、经济特区法规 may vary higher law locally. 强制性国家标准
+bind; 推荐性标准 are voluntary unless adopted (标准化法 第2条).
 
-### Default jurisdiction order
-1. **PRC (China)** — primary. Hierarchy:
-   - 宪法 / 法律 (Constitution / National laws by NPC + NPCSC)
-   - 行政法规 (State Council administrative regulations)
-   - 部门规章 / 地方性法规 / 自治条例 (ministerial / local rules)
-   - 规范性文件 / 部门通知公告 (normative documents)
-   - 司法解释 / 指导性案例 (SPC interpretations + guiding cases)
-   - 国家标准 (mandatory GB; recommended GB/T)
-2. **United States** — secondary (federal). USC → CFR → agency guidance → case law.
-3. **European Union** — secondary. TFEU/TEU → regulations → directives →
-   implementing acts → CJEU case law → Member-State implementation.
-4. **Other jurisdictions** — only when the user identifies them or the
-   facts make them relevant (HK, UK, Singapore, etc.).
+### PRC judicial authority and other texts
+- **司法解释** (SPC / SPP only, 立法法 第119条): legal effect, must track the
+  statute it applies, cited after it (司法解释工作规定 第5、27条).
+- **Reasoning only, never 裁判依据:** SPC 会议纪要 / 指导意见 and other
+  规范性文件. Civil judgments rest on 法律、法律解释、司法解释 and may cite
+  行政法规、地方性法规; other 规范性文件 only support reasoning, after a legality
+  check (法释〔2009〕14号 第4、6条). 行政诉讼: 参照规章; other 规范性文件 open to
+  incidental review (行政诉讼法 第53、63、64条).
+- **Cases** are never 裁判依据. Weight-label every case cited:
+  `应当参照 / must-follow` 指导性案例 (案例指导规定 第7条; cited in reasoning;
+  yields to newer law or 司法解释 — 类案检索意见 九) · `参考 / reference`
+  人民法院案例库 参考案例 (工作规程 第19、21条: courts must search the 库; a
+  party's 入库案例 must be answered) · `persuasive / 说服性` 公报案例、典型案例 and
+  other 生效类案 (意见 九; weigh level, date, 审委会 — 十一) · `binding / 拘束性`
+  only where the forum makes precedent binding (e.g. US vertical stare
+  decisis). A case seen only in summary, or of unknown 生效 status, is a lead.
 
-If a question concerns multiple jurisdictions, name each one explicitly and
-keep the analysis under each clearly separated; never mix authority types.
+### Conflicting norms — name the rule that resolved each one
+上位法优于下位法 (立法法 第98–100、107条); within one enacting body 特别 > 一般
+and 新 > 旧 (第103条), the new rule reaching only facts after it took effect
+(第104条). New-general vs old-special, or any conflict the ladder cannot settle,
+goes to the competent organ (第105、106条) — courts refer rather than rule on
+validity (法释〔2009〕14号 第7条), so report it as open.
 
-### Comparative analysis
-Use comparative jurisdictions to *contextualise*, not to override. Always
-flag which jurisdiction's law is being applied in any given paragraph.
+### Treaties
+A treaty applies in a forum only through a **domestic hook** — name it: the
+governing statute's treaty-priority clause (e.g. 民事诉讼法 2023修正 第271条;
+extended to other 涉外民商事 cases by 法释〔2023〕15号 第1条; 声明保留的条款
+excepted), implementing law, or direct application (US: self-executing or
+implemented, Medellín v. Texas; EU: TFEU art. 288). State each party's /
+state's status, reservations and declarations. A treaty not in force for the
+PRC applies only as contract terms (法释〔2023〕15号 第4条).
+
+### 涉外 choice of law (涉外民事关系法律适用法 + 解释（一）（二）)
+Foreign-related? (解释（一）第1条) → characterise by 法院地法 (第8条); special
+statutes prevail (第2条) → PRC mandatory rules apply directly (第4条; 解释（一）
+第8条) → party choice only where permitted, express or both citing one law
+(第3、41条; 解释（一）第4、6条), else the connecting factor (e.g. 第41、44条) or
+closest connection → the court ascertains foreign law (第10条; 解释（二）), no
+renvoi (第9条) → public policy (第5条); evasion fails (解释（一）第9条).
+
+### Jurisdiction order
+**PRC** primary. **US** (federal): Constitution → USC → CFR → agency guidance;
+decisions bind by court hierarchy. **EU**: Treaties → regulations / directives
+/ decisions → delegated and implementing acts; CJEU case law; national
+implementing law. **Others** only when named or engaged by the facts. Keep
+each jurisdiction separate and say whose law each paragraph applies;
+comparative law contextualises, never overrides.
 
 ## 1. Language Policy
 
 - **User-facing input/output language follows the user's language.** If the
   user writes in Chinese, answer in Chinese; if in English, answer in
   English. Mixed inputs follow the dominant language; ask if ambiguous.
-- **Internal reasoning, sub-agent tool calls, and orchestrator-to-skill
+- **Internal reasoning, sub-agent tool calls, and planner-to-specialist
   messages may use whichever language best fits the material** — 中文 is
   encouraged when reasoning over PRC statutes, 案例, or other
   Chinese-language sources; do not translate to English just to think.
@@ -71,22 +95,13 @@ flag which jurisdiction's law is being applied in any given paragraph.
 
 ## 2. Citation Standard
 
-Every legal answer ends with a `## Sources` (English) or `## 资料来源`
-(Chinese) section. One line per source. Each entry must include:
-
-- Source name (statute, regulation, judgment, treaty, agency guidance)
-- A **pinpoint marker**: 条款 / article / section / § / paragraph / page /
-  clause / chapter / appendix. If the pinpoint genuinely cannot be obtained,
-  write `pinpoint unavailable` or `无法获得具体条款` explicitly.
-- The URL or local file path, when available.
-- Optional: `online-checked: yes/no` and a short note tying the source to
-  the bullet number(s) it supports.
-
-The orchestrator fires the `/cite-check` skill on the final answer after
-synthesis (skipped only for generic non-legal enquiries — see
-`workflow._should_run_cite_check`). The skill runs on the fast model and
-produces a tabular `verification-report.md` with severity tiers and a
-coverage line. Do not bypass it.
+Every legal proposition carries its source and a **pinpoint marker** — 条 /
+款 / 项, article, section, §, paragraph, page, clause, chapter, appendix. When a
+pinpoint genuinely cannot be obtained, say so explicitly rather than invent
+one. A final answer ends with one sources section and a research bundle with a
+`## Sources` list; their exact formats are the author contract and the
+specialist bundle contract the harness supplies with each task. A citation
+audit (`/cite-check`) can run on the final answer; never write to get around it.
 
 ### Citation style
 Default style is set in `config.yaml` as `citation_style`. Supported:
@@ -97,75 +112,50 @@ Default style is set in `config.yaml` as `citation_style`. Supported:
 
 The `legal_helper/citations` module formats accordingly.
 
-## 3. Sanity-Check Contract
+## 3. Sanity checks
 
-Before emitting a bundle, every skill agent must:
+Before relying on a claim — in a research bundle or a final answer:
 
-1. **Claim-by-claim support.** Each Findings bullet ties to a real source, a
-   local file, or an inline assumption. No floating claims.
-2. **Soften unsupported claims.** Use "may", "typically", or "subject to
-   local-law confirmation" inline. Do not invent article numbers, agency
-   names, forms, or reporting windows — use `pinpoint unavailable` instead.
-3. **Currency check.** State the effective version / date of regulations
-   relied upon. If currency cannot be verified, say so inline.
-4. **Authority labels.** Every Findings bullet ends with one of:
-   `treaty`, `regulation`, `case`, `guidance`, `local-law`, `best-practice`,
-   `risk`, `drafting`. The orchestrator uses these to separate legal
-   requirements from operational best practice and from organisational
-   playbook preferences at authoring time.
+1. **Claim-by-claim support.** Each claim ties to a real source, a local
+   file, or a stated assumption. No floating claims.
+2. **Soften what you could not confirm.** Say so inline ("may", "subject to
+   local-law confirmation") and say what would settle it. Never invent article
+   numbers, agency names, forms, or reporting windows — mark the pinpoint as
+   unavailable instead.
+3. **Currency check (date before text).** Cite the version in force on the
+   operative date (§0), naming it (e.g. 2023修正), and say whether a later or
+   pending version changes the answer. If the version history cannot be
+   verified, say so inline.
 
 ## 3a. Structured legal reasoning (CREAC / 争点-规则-涵摄-结论)
 
-Reason through each distinct legal issue with an explicit issue → rule →
-application → conclusion structure before writing the Findings bullet. This is
-internal reasoning, not output scaffolding — it keeps each claim grounded and
-prevents conclusory leaps, but the deprecated narrative sections in §4 still
-must not appear in the bundle.
+Whoever reasons through an issue — author or specialist — works each material
+issue as issue → rule → application → conclusion before stating a conclusion.
+This is reasoning discipline, not an output layout.
 
-For every material issue:
+1. **Issue (争点).** The precise question, scoped to the facts and the
+   operative date. Test a claim in lifecycle order: arises → not extinguished
+   → enforceable now → defences and replies (产生 → 未消灭 → 可行使 →
+   抗辩 / 反抗辩).
+2. **Rule (规则).** The controlling authority found through §0, in the version
+   in force on the operative date, pinned to article / § / clause. Name the
+   rule that resolved any conflict of norms; weight-label every case; cite a
+   treaty with its domestic hook. If a pinpoint cannot be confirmed, say so
+   and soften per §3.
+3. **Application (涵摄).** Element by element: element → the fact that meets
+   it → the evidence for that fact, or "assumed" / "unproven" and who bears
+   the burden. One unmet element defeats the claim; never average. Give the
+   strongest counter-reading and any adverse authority. If facts contradict
+   each other (two dates, two accounts, a document against the narrative),
+   flag the contradiction and show how each version changes the outcome —
+   never compute through it by silently picking one.
+4. **Conclusion (结论).** The supported conclusion and its confidence, the
+   residual risk, and the fact or authority that would change it.
 
-1. **Issue (争点).** State the precise legal question, scoped to the facts.
-2. **Rule (规则).** Identify the controlling authority by climbing the **full**
-   §0 stack — start at the international / inter-party layer where it is live
-   (controlling convention or agreement between the parties, with each party's
-   status), then the national hierarchy (PRC: 法律 → 行政法规 → 部门规章 →
-   规范性文件 → 司法解释 → 指导案例; US/EU when comparative), then subordinate
-   rules and standards. Pin the article / § / clause of the highest controlling
-   source. If the rule cannot be confirmed to a pinpoint, say so and soften per
-   §3.
-3. **Application (涵摄).** Apply the rule to the actual facts — both the
-   support and the strongest counter-reading. Note where the outcome turns on
-   an unverified fact or an open question.
-4. **Conclusion (结论).** State the supported conclusion and its confidence;
-   flag residual risk and what would change the answer.
-
-Each Findings bullet is the distilled **conclusion** of one such chain, with
-the rule's pinpoint inline. When the application is genuinely contested, keep
-the counter-reading as a one-line caveat rather than dropping it. Verify the
-**quoted** language of any rule against its source (`quote_roundtrip_tool` /
-`ground_answer_tool`) before presenting it as a verbatim quote.
-
-## 4. Deprecated Output Patterns
-
-The following sections **must not** appear in a skill's bundle (the
-orchestrator authors the user-facing presentation):
-
-- `Evidence Verification Log` / `在线证据核验记录`
-- `Claim-Level Sanity Check` / `逐项主张核验`
-- Scenario walkthroughs / action matrices / limits matrices
-
-Provide the underlying claims as Findings bullets with pinpoints; the
-orchestrator decides how to render them.
-
-## 5. Sources Line Format
-
-```
-- [source name] — [URL or local file path] — supports findings #X, #Y[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-```
-
-If a source cannot be linked because it is proprietary or behind a wall,
-name it inline as an unavailable source and do not rely on it as the only
-support for a legal claim.
+Keep a genuinely contested counter-reading as a one-line caveat rather than
+dropping it. Verify the **quoted** language of any rule against its source
+(`quote_roundtrip_tool` / `ground_answer_tool`) before presenting it as a
+verbatim quote.
 
 ## 6. Universal Risk Defaults
 
@@ -175,27 +165,39 @@ These apply across packs unless a pack overlay supersedes them.
   inquiries (SAMR / NMPA / CSRC / SEC / EMA / ESMA etc.),
   court orders, mandatory reporting to safety / financial / data-protection
   authorities. Never sign an NDA that bars regulator disclosure.
-- **Data localisation**: PRC default is that personal information of PRC
-  data subjects is processed within the PRC unless a permitted cross-border
-  pathway is in place (CAC SCC, 安全评估, or 认证).
+- **Cross-border personal information (PRC)**: no general localisation
+  rule — in-country storage binds CIIOs and handlers above CAC volume
+  thresholds (《个人信息保护法》第40条). Other exports need a 第38条 pathway
+  (CAC 安全评估, 认证, or 标准合同) unless a CAC exemption applies
+  (《促进和规范数据跨境流动规定》2024), plus notice and separate consent
+  (第39条).
 - **State secrets / classified data**: 国家秘密 carveout mandatory; cite
-  《保守国家秘密法》 when relevant.
-- **Anti-corruption / sanctions**: KYC / 反贪污 / OFAC / UK-MoD / EU
-  sanctions screening required for new counterparties.
+  《保守国家秘密法》（2024修订） when relevant.
+- **Anti-corruption / sanctions**: KYC / 反商业贿赂 / OFAC / UK OFSI–OTSI /
+  EU sanctions screening required for new counterparties; for a PRC party,
+  check 《反外国制裁法》第12条 (no implementing or assisting foreign
+  discriminatory measures against PRC persons) before applying a foreign list.
 - **Privilege**: PRC does not recognise attorney-client privilege the same
   way as US/UK; flag explicitly whenever a workflow touches privileged
   material that may leave a privileged jurisdiction.
 
 ## 7. Document Production Defaults
 
-- All generated documents include a not-legal-advice disclaimer in the
-  user's language.
-- Redlines list "Must-have / Should-have / Nice-to-have" tiers.
+- A generated document carries the not-legal-advice note in the user's
+  language in its document properties, never in the instrument body; a court
+  filing, a lawyer's letter or any document to be served carries none.
+- Chinese documents follow PRC conventions: A4, page numbers, Chinese
+  numbering preserved (第一条 stays 第一条); 公文 use the GB/T 9704 layout.
+- Redlines are tracked changes (`redline_docx`), not a clean rewrite, and list
+  "Must-have / Should-have / Nice-to-have" tiers.
 - Risk memos include a severity × likelihood matrix and an explicit
   residual-risk line.
 - Multi-jurisdiction memos clearly separate analysis under each jurisdiction
   before any cross-cutting recommendation.
-- For 流程图 / 工作流程 / process maps, prefer ``write_pptx`` with a
-  ``flowchart`` slide block (real shapes + arrows). Never reply with a
-  numbered text-bullet list when the user asked for a diagram. See
-  ``legal_helper/skills/flowchart`` for shape kinds and authoring rules.
+- Every presentation, slide deck or 汇报材料 is made with `create_deck`
+  (ppt-master). Its `brief` must carry the full content — findings, figures,
+  pinpoints — because the deck sub-agent does not see the conversation.
+- 流程图 / 工作流程 / process maps: on a slide or in a deck, `create_deck` with
+  every step, branch, owner and statutory period in the brief; for a Word
+  document or as a picture, `render_flowchart_image`. Never answer a request
+  for a diagram with a numbered list.

@@ -1,7 +1,7 @@
 """End-to-end smoke test for the new structural-edit tools.
 
 Drives the Anthropic SDK with the same `@beta_tool`-decorated doc tools the
-server exposes (orchestrator path) and asks the model to fix the level-shift
+author's surface exposes and asks the model to fix the level-shift
 mistake in `附件4_手册地图模板_旅客服务_A类调整版.xlsx`.
 
 What we expect to see in the trace:
@@ -133,7 +133,7 @@ def run():
     for turn in range(1, 16):
         print(f"\n=== Turn {turn} ===", flush=True)
         resp = client.messages.create(
-            model="claude-opus-4-5",
+            model=current_settings().anthropic_model,
             max_tokens=4096,
             system=SYSTEM_PROMPT,
             tools=payloads,

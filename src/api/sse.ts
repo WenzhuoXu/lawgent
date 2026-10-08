@@ -231,6 +231,51 @@ export function sseEventToChunks(
       out.push({ type: "data-phase", id: "phase", data: { phase: "integrating" } });
       return out;
     }
+    // Long silent spans (a document write streaming its arguments, a hosted
+    // search, a deck procedure authoring pages) used to show nothing for
+    // p50 30 s before a write_docx call. These keep the status line moving.
+    case "tool_progress": {
+      ensureStart();
+      state.sawPhase = true;
+      const chars = p.chars_so_far as number | undefined;
+      out.push({
+        type: "data-phase",
+        id: "phase",
+        data: {
+          phase: "drafting",
+          detail: [p.tool_name as string | undefined, chars ? `${chars.toLocaleString()} chars` : ""]
+            .filter(Boolean)
+            .join(" · "),
+        },
+      });
+      return out;
+    }
+    case "hosted_tool_progress": {
+      ensureStart();
+      state.sawPhase = true;
+      out.push({
+        type: "data-phase",
+        id: "phase",
+        data: { phase: "gathering", detail: (p.query as string | undefined) ?? (p.status as string | undefined) },
+      });
+      return out;
+    }
+    case "deck_progress": {
+      ensureStart();
+      state.sawPhase = true;
+      out.push({
+        type: "data-phase",
+        id: "phase",
+        data: {
+          phase: "drafting",
+          detail:
+            (p.message as string | undefined) ??
+            (p.stage as string | undefined) ??
+            "ppt-master",
+        },
+      });
+      return out;
+    }
     case "citation_audit_started": {
       ensureStart();
       state.sawPhase = true;

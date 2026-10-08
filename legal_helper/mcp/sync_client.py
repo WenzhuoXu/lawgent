@@ -13,7 +13,10 @@ to dispatch ``tools/call`` invocations triggered by the model.
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -23,6 +26,55 @@ from .registry import McpServerSpec
 
 _DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 _LIST_TIMEOUT = httpx.Timeout(15.0, connect=8.0)
+
+# A remote MCP gateway that is timing out answers every call after ~16 s with
+# a 5xx, so each specialist paid that wait on every call — all PKULaw calls
+# since August returned 524. After this many consecutive gateway failures on a
+# host, calls to it return at once, saying the server is down, until the
+# cooldown passes; one success closes the breaker. A failure is reported as
+# a failure, never as an empty result.
+_BREAKER_FAILURES = 2
+_BREAKER_COOLDOWN_SECONDS = 600.0
+_BREAKER_LOCK = threading.Lock()
+_BREAKER: dict[str, dict[str, float]] = {}
+
+
+def _host(url: str) -> str:
+    try:
+        return urlsplit(url).netloc or url
+    except ValueError:
+        return url
+
+
+def _is_gateway_failure(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
+
+
+def _breaker_open(host: str) -> float:
+    """Seconds until the breaker for ``host`` closes, or 0 when calls may go."""
+    with _BREAKER_LOCK:
+        state = _BREAKER.get(host)
+        if not state or state["failures"] < _BREAKER_FAILURES:
+            return 0.0
+        remaining = state["opened_at"] + _BREAKER_COOLDOWN_SECONDS - time.monotonic()
+        if remaining <= 0:
+            # Half-open: let the next call try; another failure re-opens it.
+            state["failures"] = _BREAKER_FAILURES - 1
+            return 0.0
+        return remaining
+
+
+def _record(host: str, *, ok: bool) -> None:
+    with _BREAKER_LOCK:
+        if ok:
+            _BREAKER.pop(host, None)
+            return
+        state = _BREAKER.setdefault(host, {"failures": 0.0, "opened_at": 0.0})
+        state["failures"] += 1
+        if state["failures"] >= _BREAKER_FAILURES:
+            state["opened_at"] = time.monotonic()
 
 
 def _parse_jsonrpc(resp: httpx.Response) -> dict[str, Any]:
@@ -88,6 +140,21 @@ def http_call_tool(
     """
     if not spec.url:
         return json.dumps({"error": f"no url for http MCP: {spec.name}"})
+    host = _host(spec.url)
+    wait = _breaker_open(host)
+    if wait:
+        return json.dumps(
+            {
+                "error": (
+                    f"{spec.name} is unavailable: its gateway failed on the last "
+                    f"{_BREAKER_FAILURES} calls, so it was not called. Use another "
+                    "source (official websites via web search) instead of waiting."
+                ),
+                "server": spec.name,
+                "unavailable": True,
+                "retry_after_s": int(wait),
+            }
+        )
     try:
         resp = request_with_retry(
             "POST",
@@ -107,7 +174,10 @@ def http_call_tool(
         )
         payload = _parse_jsonrpc(resp)
     except Exception as e:  # noqa: BLE001
+        if _is_gateway_failure(e):
+            _record(host, ok=False)
         return json.dumps({"error": f"mcp call failed: {e!s}", "server": spec.name})
+    _record(host, ok=True)
     if "result" in payload:
         result = payload["result"]
         content = result.get("content") if isinstance(result, dict) else None

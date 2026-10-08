@@ -37,6 +37,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   provider: "openai",
   model: "gpt-6.1-sol",
   reasoning_effort: "medium",
+  answer_length: "auto",
   enable_web_search: true,
   enable_web_fetch: true,
 };
@@ -77,12 +78,25 @@ export default function App() {
     client.listChats().then((r) => setChats(r.chats ?? []));
   }, []);
 
-  // When the viewed chat finishes streaming, refresh the sidebar so the
-  // server-assigned title (and any newly created chat) appears.
+  // When the viewed chat finishes streaming, refresh the sidebar so a newly
+  // created chat appears. The title and memory summary are written by a
+  // background worker after the stream closes (the user is released at
+  // `done`), so look again a few times while the title is still the default.
   const prevStatusRef = useRef<string>("");
   useEffect(() => {
     if (prevStatusRef.current && prevStatusRef.current !== "ready" && chat.status === "ready") {
-      client.listChats().then((r) => setChats(r.chats ?? []));
+      const refresh = () => client.listChats().then((r) => setChats(r.chats ?? []));
+      refresh();
+      const timers = [3000, 8000, 15000].map((ms) =>
+        window.setTimeout(() => {
+          client.listChats().then((r) => {
+            const list = r.chats ?? [];
+            setChats(list);
+          });
+        }, ms),
+      );
+      prevStatusRef.current = chat.status;
+      return () => timers.forEach((t) => window.clearTimeout(t));
     }
     prevStatusRef.current = chat.status;
   }, [chat.status]);

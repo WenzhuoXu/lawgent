@@ -101,12 +101,12 @@ def test_compose_and_audit_stages():
 
 
 def test_unrelated_tool_call_returns_none():
-    """Bootstrapping calls (list_skill_sections, read_skill_section, …) must
-    not emit a progress update — they would just confuse the singleton card.
+    """Bootstrapping calls (list_skill_references, read_skill_reference, …)
+    must not emit a progress update — they would just confuse the singleton card.
     """
     assert (
         _cite_check_progress_from_tool_call(
-            {"name": "list_skill_sections", "arguments": {}},
+            {"name": "list_skill_references", "arguments": {}},
             state={},
             total_claims=8,
         )
@@ -114,7 +114,7 @@ def test_unrelated_tool_call_returns_none():
     )
     assert (
         _cite_check_progress_from_tool_call(
-            {"name": "read_skill_section", "arguments": {"heading": "Workflow"}},
+            {"name": "read_skill_reference", "arguments": {"name": "workflow.md"}},
             state={},
             total_claims=8,
         )

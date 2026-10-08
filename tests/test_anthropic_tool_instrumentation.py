@@ -85,11 +85,14 @@ def test_dict_tool_defs_pass_through_untouched():
 def test_thinking_uses_adaptive_mode_and_effort():
     # Opus 4.7+ and Sonnet 5 reject manual budget_tokens with a 400.
     assert _thinking_kwargs("medium") == {
-        "thinking": {"type": "adaptive"},
+        "thinking": {"type": "adaptive", "display": "summarized"},
         "output_config": {"effort": "medium"},
     }
     assert _thinking_kwargs("xhigh")["output_config"] == {"effort": "xhigh"}
-    # Opus 5.5 cannot disable thinking, so "none" omits it and runs at low effort.
-    assert _thinking_kwargs("none") == {"output_config": {"effort": "low"}}
+    assert _thinking_kwargs("max")["output_config"] == {"effort": "max"}
+    # Opus 5.5 cannot disable thinking, so "none" runs adaptive at low effort.
+    assert _thinking_kwargs("none")["output_config"] == {"effort": "low"}
     for level in ANTHROPIC_EFFORTS:
-        assert _thinking_kwargs(level).get("thinking", {}).get("type") in (None, "adaptive")
+        thinking = _thinking_kwargs(level)["thinking"]
+        # Omitted display streams empty thinking text on Opus 5.5 and Sonnet 5.
+        assert thinking == {"type": "adaptive", "display": "summarized"}

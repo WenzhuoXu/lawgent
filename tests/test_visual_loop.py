@@ -116,11 +116,18 @@ def test_render_pptx_slides_returns_images(tmp_path, monkeypatch):
     if not shutil.which("soffice"):
         pytest.skip("soffice not available")
 
-    from legal_helper.documents.writers.pptx import write_pptx_deck
+    from pptx import Presentation
+    from pptx.util import Inches
+
     from legal_helper.tools.documents import render_pptx_slides
 
     deck = tmp_path / "deck.pptx"
-    write_pptx_deck(deck, [{"title": "One", "bullets": ["a"]}, {"title": "Two", "bullets": ["b"]}])
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    for title in ("One", "Two"):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = title
+    prs.save(str(deck))
 
     from legal_helper import config
 

@@ -1,4 +1,6 @@
 {
+  "name": "legal_helper",
+  "private": true,
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5174",
     "build": "vite build",
@@ -24,8 +26,6 @@
     "lucide-react": "^0.562.0",
     "motion": "^12.42.2",
     "nanoid": "^5.1.16",
-    "playwright": "^1.62.1",
-    "pptxgenjs": "^4.0.1",
     "radix-ui": "^1.6.4",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",

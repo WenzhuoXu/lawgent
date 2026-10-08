@@ -14,9 +14,12 @@ from unittest.mock import patch
 
 from legal_helper.config import load_settings
 from legal_helper.turn_compaction import (
+    CLEAR_KEEP_TOOL_USES,
     CLEAR_TARGET_SHARE,
+    ClearingNotes,
     InTurnContext,
-    install_on_anthropic_runner,
+    anthropic_context_management,
+    clearing_trigger,
     iteration_limit,
 )
 
@@ -91,7 +94,7 @@ def test_clearing_aims_well_below_the_ceiling_so_it_is_rare():
 def test_deliverables_are_cleared_only_after_ordinary_evidence():
     ctx = _ctx()
     history = [_fco("memo"), _fco("ev1"), _fco("ev2")]
-    names = {"memo": "run_skill", "ev1": "legal_source_search", "ev2": "read_document"}
+    names = {"memo": "cite_check_report_tool", "ev1": "legal_source_search", "ev2": "read_document"}
     ctx.before_openai_request(history, names)
     ctx.observe(9_900, 200)
     history.append(_fco("tail", "x"))
@@ -115,60 +118,77 @@ def test_a_result_that_cannot_be_saved_is_not_cleared(monkeypatch):
     assert all(i["output"] == _BIG for i in history)
 
 
-def test_anthropic_tool_results_are_rewritten_as_plain_dicts():
-    ctx = _ctx()
-    tool_use = SimpleNamespace(type="tool_use", id="tu_1", name="read_document", input={})
-    messages = [
-        {"role": "user", "content": "go"},
-        {"role": "assistant", "content": [tool_use]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": _BIG}]},
-    ]
-    ctx.before_anthropic_request(messages)
-    ctx.observe(9_800, 300)
-    tu2 = SimpleNamespace(type="tool_use", id="tu_2", name="inspect_xlsx", input={})
-    messages += [
-        {"role": "assistant", "content": [tu2]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_2", "content": _BIG}]},
-    ]
-    assert ctx.before_anthropic_request(messages)
-    block = messages[2]["content"][0]
-    assert block["tool_use_id"] == "tu_1" and "read_document" in block["content"]
-    assert set(block) == {"type", "tool_use_id", "content"}  # nothing internal leaks to the API
-    assert messages[4]["content"][0]["content"] == _BIG
+# --- Anthropic: the same policy, applied by the server ---------------------
+# Editing an earlier tool_result client-side invalidates every later thinking
+# block on Opus 5.5 (a 400 on accounts created on or after 2026-08-31), so the
+# Anthropic path never rewrites the transcript; the server clears instead.
 
 
-def test_the_anthropic_hook_rewrites_params_before_each_request():
-    ctx = _ctx()
-    sent: list[list] = []
+def _anthropic_settings(monkeypatch):
+    monkeypatch.setenv("MODEL_PROVIDER", "anthropic")
+    return load_settings(refresh=True)
 
-    class _Runner:
-        def __init__(self):
-            self._params = {"messages": []}
 
-        def set_messages_params(self, fn):
-            self._params = fn(self._params)
+def test_server_side_clearing_reproduces_the_client_side_policy(monkeypatch):
+    from legal_helper.context import turn_input_ceiling_for
+    from legal_helper.tool_budget import EXEMPT_TOOLS
 
-        def _handle_request(self):
-            sent.append(list(self._params["messages"]))
-            return "item"
+    monkeypatch.delenv("LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS", raising=False)
+    settings = _anthropic_settings(monkeypatch)
+    cfg = anthropic_context_management(settings)
+    assert cfg is not None, "server-side clearing is on by default"
+    (edit,) = cfg["edits"]
+    ceiling = turn_input_ceiling_for(settings)
+    assert edit["type"] == "clear_tool_uses_20250919"
+    assert edit["trigger"] == {"type": "input_tokens", "value": ceiling}
+    # Measured: the server clears (input − trigger) + clear_at_least, so this
+    # lands the transcript at CLEAR_TARGET_SHARE of the ceiling, as before.
+    assert edit["clear_at_least"] == {
+        "type": "input_tokens",
+        "value": int((1 - CLEAR_TARGET_SHARE) * ceiling),
+    }
+    assert edit["keep"] == {"type": "tool_uses", "value": CLEAR_KEEP_TOOL_USES}
+    # Deliverables cannot be ordered "last" by the server, so they are kept.
+    assert set(EXEMPT_TOOLS) <= set(edit["exclude_tools"])
+    assert clearing_trigger(cfg) == ceiling
 
-    runner = _Runner()
-    assert install_on_anthropic_runner(runner, ctx)
-    tu = SimpleNamespace(type="tool_use", id="tu_1", name="read_document", input={})
-    runner._params["messages"] = [
-        {"role": "assistant", "content": [tu]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": _BIG}]},
-    ]
-    assert runner._handle_request() == "item"
-    ctx.observe(9_900, 100)
-    tu2 = SimpleNamespace(type="tool_use", id="tu_2", name="read_document", input={})
-    runner._params["messages"] += [
-        {"role": "assistant", "content": [tu2]},
-        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tu_2", "content": _BIG}]},
-    ]
-    runner._handle_request()
-    assert sent[-1][1]["content"][0]["content"] != _BIG
-    assert sent[-1][3]["content"][0]["content"] == _BIG
+
+def test_server_side_clearing_env_switch(monkeypatch):
+    settings = _anthropic_settings(monkeypatch)
+    monkeypatch.setenv("LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS", "off")
+    assert anthropic_context_management(settings) is None
+    monkeypatch.setenv("LEGAL_HELPER_ANTHROPIC_CLEAR_TOOLS", "150000")
+    cfg = anthropic_context_management(settings)
+    assert clearing_trigger(cfg) == 150_000
+    assert cfg["edits"][0]["clear_at_least"]["value"] == 75_000
+
+
+def test_clearing_notes_stay_silent_until_the_trigger_is_in_sight():
+    ctx = _ctx(ceiling=100_000)
+    notes = ClearingNotes(ctx, trigger=100_000)
+    ctx.observe(20_000, 500)
+    # Far below half the trigger: nothing saved, nothing said.
+    assert notes.notes_for([("read_document", _BIG, 0, None)]) == []
+    ctx.observe(49_000, 500)
+    lines = notes.notes_for([("legal_source_search", _BIG, 0, None), ("inspect_xlsx", "small", 0, None)])
+    # One catch-up note for the earlier result, one for the sizeable new one;
+    # the small result is not worth clearing and gets none.
+    assert len(lines) == 2
+    assert "read_document" in lines[0] and "legal_source_search" in lines[1]
+    path = lines[0].split("saved at ", 1)[1].split(". If it", 1)[0]
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == _BIG  # lossless: the evidence is on disk before any clearing
+    # Armed from here on: every sizeable result is named as it arrives.
+    assert len(notes.notes_for([("read_document", _BIG + "x", 0, None)])) == 1
+
+
+def test_clearing_notes_name_the_budget_spill_and_skip_deliverables(tmp_path):
+    full = tmp_path / "full.md"
+    full.write_text(_BIG, encoding="utf-8")
+    notes = ClearingNotes(None, trigger=10_000)  # no accounting: annotate from the start
+    lines = notes.notes_for([("pkulaw_fatiao__get_law_item_content", _BIG, 0, full), ("cite_check_report_tool", _BIG, 0, None)])
+    assert len(lines) == 1
+    assert str(full) in lines[0]
 
 
 def test_openai_loop_runs_past_the_old_caps_and_resends_a_cleared_history():

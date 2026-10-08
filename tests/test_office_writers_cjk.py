@@ -1,11 +1,11 @@
-"""CJK + safety contracts for the pdf/pptx writers and run-aware pptx edits."""
+"""CJK + safety contracts for the pdf writer and run-aware pptx edits."""
 
 from __future__ import annotations
 
 import zipfile
 
 from legal_helper.documents.office import edit_pptx_text, extract_pptx_text
-from legal_helper.documents.writers import write_pdf_document, write_pptx_deck
+from legal_helper.documents.writers import write_pdf_document
 from legal_helper.documents.writers.pdf import _detect_lang
 
 
@@ -40,73 +40,6 @@ def test_pdf_escapes_title_and_renders_cjk(tmp_path):
     # CJK glyphs actually embedded (SC-capable font stack), not tofu.
     assert "法律意见书" in text
     assert "拟议交易符合" in text
-
-
-# ---------------------------------------------------------------------------
-# PPTX writer: renderer reporting + lang/east-asia threading
-# ---------------------------------------------------------------------------
-
-
-def test_pptx_writer_reports_renderer(tmp_path):
-    out = tmp_path / "deck.pptx"
-    result = write_pptx_deck(out, [{"title": "Compliance", "bullets": ["Item"]}])
-    assert out.is_file()
-    assert result["renderer"] in ("pptxgenjs", "ooxml-minimal")
-    assert "dropped_features" in result
-    if result["renderer"] == "pptxgenjs":
-        assert result["dropped_features"] == []
-
-
-def test_pptx_fallback_reports_dropped_features(tmp_path, monkeypatch):
-    import legal_helper.documents.writers.pptx as pptx_mod
-
-    monkeypatch.setattr(pptx_mod, "find_node", lambda: None)
-    out = tmp_path / "deck.pptx"
-    result = write_pptx_deck(
-        out,
-        [
-            {
-                "title": "合规审查要点",
-                "bullets": ["运营许可"],
-                "speaker_notes": "备注",
-                "chart": {"type": "bar", "categories": ["a"], "series": [{"name": "s", "values": [1]}]},
-                "layout": "table",
-                "table_headers": ["A"],
-                "table_rows": [["1"]],
-            }
-        ],
-        title="合规简报",
-        masters=[{"name": "M1"}],
-    )
-    assert out.is_file()
-    assert result["renderer"] == "ooxml-minimal"
-    assert result["renderer_error"]
-    dropped = "\n".join(result["dropped_features"])
-    assert "masters" in dropped
-    assert "chart" in dropped
-    assert "layout 'table'" in dropped
-
-    # CJK deck: fallback slide XML carries zh-CN lang and the theme carries
-    # an East-Asian typeface instead of hardcoded en-US/Latin-only.
-    assert result["lang"] == "zh-CN"
-    with zipfile.ZipFile(out) as zf:
-        slide1 = zf.read("ppt/slides/slide1.xml").decode("utf-8")
-        theme = zf.read("ppt/theme/theme1.xml").decode("utf-8")
-    assert 'lang="zh-CN"' in slide1
-    assert "微软雅黑" in theme
-    assert "合规审查要点" in slide1
-
-
-def test_pptx_lang_auto_detection_and_override(tmp_path, monkeypatch):
-    import legal_helper.documents.writers.pptx as pptx_mod
-
-    monkeypatch.setattr(pptx_mod, "find_node", lambda: None)
-    latin = write_pptx_deck(tmp_path / "en.pptx", [{"title": "Overview", "bullets": []}])
-    assert latin["lang"] == "en-US"
-    forced = write_pptx_deck(
-        tmp_path / "zh.pptx", [{"title": "Overview", "bullets": []}], lang="zh-CN"
-    )
-    assert forced["lang"] == "zh-CN"
 
 
 # ---------------------------------------------------------------------------

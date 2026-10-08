@@ -1,8 +1,10 @@
 /**
- * Renders the answer's 资料来源 / Sources & verification section as a clean
- * LIST with per-source status dots (matching the approved artifact FIG 2) —
- * NOT a dense markdown table. Parses the model's pipe-delimited sources table
- * into rows: status dot · claim · pinpoint(+link) · note.
+ * Renders the answer's sources section (`## 资料来源` / `## Sources`) as a clean
+ * LIST with per-source status dots (matching the approved artifact FIG 2).
+ *
+ * Answers write one numbered line per source — `1. [Source, pinpoint](URL) —
+ * status` — with no claim column (the body already states the claims). Older
+ * answers in the database carry a pipe table with a claim column; both parse.
  */
 
 import { rewriteSandboxHref } from "@/lib/artifacts";
@@ -38,18 +40,51 @@ function parseLinkCell(cell: string): { label: string; href?: string } {
 
 function statusOf(cell: string): SourceRow["status"] {
   const c = cell.trim();
-  if (/✔|✓|已?核验|verified|checked|pass/i.test(c) && !/未|not|un/i.test(c)) return "ok";
-  if (/未核验|unavailable|pinpoint unavailable|not|无法|待/i.test(c)) return "warn";
+  // The user's own files: no online check applies, so no amber dot.
+  if (/用户提供|user-provided/i.test(c)) return "none";
+  if (/✔|✓|已?(在线)?核验|verified|checked|pass/i.test(c) && !/未|not|un/i.test(c)) return "ok";
+  if (/未核验|unverified|unavailable|not|无法|待/i.test(c)) return "warn";
   if (/✕|✗|fail|错误|不符|未能溯源/i.test(c)) return "bad";
   return "none";
 }
 
-/** Parse the markdown sources table into structured rows. Returns null if it
- * doesn't look like the expected claim/pinpoint table (fall back to markdown). */
+const LIST_ITEM = /^\s*(?:(\d+)[.)、]|[-*•])\s+(.+)$/;
+// "— status" at the end of a line (em/en dash, or a spaced hyphen).
+const TRAILING_STATUS = /\s+(?:—|–|-{1,2})\s+([^—–]+?)\s*$/;
+
+/** Parse the one-line-per-source list form. */
+function parseSourcesList(md: string): SourceRow[] | null {
+  const out: SourceRow[] = [];
+  for (const raw of md.split("\n").slice(1)) {
+    const m = raw.match(LIST_ITEM);
+    if (!m) continue;
+    let rest = m[2].trim();
+    let statusText = "";
+    const st = rest.match(TRAILING_STATUS);
+    if (st && st.index !== undefined) {
+      statusText = st[1];
+      rest = rest.slice(0, st.index).trim();
+    }
+    const pin = parseLinkCell(rest);
+    out.push({
+      index: m[1],
+      claim: "",
+      pinpoint: pin.label,
+      pinpointHref: pin.href,
+      status: statusText ? statusOf(statusText) : "none",
+      note: statusText || undefined,
+    });
+  }
+  return out.length ? out : null;
+}
+
+/** Parse the sources section into structured rows: the list form, or the
+ * legacy claim/pinpoint table. Returns null when neither matches (the caller
+ * falls back to plain markdown). */
 export function parseSourcesTable(md: string): SourceRow[] | null {
   const lines = md.split("\n").map((l) => l.trim()).filter(Boolean);
   const rows = lines.filter((l) => l.startsWith("|") && l.endsWith("|"));
-  if (rows.length < 2) return null;
+  if (rows.length < 2) return parseSourcesList(md);
 
   const cells = (line: string) =>
     line.slice(1, -1).split("|").map((c) => c.trim());
@@ -91,6 +126,13 @@ const DOT: Record<SourceRow["status"], string> = {
   none: "bg-border",
 };
 
+/** The section's own heading text (资料来源 or Sources), not a bilingual label. */
+function headingOf(md: string): string {
+  const first = md.trim().split("\n")[0] ?? "";
+  const text = first.replace(/^#+\s*/, "").trim();
+  return text || "资料来源";
+}
+
 export function SourcesList({ markdown }: { markdown: string }) {
   const rows = parseSourcesTable(markdown);
   if (!rows) return null;
@@ -98,7 +140,7 @@ export function SourcesList({ markdown }: { markdown: string }) {
   return (
     <section className="not-prose mt-4">
       <h3 className="mb-2 flex items-center gap-2 font-serif text-base font-semibold">
-        <span>📚</span> 资料来源 / Sources
+        <span>📚</span> {headingOf(markdown)}
         <span className="rounded-full bg-accent px-2 py-0.5 text-xs font-normal text-content-secondary">
           {rows.length}
         </span>
@@ -111,11 +153,16 @@ export function SourcesList({ markdown }: { markdown: string }) {
           >
             <span className={`mt-1.5 size-2 shrink-0 rounded-full ${DOT[r.status]}`} title={r.status} />
             <div className="min-w-0 flex-1">
-              <div className="font-serif leading-snug text-foreground">
-                {r.index ? <span className="mr-1 font-mono text-xs text-content-faint">[{r.index}]</span> : null}
-                {r.claim}
-              </div>
-              <div className="mt-1 text-xs text-content-secondary">
+              {r.claim ? (
+                <div className="font-serif leading-snug text-foreground">
+                  {r.index ? <span className="mr-1 font-mono text-xs text-content-faint">[{r.index}]</span> : null}
+                  {r.claim}
+                </div>
+              ) : null}
+              <div className={r.claim ? "mt-1 text-xs text-content-secondary" : "text-sm text-foreground"}>
+                {!r.claim && r.index ? (
+                  <span className="mr-1 font-mono text-xs text-content-faint">[{r.index}]</span>
+                ) : null}
                 {r.pinpointHref ? (
                   <a
                     href={rewriteSandboxHref(r.pinpointHref)}

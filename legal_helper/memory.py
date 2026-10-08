@@ -137,11 +137,22 @@ def fallback_title(text: str) -> str:
     return clean[:48] + ("..." if len(clean) > 48 else "")
 
 
+# Room for adaptive thinking ahead of a ten-token title: thinking counts toward
+# max_tokens on Anthropic even when its text is not shown.
+_TITLE_MAX_TOKENS = 1_024
+
+
 def _cheap_title_settings(settings: Settings) -> Settings:
-    updates = {"max_tokens": min(settings.max_tokens, 256)}
-    if settings.provider == "openai":
-        updates["openai_reasoning_effort"] = "none"
-    return settings.model_copy(update=updates)
+    """The "title" role (config.DEFAULT_ROLE_PROFILES): no reasoning needed."""
+    role_settings, _fast = settings.for_role("title")
+    return role_settings.model_copy(
+        update={"max_tokens": min(settings.max_tokens, _TITLE_MAX_TOKENS)}
+    )
+
+
+def _cheap_summary_settings(settings: Settings) -> Settings:
+    """The "summariser" role: a delta summary needs a little reasoning."""
+    return settings.for_role("summariser")[0]
 
 
 def _clean_title(raw: str) -> str:
@@ -228,7 +239,7 @@ def summarize_with_fast_model(settings: Settings, messages: list[ChatMessage], p
     """
     sections = parse_summary(previous)
     try:
-        provider = build_provider(settings, fast=True)
+        provider = build_provider(_cheap_summary_settings(settings), fast=True)
         transcript = "\n\n".join(f"{m.role}: {m.content[:2000]}" for m in messages[-12:])
         result = provider.run(
             system=_DELTA_SYSTEM,

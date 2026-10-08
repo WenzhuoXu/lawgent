@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import contextvars
 import json
+import logging
 import queue
 import shutil
+import sqlite3
 import threading
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
@@ -364,6 +368,35 @@ def _chat_upload_inventory(
     return out
 
 
+def _chat_generated_inventory(store: ChatStore, chat_id: str) -> list[dict[str, Any]]:
+    """Deliverables this chat has produced, newest first, with their lineage.
+
+    The digest listed uploads only, so the model could not tell the latest
+    version of a deliverable from an older one.
+    """
+    from .documents.lineage import derived_from
+
+    out: list[dict[str, Any]] = []
+    try:
+        artifacts = _list_visible_artifacts(store, chat_id)
+    except Exception:  # noqa: BLE001 — the inventory is advisory
+        return out
+    for artifact in sorted(artifacts, key=lambda a: a.created_at, reverse=True):
+        if artifact.origin != "generated":
+            continue
+        out.append(
+            {
+                "path": artifact.path,
+                "name": artifact.filename,
+                "created_at": artifact.created_at,
+                "derived_from": derived_from(artifact.path),
+            }
+        )
+        if len(out) >= _MAX_INVENTORY_FILES:
+            break
+    return out
+
+
 def _list_visible_artifacts(store: ChatStore, chat_id: str) -> list[ArtifactRecord]:
     return [a for a in store.list_artifacts(chat_id) if _is_chat_artifact_path(a.path, chat_id)]
 
@@ -383,6 +416,66 @@ def _maybe_generate_chat_title(
     updated = store.update_chat(chat_id, title=title)
     if emit is not None:
         emit("chat_updated", updated.model_dump())
+
+
+# --- per-chat housekeeping after a turn --------------------------------------
+# The rolling summary and the chat title used to run inside the turn's stream,
+# after `done`: the stream stayed open (p50 8 s, p90 63 s) and the composer
+# stayed disabled until both had finished. They are bookkeeping, not part of
+# the answer, so they run here instead — one worker per chat, jobs in
+# submission order, so two summaries of one chat never overlap and each starts
+# from the one before it. What a job produces is persisted; the stream it
+# came from may long be closed, so persistence is what makes it visible.
+_housekeeping_log = logging.getLogger("legal_helper.server.housekeeping")
+_HOUSEKEEPING_LOCK = threading.Lock()
+_HOUSEKEEPING_QUEUES: dict[str, deque[Callable[[], None]]] = {}
+
+
+def _submit_chat_housekeeping(chat_id: str, job: Callable[[], None]) -> None:
+    """Queue ``job`` behind any earlier housekeeping for this chat.
+
+    The job runs in a copy of the caller's context: the settings override, the
+    active project and the usage attribution of the turn that queued it.
+    """
+    ctx = contextvars.copy_context()
+
+    def run() -> None:
+        try:
+            ctx.run(job)
+        except Exception:  # noqa: BLE001 — bookkeeping must not take the worker down
+            _housekeeping_log.exception("chat housekeeping failed for chat %s", chat_id)
+
+    with _HOUSEKEEPING_LOCK:
+        pending = _HOUSEKEEPING_QUEUES.get(chat_id)
+        if pending is not None:  # a worker is already draining this chat
+            pending.append(run)
+            return
+        _HOUSEKEEPING_QUEUES[chat_id] = deque([run])
+    threading.Thread(
+        target=_drain_chat_housekeeping,
+        args=(chat_id,),
+        name=f"housekeeping-{chat_id[:8]}",
+        daemon=True,
+    ).start()
+
+
+def _drain_chat_housekeeping(chat_id: str) -> None:
+    while True:
+        with _HOUSEKEEPING_LOCK:
+            pending = _HOUSEKEEPING_QUEUES[chat_id]
+            if not pending:
+                # Removed under the lock, so a job submitted after this point
+                # starts a fresh worker instead of joining a finished one.
+                del _HOUSEKEEPING_QUEUES[chat_id]
+                return
+            job = pending.popleft()
+        job()
+
+
+def chat_housekeeping_pending(chat_id: str) -> bool:
+    """True while a summary or title for this chat is queued or running."""
+    with _HOUSEKEEPING_LOCK:
+        return chat_id in _HOUSEKEEPING_QUEUES
 
 
 def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Optional[str] = None):
@@ -405,9 +498,13 @@ def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Option
         model = base.resolve_model_for_provider(chat_settings.model, chat_settings.provider)
         if chat_settings.provider == "openai":
             updates["openai_model"] = model
-            updates["openai_reasoning_effort"] = chat_settings.reasoning_effort
         else:
             updates["anthropic_model"] = model
+        # The effort dial is shared by both providers (anthropic_provider reads
+        # it too); it used to be applied for OpenAI chats only, so an Anthropic
+        # chat ran at the config default whatever the user picked.
+        updates["openai_reasoning_effort"] = chat_settings.reasoning_effort
+        updates["answer_length"] = getattr(chat_settings, "answer_length", "auto") or "auto"
     if chat_id:
         updates["outputs_dir"] = _chat_outputs_dir(chat_id)
         # A project pins jurisdiction + packs for every chat under it, so the
@@ -537,6 +634,11 @@ def _scan_new_artifacts(
 ):
     for p in sorted(artifact_dir.rglob("*")):
         if not p.is_file():
+            continue
+        # Working directories (a deck procedure's project folder, conversion
+        # caches) are not deliverables: anything under a "_" or "." component.
+        rel_parts = p.relative_to(artifact_dir).parts
+        if any(part.startswith(("_", ".")) for part in rel_parts):
             continue
         resolved = str(p.resolve())
         if resolved in seen_paths:
@@ -734,6 +836,21 @@ def download_artifact(name: str) -> FileResponse:
             if artifact.filename == filename:
                 return _artifact_file_response(store, chat_id, artifact.id)
     raise HTTPException(status_code=404, detail="Artifact not found")
+
+
+@app.get("/api/chats/{chat_id}/uploads/{upload_id}/{filename}")
+def download_chat_upload(chat_id: str, upload_id: str, filename: str) -> FileResponse:
+    """Serve a file the user uploaded to this chat.
+
+    Answers link to uploads (an uploaded contract, a judgment) and no route
+    served them: 818 such links in 41 answers were dead. The answer lint
+    rewrites upload paths to this route.
+    """
+    safe_upload = "".join(ch for ch in upload_id if ch.isalnum() or ch in {"_", "-"})
+    target = _chat_uploads_dir(chat_id) / safe_upload / Path(filename).name
+    if not _is_chat_upload_path(target, chat_id):
+        raise HTTPException(status_code=404, detail="Upload not found")
+    return FileResponse(target.resolve(), filename=target.name)
 
 
 @app.get("/api/projects")
@@ -981,20 +1098,26 @@ def export_message(chat_id: str, message_id: str, req: ExportRequest) -> dict[st
     # Clamp the watermark to a short banner so a malformed request cannot bloat
     # the header; empty string → no watermark.
     watermark = (req.watermark or "").strip()[:80] or None
+    # The answer names itself: its first heading, else the chat's title when
+    # that is in the answer's language, else a generic title in that language.
+    # A fixed English "Legal Analysis" headed 18 of 19 exported Word files.
+    from .documents.writers._text import export_title
+
+    title = (req.title or "").strip() or export_title(msg.content, chat_title=chat.title)
     with override_current_settings(export_settings):
         artifact = _run_tracked_tool(
             store=store,
             chat_id=chat_id,
             tool_name=f"write_{artifact_format}",
             arguments={
-                "title": req.title or "Legal Analysis",
+                "title": title,
                 "source_message_id": message_id,
                 "watermark": watermark,
             },
             call=lambda: _write_followup_artifact(
                 export_settings,
                 msg.content,
-                req.title or "Legal Analysis",
+                title,
                 artifact_format,
                 watermark=watermark,
             ),
@@ -1053,17 +1176,25 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
         if current.status == "running":
             _mark_run_cancelled(store, run.id)
 
+    def sink(record: dict[str, Any]) -> None:
+        # Persisting a progress event is best-effort: a write that cannot get
+        # the database lock must cost one event row, never the whole answer.
+        try:
+            payload = store.add_event(
+                chat_id, record.get("event_type", "workflow_event"), record
+            ).model_dump()
+        except sqlite3.OperationalError as exc:
+            payload = {
+                "chat_id": chat_id,
+                "event_type": record.get("event_type", "workflow_event"),
+                "data": record,
+                "persisted": False,
+                "persist_error": str(exc)[:200],
+            }
+        emit("workflow_event", payload)
+
     def produce() -> None:
-        token = workflow_event_sink_var.set(
-            lambda record: emit(
-                "workflow_event",
-                store.add_event(
-                    chat_id,
-                    record.get("event_type", "workflow_event"),
-                    record,
-                ).model_dump(),
-            )
-        )
+        token = workflow_event_sink_var.set(sink)
         assistant_text = ""
         run_finished = False
         # Provider-reported context fill for the last turn; 0 until a usage
@@ -1103,10 +1234,12 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     message_text=req.message,
                 )
                 available_files = _chat_upload_inventory(chat_id, exclude=attachments)
+                generated_files = _chat_generated_inventory(store, chat_id)
                 for ev in executor.stream(
                     req.message,
                     attachments=attachments,
                     available_files=available_files,
+                    generated_files=generated_files,
                     recent_messages=recent,
                     memory_summary=chat.memory_summary,
                     skill_hint=settings_model.skill_hint,
@@ -1118,7 +1251,13 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                         finish_cancelled()
                         run_finished = True
                         return
-                    if ev.kind in {"delta", "agent_delta", "reasoning_delta"}:
+                    if ev.kind in {
+                        "delta",
+                        "agent_delta",
+                        "reasoning_delta",
+                        "tool_progress",
+                        "hosted_tool_progress",
+                    }:
                         text = ev.data.get("text", "")
                         if ev.kind == "delta":
                             assistant_text += text
@@ -1126,10 +1265,13 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                             if now - last_persisted_at > 0.5:
                                 persist_assistant(assistant_text, {"run_status": "running"})
                                 last_persisted_at = now
-                        # agent_delta + reasoning_delta are transient previews:
-                        # forwarded to the client, never accumulated or persisted.
+                        # Previews and progress ticks (up to four a second per
+                        # call) are transient: forwarded to the client, never
+                        # accumulated or persisted.
                         emit(ev.kind, ev.data)
                     elif ev.kind == "done":
+                        from .context import compaction_decision, context_tokens_from_usage, estimate_tokens
+
                         assistant_text = ev.data.get("text", assistant_text)
                         # Per-turn usage + wall-clock (B3). Emit AND persist as a
                         # replayable event so the sidebar Context ring, run header,
@@ -1140,18 +1282,19 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                             def _u(key: str) -> int:
                                 return int(usage.get(key) or 0)
                             input_tok = _u("input_tokens")
-                            cache_read = _u("cache_read_input_tokens")
-                            cache_write = _u("cache_creation_input_tokens")
-                            # Context-window fill = prompt tokens actually sent.
-                            # Anthropic input_tokens EXCLUDES cache (add them);
-                            # OpenAI includes cache and reports 0 cache buckets,
-                            # so the sum collapses to input_tokens. One formula,
-                            # both providers.
-                            context_tokens = input_tok + cache_read + cache_write
-                            # Authoritative context fill for the compaction
-                            # decision below: it counts the system prompt, tool
-                            # schemas, attachments and tool results, none of
-                            # which a transcript estimate can see.
+                            # Cache buckets are named per provider: Anthropic
+                            # bills reads and writes separately from
+                            # input_tokens; OpenAI's cached tokens are a subset
+                            # of input_tokens. Reading only the Anthropic names
+                            # showed 0 cache hits on 460 of 460 OpenAI turns.
+                            cache_read = _u("cache_read_input_tokens") or _u("cached_input_tokens")
+                            cache_write = _u("cache_creation_input_tokens") or _u("cache_write_input_tokens")
+                            # Context-window fill = what the turn's LAST request
+                            # sent (system prompt, tool schemas, attachments and
+                            # tool results included), not the sum over every
+                            # request of the tool loop. It is also the
+                            # authoritative input to the compaction decision.
+                            context_tokens = context_tokens_from_usage(usage)
                             reported_context_tokens = context_tokens
                             turn_usage_payload = {
                                 "input_tokens": input_tok,
@@ -1186,14 +1329,13 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                             emit("artifact", artifact)
                         store.update_run(run.id, status="complete", finished=True)
                         run_finished = True
-                        emit("done", {"text": assistant_text, "message_id": assistant_msg.id})
                         # Within-chat context management: roll the memory summary
                         # forward. When the full transcript approaches the model's
                         # window, widen the lookback so older turns dropping out of
                         # the per-turn digest are folded into the summary (lossless
                         # compaction) and surface the event for observability.
-                        from .context import compaction_decision, estimate_tokens
-
+                        # Decided here, while the stream is open, so the event
+                        # reaches the client before `done` closes it.
                         all_messages = store.list_messages(chat_id)
                         decision = compaction_decision(
                             all_messages,
@@ -1204,7 +1346,6 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                         )
                         compacting = decision.should_compact
                         lookback = 40 if compacting else 18
-                        messages = store.list_messages(chat_id, limit=lookback)
                         if compacting:
                             emit(
                                 "context_compaction",
@@ -1219,14 +1360,31 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                                     "cost_ceiling_tokens": decision.cost_ceiling_tokens,
                                 },
                             )
-                        memory_token = workflow_event_sink_var.set(None)
-                        try:
-                            summary = summarize_with_fast_model(run_settings, messages, chat.memory_summary)
-                        finally:
-                            workflow_event_sink_var.reset(memory_token)
-                        store.update_chat(chat_id, memory_summary=summary)
-                        emit("memory_updated", {"summary": summary})
-                        _maybe_generate_chat_title(store, chat_id, run_settings, emit)
+                        emit("done", {"text": assistant_text, "message_id": assistant_msg.id})
+                        # The transcript this turn ends with, captured now: by
+                        # the time the job runs, a next turn may have started.
+                        # The previous summary is read when the job runs, so a
+                        # queued summary builds on the one queued before it.
+                        summary_messages = store.list_messages(chat_id, limit=lookback)
+
+                        def housekeeping(
+                            messages: list[ChatMessage] = summary_messages,
+                            settings=run_settings,
+                        ) -> None:
+                            # Bookkeeping calls are not part of the run's trace.
+                            sink_token = workflow_event_sink_var.set(None)
+                            try:
+                                previous = store.get_chat(chat_id).memory_summary
+                                summary = summarize_with_fast_model(settings, messages, previous)
+                                store.update_chat(chat_id, memory_summary=summary)
+                                # Reaches a client still attached (none, once
+                                # `done` has closed the stream); persisted either way.
+                                emit("memory_updated", {"summary": summary})
+                                _maybe_generate_chat_title(store, chat_id, settings, emit)
+                            finally:
+                                workflow_event_sink_var.reset(sink_token)
+
+                        _submit_chat_housekeeping(chat_id, housekeeping)
                     elif ev.kind == "workflow_plan":
                         store.add_event(chat_id, "workflow_plan", ev.data)
                         emit("workflow_plan", ev.data)
@@ -1285,6 +1443,12 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     break
                 event, data = item
                 yield _sse(event, data)
+                if event == "done":
+                    # The answer is persisted and the run marked complete before
+                    # `done` is emitted; ending the response here is what
+                    # releases the client (its composer stays disabled until the
+                    # body ends). Housekeeping continues server-side.
+                    break
         finally:
             _unsubscribe_run(run.id, q)
 

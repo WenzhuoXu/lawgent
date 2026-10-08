@@ -1,0 +1,106 @@
+# 不当得利纠纷 — claim to return an unjust enrichment.
+# Pinpoints checked 2026-10-07 against the 民法典 text at court.gov.cn and the
+# SPC 诉讼时效规定 (2020修正). Re-verify every pinpoint via pkulaw_fatiao before
+# use (README rule).
+# The burden on "no legal basis" in 给付型 cases (the claimant paid the
+# respondent) is argued both ways in practice — check current 类案 and label
+# their weight per general playbook §0 before relying on either allocation.
+# A gratuitous onward transferee can be asked to return within the benefit
+# received (民法典 第九百八十八条).
+name: unjust_enrichment
+display_name: 不当得利之诉 / Unjust enrichment
+cause_of_action: 不当得利纠纷
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第一百二十二条
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第九百八十五条
+elements:
+  - id: benefit
+    element_zh: 被告取得利益（财产积极增加或应减少而未减少）
+    element_en: Respondent obtained a benefit
+    burden: claimant
+    evidence_hints: [转账凭证, 银行流水, 财产登记变化]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十五条
+  - id: loss
+    element_zh: 原告受有损失
+    element_en: Claimant suffered a loss
+    burden: claimant
+    evidence_hints: [付款记录, 财产减少的证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百二十二条
+  - id: causation
+    element_zh: 被告得利与原告受损之间存在因果关系
+    element_en: The benefit and the loss are causally linked
+    burden: claimant
+    evidence_hints: [资金流向, 交易链条]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百二十二条
+  - id: no_legal_basis
+    element_zh: 得利没有法律根据（自始欠缺或嗣后丧失，如合同无效、被撤销、错误汇款）
+    element_en: The benefit lacks a legal basis (never had one, or lost it)
+    burden: claimant
+    evidence_hints: [无合同/合同无效证据, 错误汇款说明, 双方往来记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十五条
+  - id: bad_faith_damages
+    element_zh: 主张赔偿损失的：得利人知道或者应当知道取得的利益没有法律根据
+    element_en: For damages on top of return — respondent knew or should have known
+    burden: claimant
+    evidence_hints: [催告记录, 得利人知情的证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十七条
+defenses:
+  - id: moral_duty
+    element_zh: 为履行道德义务进行的给付
+    element_en: Payment made to discharge a moral duty
+    burden: respondent
+    stage: arises
+    evidence_hints: [给付背景与双方关系]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十五条
+  - id: early_performance
+    element_zh: 债务到期之前的清偿
+    element_en: Performance of a debt before it fell due
+    burden: respondent
+    stage: arises
+    evidence_hints: [原债务及其履行期限]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十五条
+  - id: knowing_payment
+    element_zh: 明知无给付义务而进行的债务清偿
+    element_en: Payment made knowing there was no obligation
+    burden: respondent
+    stage: arises
+    evidence_hints: [付款人知情的证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十五条
+  - id: benefit_gone_in_good_faith
+    element_zh: 得利人不知道且不应当知道没有法律根据，取得的利益已经不存在
+    element_en: Good-faith recipient whose benefit no longer exists
+    burden: respondent
+    stage: extinguished
+    evidence_hints: [利益灭失或消耗的证据, 不知情的证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第九百八十六条
+  - id: limitation
+    element_zh: 诉讼时效已经届满（自知道或者应当知道不当得利事实及对方当事人之日起计算）
+    element_en: Limitation expired (runs from knowledge of the facts and the respondent)
+    burden: respondent
+    stage: exercisable
+    evidence_hints: [发现错误付款的时间, 知悉对方身份的时间]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条
+      - source: 《最高人民法院关于审理民事案件适用诉讼时效制度若干问题的规定》
+        pinpoint: 第六条

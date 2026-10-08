@@ -108,7 +108,7 @@ into `unresolved_cells` in the bundle.
 4. **Bundle.** Findings bullets are portfolio-level patterns ("7 of 9
    leases lack X [Doc3 第12条; …]"), not per-cell restatements. The
    `Sources` block lists each reviewed document once plus any external
-   authorities, in the general playbook §5 line format — this is what
+   authorities, in the bundle contract's `## Sources` line format — this is what
    `audit_citations` and the downstream cite-check gate see.
 
 ## 7. Scale and batching

@@ -16,13 +16,10 @@ the difference is where the directory is, not what it contains:
 Roots come from ``LEGAL_HELPER_SKILL_ROOTS`` (``os.pathsep``-separated) when
 set, otherwise this package followed by ``~/.claude/skills``. Discovery runs at
 import because :data:`SKILL_NAMES` is consumed at import by the tool registry
-and by ``run_skill``'s enum; set the variable before importing the package.
+and the planner; set the variable before importing the package.
 
-Nothing here hardcodes a skill name. The previous two allowlists — a tuple in
-this module and a separate ``Literal`` in ``tools/orchestrator.py`` — had
-already drifted apart: ``docx-redline`` and ``flowchart`` existed on disk and
-were absent from the dispatch enum, so the orchestrator could not reach its
-own diagram skill.
+Nothing here hardcodes a skill name: two hand-kept allowlists had drifted
+apart before, leaving skills on disk that nothing could dispatch.
 """
 
 from __future__ import annotations
@@ -79,6 +76,13 @@ def discover_skills() -> dict[str, Path]:
     An earlier root wins, so an in-tree skill can shadow an external one of
     the same name and a deployment cannot have a third party silently
     replace a legal methodology.
+
+    Directories are returned *resolved*. An external skill is best installed
+    as a symlink into a clone that keeps its ``.git`` (ppt-master lives in its
+    repository's ``skills/ppt-master/``), and every containment check
+    downstream compares fully resolved paths: an unresolved symlinked root
+    made ``run_skill_script`` refuse every one of the skill's own scripts as
+    "outside the skill directory".
     """
     found: dict[str, Path] = {}
     for root in skill_roots():
@@ -94,7 +98,10 @@ def discover_skills() -> dict[str, Path]:
             if entry.name in found:
                 continue
             if (entry / "SKILL.md").is_file():
-                found[entry.name] = entry
+                try:
+                    found[entry.name] = entry.resolve()
+                except OSError:
+                    continue
     return found
 
 
@@ -203,10 +210,6 @@ def _section_map(markdown: str) -> dict[str, str]:
     return sections
 
 
-def list_skill_sections(name: str) -> list[str]:
-    return list(_section_map(load_skill_body(name)).keys())
-
-
 def list_playbook_sections(path: Optional[Path] = None) -> list[str]:
     return list(_section_map(load_playbook(path)).keys())
 
@@ -222,10 +225,6 @@ def _find_section(markdown: str, heading: str) -> str:
         if wanted in normalized or normalized in wanted:
             return body
     return ""
-
-
-def load_skill_section(name: str, heading: str) -> str:
-    return _find_section(load_skill_body(name), heading)
 
 
 def load_playbook_section(heading: str, path: Optional[Path] = None) -> str:
@@ -273,9 +272,7 @@ __all__ = [
     "load_skill_text",
     "load_skill_frontmatter",
     "load_skill_body",
-    "list_skill_sections",
     "list_playbook_sections",
-    "load_skill_section",
     "load_playbook_section",
     "list_skills",
     "load_playbook",

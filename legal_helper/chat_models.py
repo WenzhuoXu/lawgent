@@ -16,6 +16,8 @@ class ChatSettings(BaseModel):
     provider: Literal["anthropic", "openai"]
     model: str
     reasoning_effort: str = "medium"
+    # "auto" sizes the answer from the router's complexity; a chat can pin one.
+    answer_length: Literal["auto", "brief", "focused", "full"] = "auto"
     skill_hint: Optional[str] = None
     enable_web_search: bool = True
     enable_web_fetch: bool = True
@@ -76,13 +78,6 @@ class ArtifactRecord(BaseModel):
     created_at: str
 
 
-class ChatMemorySummary(BaseModel):
-    chat_id: str
-    summary: str
-    updated_at: str
-    source_message_count: int = 0
-
-
 ProjectMemoryKind = Literal[
     "fact", "decision", "task", "open_question", "glossary", "artifact", "risk", "source"
 ]
@@ -141,15 +136,36 @@ class AgentTask(BaseModel):
     title: str
     task: str
     depends_on: list[str] = Field(default_factory=list)
+    # The plan issues this specialist owns (complex turns).
+    issue_ids: list[str] = Field(default_factory=list)
+
+
+class PlanIssue(BaseModel):
+    """One legal issue (争点) of a complex request, as the planner frames it.
+
+    Specialists work it element by element and the author walks the issues in
+    order. The issue list used to be overwritten with task titles during
+    normalisation, so the author never saw the issues at all.
+    """
+
+    id: str
+    issue: str
+    claim_basis: str = ""
+    elements: list[str] = Field(default_factory=list)
+    facts_needed: list[str] = Field(default_factory=list)
+    facts_assumed: list[str] = Field(default_factory=list)
+    jurisdiction: str = ""
+    evidence_surface: str = ""
 
 
 class WorkflowPlan(BaseModel):
     title: str
     user_language: str = "English"
     execution_mode: Literal["agent_workflow", "direct_answer", "clarify"] = "agent_workflow"
-    # Complexity tier sizes the workflow effort: "simple" → single fast pass,
-    # "standard" → one specialist + integration, "complex" → parallel
-    # multi-specialist decomposition (the country-launch / multi-section memo case).
+    # Complexity sizes the machinery: "simple" and "standard" are answered by
+    # one author in one tool-armed pass; "complex" is decomposed into issues and
+    # 2-3 parallel specialists, then integrated. It also sets the answer's
+    # default length tier.
     complexity: Literal["simple", "standard", "complex"] = "standard"
     direct_response: str = ""
     routing_reason: str = ""
@@ -160,15 +176,17 @@ class WorkflowPlan(BaseModel):
     # an unreported confidence must not be read as a confident one, so the gate
     # simply does not apply.
     intake_confidence: Optional[float] = None
-    artifact_format: Optional[Literal["pdf", "docx"]] = None  # legacy; ignored
     issue_decomposition: list[str] = Field(default_factory=list)
+    issues: list[PlanIssue] = Field(default_factory=list)
     agent_tasks: list[AgentTask] = Field(default_factory=list)
     integration_instructions: str = ""
-    citation_requirements: str = (
-        "Cite document/instrument plus pinpoint where available: article, annex, "
-        "standard/recommended practice, section, paragraph, page, clause, or "
-        "state `pinpoint unavailable`."
-    )
+    # Facts the user gave that contradict each other. Models compute straight
+    # through contradictory facts most of the time; naming them makes the
+    # answer say which reading it adopts.
+    fact_conflicts: list[str] = Field(default_factory=list)
+    # The answer's citation format comes from `answer_contract`; this carries
+    # only a planner's request-specific note, if any.
+    citation_requirements: str = ""
 
 
 class CitationAuditResult(BaseModel):

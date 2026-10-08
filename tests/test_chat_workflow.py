@@ -229,10 +229,13 @@ def test_workflow_builds_primary_and_low_effort_models(tmp_path, monkeypatch):
 
     WorkflowExecutor(settings=settings)
 
-    # Primary, planner (fast), cite-check (fast). The integration provider
-    # reuses the primary when _integration_settings leaves settings unchanged.
+    # Primary, then one provider per role from `Settings.role_profiles`:
+    # router, decomposer and cite-check on the fast tier. The integrator
+    # (main tier, effort capped at medium) reuses the primary because the cap
+    # leaves this chat's medium effort unchanged.
     assert calls == [
         (False, "claude-sonnet-4-6"),
+        (True, "claude-haiku-4-5"),
         (True, "claude-haiku-4-5"),
         (True, "claude-haiku-4-5"),
     ]
@@ -245,6 +248,7 @@ def test_llm_planner_accepts_variable_agent_count(tmp_path):
         {
           "title": "Complex passport workflow",
           "user_language": "Chinese",
+          "complexity": "complex",
           "issue_decomposition": ["treaty", "operations", "risk", "drafting"],
           "agent_tasks": [
             {"id": "task_1", "skill_name": "brief", "title": "Treaty", "task": "Research treaty sources.", "depends_on": []},
@@ -259,14 +263,15 @@ def test_llm_planner_accepts_variable_agent_count(tmp_path):
     )
     plan = WorkflowExecutor(settings=settings, provider=provider).plan("护照撕毁复杂问题")
     assert plan.execution_mode == "agent_workflow"
-    # Plans larger than MAX_SPECIALISTS (3) are capped: task_4 is dropped and
-    # the survivors keep their ids/deps.
+    # Plans larger than MAX_SPECIALISTS (3) are capped by merging, not by
+    # dropping: task_4's mandate (and its dependency on task_2) moves into a
+    # surviving specialist.
     assert len(plan.agent_tasks) == 3
     deps_by_id = {task.id: task.depends_on for task in plan.agent_tasks}
-    assert deps_by_id["task_1"] == []
+    assert "task_4" not in deps_by_id
+    assert any("Draft SOP." in task.task for task in plan.agent_tasks)
     assert deps_by_id["task_2"] == []
     assert deps_by_id["task_3"] == []
-    assert "task_4" not in deps_by_id
 
 
 def test_planner_removes_redundant_final_synthesis_task_and_preserves_deps(tmp_path):
@@ -276,6 +281,7 @@ def test_planner_removes_redundant_final_synthesis_task_and_preserves_deps(tmp_p
         {
           "title": "Passport workflow",
           "user_language": "Chinese",
+          "complexity": "complex",
           "issue_decomposition": ["sources", "ops", "final"],
           "agent_tasks": [
             {"id": "task_1", "skill_name": "brief", "title": "Sources", "task": "Research sources.", "depends_on": []},
@@ -310,6 +316,7 @@ def test_planner_removes_observed_synthesis_and_qc_tasks(tmp_path):
         {
           "title": "Passport tearing onboard",
           "user_language": "Chinese",
+          "complexity": "complex",
           "issue_decomposition": ["sources", "authority", "ops", "risk", "qc", "draft"],
           "agent_tasks": [
             {"id": "task_1", "skill_name": "brief", "title": "International source mapping on travel documents", "task": "Research relevant instruments.", "depends_on": []},
@@ -327,53 +334,79 @@ def test_planner_removes_observed_synthesis_and_qc_tasks(tmp_path):
     plan = WorkflowExecutor(settings=settings, provider=provider).plan("旅客机上撕毁护照怎么办？")
     ids = [task.id for task in plan.agent_tasks]
     # task_5 (qc) and task_6 (synthesis) are stripped, then the
-    # MAX_SPECIALISTS=3 cap drops task_4.
+    # MAX_SPECIALISTS=3 cap merges task_4 into a survivor rather than dropping it.
     assert ids == ["task_1", "task_2", "task_3"]
     assert all(task.depends_on == [] for task in plan.agent_tasks)
+    assert any("Assess carrier risk." in task.task for task in plan.agent_tasks)
     assert "Final synthesis requirements moved" in plan.integration_instructions
 
 
-def test_router_replans_generic_claude_task_placeholders(tmp_path):
+def test_router_placeholder_tasks_become_one_task_from_the_request(tmp_path):
+    """A standard turn is planned by the router alone; a placeholder task body
+    is replaced by the request itself instead of paying for a second call."""
     settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
     bad_router_plan = """
     {
       "title": "Passport tearing onboard",
-      "user_language": "Chinese",
       "execution_mode": "agent_workflow",
+      "complexity": "standard",
       "routing_reason": "needs research",
-      "issue_decomposition": ["Task 1", "Task 2"],
       "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "Task 1", "task": "source_verification", "depends_on": []},
+        {"id": "task_1", "skill_name": "compliance-check", "title": "Task 1", "task": "source_verification", "depends_on": []},
         {"id": "task_2", "skill_name": "brief", "title": "Task 2", "task": "comparative_legal_research", "depends_on": []}
       ],
-      "integration_instructions": "Integrate.",
-      "citation_requirements": "Use citations."
+      "integration_instructions": "Integrate."
     }
     """
-    good_planner_plan = """
-    {
-      "title": "Passport tearing onboard",
-      "user_language": "Chinese",
-      "execution_mode": "agent_workflow",
-      "routing_reason": "needs research",
-      "issue_decomposition": ["treaty", "operations"],
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "Treaty and ICAO source research", "task": "Research Tokyo Convention, Chicago Convention Annex 9, and ICAO/IATA source support for passenger destruction of travel documents on board. Answer in English with pinpoint citations.", "depends_on": []},
-        {"id": "task_2", "skill_name": "compliance-check", "title": "Operational compliance workflow", "task": "Analyze airline and crew onboard response, reporting, evidence preservation, handoff, and limits. Answer in English with source support.", "depends_on": []}
-      ],
-      "integration_instructions": "Integrate in Chinese.",
-      "citation_requirements": "Use pinpoint citations."
-    }
-    """
-    provider = SequentialPlannerProvider([bad_router_plan, good_planner_plan])
+    provider = SequentialPlannerProvider([bad_router_plan])
 
     plan = WorkflowExecutor(settings=settings, provider=provider).plan("旅客机上撕毁护照怎么办？")
 
+    assert provider.run_calls == 1
+    assert len(plan.agent_tasks) == 1
+    assert plan.agent_tasks[0].skill_name == "compliance-check"
+    assert plan.agent_tasks[0].task == "旅客机上撕毁护照怎么办？"
+    assert plan.user_language == "Chinese"
+
+
+def test_complex_turn_is_decomposed_by_a_second_call(tmp_path):
+    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
+    router_plan = """
+    {"title": "Route launch", "execution_mode": "agent_workflow", "complexity": "complex",
+     "routing_reason": "multi-body memo", "agent_tasks": [],
+     "integration_instructions": "Cover establishment, tax and traffic rights.",
+     "fact_conflicts": ["launch date given as both May and June"]}
+    """
+    planner_plan = """
+    {
+      "title": "Route launch",
+      "issues": [
+        {"id": "I1", "issue": "Branch or subsidiary", "claim_basis": "company law", "jurisdiction": "ET"},
+        {"id": "I2", "issue": "Traffic rights", "claim_basis": "bilateral agreement", "jurisdiction": "CN"}
+      ],
+      "agent_tasks": [
+        {"id": "task_1", "skill_name": "brief", "title": "Establishment", "issue_ids": ["I1"], "task": "Research establishment.\\ncoverage: establishment", "depends_on": []},
+        {"id": "task_2", "skill_name": "compliance-check", "title": "Traffic rights", "issue_ids": ["I2"], "task": "Research traffic rights。coverage：traffic-rights", "depends_on": []}
+      ]
+    }
+    """
+    provider = SequentialPlannerProvider([router_plan, planner_plan])
+
+    plan = WorkflowExecutor(settings=settings, provider=provider).plan(
+        "A carrier plans a new international route: establishment, tax and traffic rights?"
+    )
+
     assert provider.run_calls == 2
-    assert [task.title for task in plan.agent_tasks] == [
-        "Treaty and ICAO source research",
-        "Operational compliance workflow",
-    ]
+    assert plan.complexity == "complex"
+    assert [task.title for task in plan.agent_tasks] == ["Establishment", "Traffic rights"]
+    # The issues survive normalisation; task titles no longer overwrite them.
+    assert plan.issue_decomposition == ["Branch or subsidiary", "Traffic rights"]
+    assert [issue.id for issue in plan.issues] == ["I1", "I2"]
+    assert plan.agent_tasks[1].issue_ids == ["I2"]
+    # The router's coverage note and fact conflicts carry into the plan.
+    assert "establishment" in plan.integration_instructions
+    assert plan.fact_conflicts == ["launch date given as both May and June"]
+    assert plan.user_language == "English"
 
 
 def test_stream_forwards_transient_subagent_previews_not_answer_text(tmp_path, monkeypatch):
@@ -382,6 +415,7 @@ def test_stream_forwards_transient_subagent_previews_not_answer_text(tmp_path, m
     {
       "title": "Parallel workflow",
       "user_language": "English",
+      "complexity": "complex",
       "issue_decomposition": ["one", "two"],
       "agent_tasks": [
         {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
@@ -429,6 +463,7 @@ def test_stream_limits_parallel_subagents_to_configured_cap(tmp_path, monkeypatc
     {
       "title": "Throttled workflow",
       "user_language": "English",
+      "complexity": "complex",
       "issue_decomposition": ["one", "two"],
       "agent_tasks": [
         {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
@@ -471,6 +506,7 @@ def test_stream_reduces_concurrency_and_retries_after_rate_limit(tmp_path, monke
     {
       "title": "Adaptive workflow",
       "user_language": "English",
+      "complexity": "complex",
       "issue_decomposition": ["one", "two"],
       "agent_tasks": [
         {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
@@ -660,7 +696,9 @@ def test_router_failure_nonlegal_search_request_uses_single_general_task(tmp_pat
     )
 
     assert plan.execution_mode == "agent_workflow"
-    assert provider.run_calls == 2
+    # A failed router falls back to one single-pass task, without a second
+    # planning call.
+    assert provider.run_calls == 1
     assert [task.skill_name for task in plan.agent_tasks] == [GENERAL_TASK_SKILL]
     assert plan.agent_tasks[0].depends_on == []
     assert plan.agent_tasks[0].title == "General answer"
@@ -713,7 +751,7 @@ def test_stream_general_task_is_single_threaded_and_search_capable(tmp_path, mon
     assert "write_pdf" in tool_names
     assert "write_docx" in tool_names
     assert "write_xlsx" in tool_names
-    assert "write_pptx" in tool_names
+    assert "create_deck" in tool_names
     assert "inspect_pptx" in tool_names
     assert "render_pptx_slides" in tool_names
     assert "general-purpose assistant" in direct_call["system"]
@@ -754,7 +792,7 @@ def test_final_synthesis_has_document_io_tools(tmp_path, monkeypatch):
         "write_pdf",
         "write_docx",
         "write_xlsx",
-        "write_pptx",
+        "create_deck",
         "inspect_xlsx",
         "edit_xlsx_cells",
         "inspect_pptx",
@@ -1238,6 +1276,7 @@ def test_normalize_plan_breaks_dependency_cycles_but_keeps_downstream_edges(tmp_
           "title": "Cyclic plan",
           "user_language": "English",
           "execution_mode": "agent_workflow",
+          "complexity": "complex",
           "routing_reason": "multi-issue",
           "issue_decomposition": ["a", "b", "c"],
           "agent_tasks": [
@@ -1290,6 +1329,7 @@ _TWO_TASK_PLAN_JSON = """
 {
   "title": "Parallel workflow",
   "user_language": "English",
+  "complexity": "complex",
   "issue_decomposition": ["one", "two"],
   "agent_tasks": [
     {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
@@ -1326,8 +1366,10 @@ def test_stream_degrades_to_completed_bundles_when_one_specialist_fails(tmp_path
     assert events[-1].data["text"] == "FINAL ONLY"
     integration = provider.integration_messages[-1]
     assert "SUB AGENT OUTPUT: Task one." in integration
-    # Failed coverage is declared to the integration turn, not silently dropped.
-    assert "SPECIALIST FAILURES" in integration
+    # Failed coverage is declared to the integration turn as an open gap, not
+    # silently dropped.
+    assert "Open gaps" in integration
+    assert "the specialist FAILED — connector exploded" in integration
     assert "bundle:task_2" not in integration
 
 
@@ -1379,7 +1421,7 @@ def test_stream_degrades_after_exhausted_rate_limit_instead_of_aborting(tmp_path
     assert events[-1].data["text"] == "FINAL ONLY"
     integration = provider.integration_messages[-1]
     assert "SUB AGENT OUTPUT: Task one." in integration
-    assert "SPECIALIST FAILURES" in integration
+    assert "Open gaps" in integration and "the specialist FAILED" in integration
 
 
 # ---------------------------------------------------------------------------
@@ -1401,19 +1443,27 @@ def test_build_context_block_includes_active_project_context(tmp_path):
     assert _build_context_block("", []) == ""
 
 
-def test_skill_agent_system_prompt_includes_active_project_context(tmp_path):
+def test_project_context_reaches_specialists_through_the_digest_not_the_system_prompt(tmp_path):
+    """The project block lives in the cached request prefix (the chat digest);
+    in the system prompt it invalidated the system cache on every
+    project-memory update."""
     settings = load_settings(refresh=True)
     from legal_helper.agent import SkillAgent
     from legal_helper.projects import ProjectStore, active_project
+    from legal_helper.workflow import _build_context_block
 
     project = ProjectStore(settings).create_project(
         "Route launch memo", brief="Jurisdiction pin: PRC law first, US comparative."
     )
-    agent = SkillAgent("brief", PlannerProvider("{}"), settings)
+    provider = CapturingStreamProvider("{}", final_text="bundle")
+    agent = SkillAgent("brief", provider, settings)
     with active_project(project.id):
-        prompt = agent._system_prompt()
-    assert "Jurisdiction pin: PRC law first" in prompt
-    assert "Jurisdiction pin" not in agent._system_prompt()
+        assert "Jurisdiction pin" not in agent._system_prompt()
+        digest = _build_context_block("", [])
+        list(agent.stream("Research the question.", cache_prefix=digest))
+    message = provider.stream_calls[-1]["message"]
+    assert isinstance(message, list)
+    assert "Jurisdiction pin: PRC law first" in json.dumps(message, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1586,3 +1636,47 @@ def test_router_prompt_names_the_attachment_constraint(tmp_path):
     provider2 = CapturingPlannerProvider(_DIRECT_PLAN_JSON)
     WorkflowExecutor(settings=settings, provider=provider2).plan("check this")
     assert not any("ATTACHMENTS:" in p for p in provider2.prompts)
+
+
+def test_author_and_deck_rows_of_the_role_table_take_effect(tmp_path, monkeypatch):
+    """The table listed author and deck rows that nothing read; an override now applies."""
+    settings = load_settings(refresh=True).model_copy(
+        update={
+            "provider": "openai",
+            "openai_reasoning_effort": "medium",
+            "outputs_dir": tmp_path / "out",
+            "role_profiles": {"author": {"tier": "main", "effort": "high"}, "deck": {"tier": "main", "effort": "low"}},
+        }
+    )
+    built: list[str] = []
+
+    def fake_build_provider(settings_arg, *, fast=False):
+        built.append(settings_arg.openai_reasoning_effort)
+        return PlannerProvider("{}")
+
+    import legal_helper.workflow as workflow_mod
+
+    monkeypatch.setattr(workflow_mod, "build_provider", fake_build_provider)
+    executor = WorkflowExecutor(settings=settings)
+    assert executor.author_provider is not executor.provider
+    assert built[-1] == "high"
+
+    import legal_helper.agent as agent_mod
+    import legal_helper.providers as providers_mod
+    from legal_helper.tools import decks
+
+    seen = {}
+
+    class FakeAgent:
+        def __init__(self, skill, provider, agent_settings):
+            seen["effort"] = agent_settings.openai_reasoning_effort
+            seen["outputs"] = agent_settings.outputs_dir
+
+        def execute(self, task):
+            return "done"
+
+    monkeypatch.setattr(agent_mod, "SkillAgent", FakeAgent)
+    monkeypatch.setattr(providers_mod, "build_provider", fake_build_provider)
+    deck_settings = settings.model_copy(update={"outputs_dir": tmp_path / "out" / "_decks" / "d1"})
+    assert decks.run_deck_agent("task", deck_settings) == "done"
+    assert seen == {"effort": "low", "outputs": tmp_path / "out" / "_decks" / "d1"}

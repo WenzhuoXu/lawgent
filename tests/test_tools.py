@@ -16,18 +16,12 @@ from legal_helper.tools import (
     inspect_xlsx,
     inspect_xlsx_range,
     legal_source_search,
-    list_skill_sections,
-    orchestrator_tools,
     read_document,
-    read_playbook_section,
-    read_skill_section,
     render_pptx_slides,
-    run_skill,
     skill_tools,
     skill_tools_for_task,
     write_docx,
     write_pdf,
-    write_pptx,
     write_xlsx,
 )
 
@@ -47,8 +41,10 @@ def test_tool_input_schemas_have_required_fields():
     schema = write_xlsx.input_schema
     assert set(schema["required"]) >= {"filename", "sheets"}
 
-    schema = write_pptx.input_schema
-    assert set(schema["required"]) >= {"filename", "title", "slides"}
+    from legal_helper.tools import create_deck
+
+    schema = create_deck.input_schema
+    assert set(schema["required"]) >= {"brief", "title"}
 
     schema = inspect_xlsx.input_schema
     assert set(schema["required"]) >= {"path"}
@@ -76,14 +72,6 @@ def test_tool_input_schemas_have_required_fields():
 
     schema = read_document.input_schema
     assert set(schema["required"]) >= {"path"}
-
-    schema = run_skill.input_schema
-    assert set(schema["required"]) >= {"skill_name", "task"}
-    # The skill_name enum should be present
-    skill_prop = schema["properties"]["skill_name"]
-    enum = skill_prop.get("enum") or skill_prop.get("anyOf", [{}])[0].get("enum") or []
-    if enum:
-        assert "review-contract" in enum
 
     schema = legal_source_search.input_schema
     assert set(schema["required"]) >= {"source", "query"}
@@ -290,7 +278,7 @@ def test_inspect_and_edit_xlsx_cells(tmp_path, monkeypatch):
     assert "待落实建议" in inspected
     assert "row_count" in inspected
 
-    edited = edit_xlsx_cells.call(
+    edited_raw = edit_xlsx_cells.call(
         {
             "source_path": source,
             "filename": "edited.xlsx",
@@ -303,6 +291,11 @@ def test_inspect_and_edit_xlsx_cells(tmp_path, monkeypatch):
             ],
         }
     )
+    edited_payload = json.loads(edited_raw)
+    edited = edited_payload["path"]
+    assert edited_payload["cells_written"] == 1
+    # The edit's own output is not a "newer version" to warn about.
+    assert "warning" not in edited_payload
     text = read_document.call({"path": edited})
     assert "建议重新修订医生志愿者风险责任表述" in text
     assert "待落实建议" in text
@@ -394,81 +387,106 @@ def test_xlsx_range_diff_and_checked_edit(tmp_path, monkeypatch):
     assert "Precondition failed" in stale
 
 
-def test_write_inspect_and_edit_pptx(tmp_path, monkeypatch):
-    from legal_helper.documents.writers.pptx import pptxgenjs_available
+def _user_deck(path, *, grouped: bool = False):
+    """A deck as a user uploads it, or as ppt-master exports it (grouped text)."""
+    from pptx import Presentation
+    from pptx.util import Inches
 
-    if not pptxgenjs_available():
-        pytest.skip("pptxgenjs renderer unavailable; run `npm i` in the repo root")
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+    for title, body, notes in (
+        ("Issue", "Facts\nLaw\nRecommendation", "Discuss exposure and next steps."),
+        ("Render", "Check", ""),
+    ):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        container = slide.shapes.add_group_shape().shapes if grouped else slide.shapes
+        container.add_textbox(Inches(0.6), Inches(0.4), Inches(11), Inches(0.9)).text_frame.text = title
+        body_box = container.add_textbox(Inches(0.6), Inches(1.6), Inches(11), Inches(3))
+        body_box.name = f"Body {title}"
+        body_box.text_frame.text = body
+        if notes:
+            slide.notes_slide.notes_text_frame.text = notes
+    path.parent.mkdir(parents=True, exist_ok=True)
+    prs.save(str(path))
+    return str(path)
+
+
+@pytest.mark.parametrize("grouped", [False, True])
+def test_inspect_and_edit_an_existing_pptx(tmp_path, monkeypatch, grouped):
     monkeypatch.setenv("LEGAL_HELPER_OUTPUTS_DIR", str(tmp_path / "out"))
     from legal_helper import config as cfg
 
     cfg._CACHED = None
-    source = write_pptx.call(
-        {
-            "filename": "deck.pptx",
-            "title": "Legal Briefing",
-            "slides": [
-                {
-                    "title": "Issue",
-                    "bullets": ["Facts", "Law", "Recommendation"],
-                    "speaker_notes": "Discuss exposure and next steps.",
-                }
-            ],
-        }
-    )
+    source = _user_deck(tmp_path / "in" / "deck.pptx", grouped=grouped)
     inspected = inspect_pptx.call({"path": source, "include_text_runs": True})
     assert "Legal Briefing" not in inspected
     assert "Issue" in inspected
     assert "Discuss exposure" in inspected
 
-    edited = edit_pptx_text.call(
-        {
-            "source_path": source,
-            "filename": "edited_deck.pptx",
-            "replacements": [{"slide": 1, "find": "Recommendation", "replace": "Action Plan"}],
-        }
+    result = json.loads(
+        edit_pptx_text.call(
+            {
+                "source_path": source,
+                "filename": "edited_deck.pptx",
+                "replacements": [
+                    {"slide": 1, "find": "Recommendation", "replace": "Action Plan"},
+                    {"slide": 1, "find": "No such text", "replace": "x"},
+                ],
+            }
+        )
     )
+    edited = result["path"]
+    # A find that matched nothing is reported, not hidden behind a bare path.
+    assert result["not_found"] == ["slide 1: No such text"]
     text = read_document.call({"path": edited})
     assert "Action Plan" in text
     assert "Recommendation" not in text
+
+    # A shape is addressable by name even inside a group, which is where a
+    # ppt-master deck keeps all of its text.
+    from legal_helper.tools import reshape_pptx
+
+    reshaped = json.loads(
+        reshape_pptx.call(
+            {
+                "source_path": edited,
+                "filename": "reshaped_deck.pptx",
+                "operations": [{"op": "set_shape_text", "slide": 2, "shape_name": "Body Render", "text": "Verified"}],
+            }
+        )
+    )
+    after = json.loads(inspect_pptx.call({"path": reshaped["path"]}))
+    assert "Verified" in after["slides"][1]["text_runs"]
+    if grouped:
+        assert after["slides"][0]["group_count"] == 1
 
 
 def test_render_pptx_slides(tmp_path, monkeypatch):
     import shutil
 
-    from legal_helper.documents.writers.pptx import pptxgenjs_available
-
     if not shutil.which("soffice") or not shutil.which("pdftoppm"):
         pytest.skip("soffice and pdftoppm are required for slide rendering")
-    if not pptxgenjs_available():
-        pytest.skip("pptxgenjs renderer unavailable; run `npm i` in the repo root")
 
     monkeypatch.setenv("LEGAL_HELPER_OUTPUTS_DIR", str(tmp_path / "out"))
     from legal_helper import config as cfg
 
     cfg._CACHED = None
-    source = write_pptx.call(
-        {
-            "filename": "render_me.pptx",
-            "title": "Render Me",
-            "slides": [{"title": "Render", "bullets": ["Check"], "speaker_notes": ""}],
-        }
-    )
+    source = _user_deck(tmp_path / "in" / "render_me.pptx")
     raw = render_pptx_slides.call({"path": source, "filename_prefix": "rendered", "dpi": 72})
     payload = json.loads(raw)
     assert payload["count"] >= 1
     assert payload["images"][0].endswith(".jpg")
 
 
-def test_orchestrator_and_skill_tool_lists():
-    orch = orchestrator_tools()
-    names = {getattr(t, "name", None) for t in orch}
+def test_author_and_skill_tool_lists():
+    from legal_helper.workflow import _document_io_tools
+
+    names = {getattr(t, "name", None) for t in _document_io_tools()}
     assert {
-        "run_skill",
         "write_docx",
         "write_pdf",
         "write_xlsx",
-        "write_pptx",
+        "create_deck",
         "inspect_xlsx",
         "inspect_xlsx_range",
         "edit_xlsx_cells",
@@ -482,14 +500,16 @@ def test_orchestrator_and_skill_tool_lists():
 
     rc_tools = skill_tools("review-contract")
     rc_names = {getattr(t, "name", None) for t in rc_tools}
-    assert {"list_skill_sections", "read_skill_section", "read_playbook_section"} <= rc_names
+    # SKILL.md and the playbook are inlined; only the references tail is fetched.
+    assert {"list_skill_references", "read_skill_reference", "compute_period"} <= rc_names
+    assert not ({"list_skill_sections", "read_skill_section", "read_playbook_section"} & rc_names)
     assert "legal_source_search" in rc_names
     assert {
         "read_document",
         "write_docx",
         "write_pdf",
         "write_xlsx",
-        "write_pptx",
+        "create_deck",
         "inspect_xlsx",
         "inspect_xlsx_range",
         "edit_xlsx_cells",
@@ -513,7 +533,7 @@ def test_orchestrator_and_skill_tool_lists():
         "write_docx",
         "write_pdf",
         "write_xlsx",
-        "write_pptx",
+        "create_deck",
         "inspect_xlsx",
         "inspect_xlsx_range",
         "edit_xlsx_cells",
@@ -533,7 +553,7 @@ def test_orchestrator_and_skill_tool_lists():
         "write_docx",
         "write_pdf",
         "write_xlsx",
-        "write_pptx",
+        "create_deck",
         "inspect_xlsx",
         "inspect_xlsx_range",
         "edit_xlsx_cells",
@@ -585,15 +605,6 @@ def test_pkulaw_surfaces_as_primary_prc_source(monkeypatch):
     assert not missing, f"PKULaw tools missing from cite-check surface: {missing}"
 
 
-def test_run_skill_enum_includes_cite_check():
-    """Regression for the orchestrator dispatch surface — cite-check must be
-    a routable skill_name, not just a SKILL.md file on disk."""
-    schema = run_skill.input_schema
-    skill_prop = schema["properties"]["skill_name"]
-    enum = skill_prop.get("enum") or skill_prop.get("anyOf", [{}])[0].get("enum") or []
-    assert "cite-check" in enum, f"cite-check missing from run_skill enum: {enum}"
-
-
 def test_allowed_connectors_frontmatter_filters_connector_surface():
     """`allowed_connectors` in SKILL.md frontmatter must narrow the connector
     function-tool list. signature-request declares
@@ -617,23 +628,15 @@ def test_allowed_connectors_frontmatter_filters_connector_surface():
     assert "federal_register_search" not in names
 
 
-def test_skill_resource_tools_read_current_agent_sections():
+def test_skill_reference_tools_read_the_current_agents_references():
     from legal_helper.logging_setup import agent_name_var
+    from legal_helper.tools import list_skill_references, read_skill_reference
 
-    token = agent_name_var.set("vendor-check")
+    token = agent_name_var.set("litigation-analysis")
     try:
-        raw = list_skill_sections.call({"include_playbook": True})
-        payload = json.loads(raw)
-        assert payload["skill_name"] == "vendor-check"
-        assert "skill_sections" in payload
-        assert "playbook_sections" in payload
-
-        section = read_skill_section.call({"heading": "Workflow"})
-        # generic vendor-check skill has a Workflow section; it no longer
-        # mentions "aviation" — the aviation overlay does.
-        assert section.lower().startswith("## workflow")
-
-        playbook = read_playbook_section.call({"heading": "Citation Standard"})
-        assert "citation" in playbook.lower()
+        payload = json.loads(list_skill_references.call({}))
+        assert "references/methodology.md" in json.dumps(payload)
+        body = read_skill_reference.call({"path": "references/methodology.md"})
+        assert "诉讼时效" in body
     finally:
         agent_name_var.reset(token)

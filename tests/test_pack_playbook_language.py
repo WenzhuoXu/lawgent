@@ -85,16 +85,22 @@ def test_skill_agent_prompt_without_pack_has_no_playbook_hint():
     assert "AVN52E" not in sp
 
 
-def test_parent_addendum_lists_pack_playbooks():
+class _NullProvider:
+    name = "mock"
+    model = "mock"
+
+
+def test_parent_addendum_inlines_active_pack_playbook_and_sources():
     from legal_helper.agent import _build_parent_addendum
 
     addendum = _build_parent_addendum(_settings(["aviation"]))
-    assert "Pack playbooks" in addendum
-    assert AVIATION_PLAYBOOK_REL in addendum
-    assert "read_document" in addendum
+    assert "`aviation` pack playbook" in addendum
+    assert "`aviation` pack — research sources" in addendum
+    assert "faa_title14_search" in addendum
 
     no_pack = _build_parent_addendum(_settings([]))
-    assert "Pack playbooks" not in no_pack
+    assert "pack playbook" not in no_pack
+    assert "faa_title14_search" not in no_pack
 
 
 def test_pack_playbook_section_index_numbered_and_compact():
@@ -112,20 +118,23 @@ def test_pack_playbook_section_index_numbered_and_compact():
 # --- language policy: internal language free per material --------------------
 
 
-def test_parent_prompt_language_contract_relaxed():
-    from legal_helper.agent import _PARENT_PROMPT_BODY
+def test_author_prompt_language_contract_relaxed():
+    from legal_helper.answer_contract import author_tail
+    from legal_helper.authoring import author_system_prompt
 
-    body = " ".join(_PARENT_PROMPT_BODY.split())
+    body = " ".join(author_system_prompt(_settings([])).split())
     assert "must be written in English" not in body
     assert "English only" not in body
-    assert "whichever language fits" in body
-    # User-facing convention unchanged.
-    assert "Default user-facing output to Chinese" in body
+    # Internal work may use whichever language fits; the answer's language is
+    # set per turn in the request tail.
+    assert "whichever language best fits the material" in body
+    assert "Answer language: Chinese." in author_tail(user_language="Chinese", tier="brief")
 
 
 def test_sub_agent_contract_relaxed_but_structurally_parseable():
-    from legal_helper.agent import _SUB_AGENT_LANGUAGE_AND_VERIFICATION_PROMPT as p
+    from legal_helper.agent import SkillAgent
 
+    p = " ".join(SkillAgent("brief", _NullProvider(), _settings([]))._system_prompt().split())
     assert "Work in English only" not in p
     assert "Any Chinese (or other non-English) output" not in p
     # Structural headings stay literal for _has_findings/_has_sources parsing.
@@ -146,9 +155,7 @@ def test_decomposition_prompt_allows_material_fit_language(tmp_path):
     )
     prompt = provider.prompts[0]
     assert "ONLY working language" not in prompt
-    assert "whichever language fits the material" in prompt
-    # `user_language` is still the final-answer language signal.
-    assert "user_language" in prompt
+    assert "whichever language fits the sources" in prompt
     # Quotes-of-sources convention preserved.
     assert "original language" in prompt
 

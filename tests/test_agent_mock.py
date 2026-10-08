@@ -1,177 +1,137 @@
-"""Full orchestrator + sub-agent run using a mock provider.
+"""A complex turn end to end through the workflow executor with a mock provider.
 
-The mock scripts:
-  Turn 1 (orchestrator): call run_skill("review-contract", ...)
-  Turn 2 (review-contract sub-agent): call write_docx(...)
-  Turn 3 (sub-agent): return final review text
+The mock scripts every role by its system prompt:
+  - router: a complex plan; decomposer: two parallel specialists
+  - review-contract specialist: calls write_docx, returns its bundle
+  - legal-risk-assessment specialist: returns its bundle
+  - integrator: writes the final answer from the bundles
 
 We then assert:
-  - the artifact .docx exists
-  - JSONL log records exist for both the orchestrator and the sub-agent
-  - the parent + sub-agent log records share the right parent_run_id / run_id
+  - the artifact .docx exists and the final answer names it
+  - JSONL log records exist for both the orchestrator and the specialist
+  - the specialist's records carry the orchestrator's run_id as parent
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Optional
+from typing import Any, Iterator
 
-from legal_helper.agent import OrchestratorAgent
 from legal_helper.config import load_settings
 from legal_helper.logging_setup import jsonl_path, log_turn, setup_logging
 from legal_helper.providers import RunResult, StreamEvent
-from legal_helper.providers.base import Message, Tool, ToolCallRecord
+
+_PLAN = json.dumps(
+    {
+        "title": "Lease review",
+        "execution_mode": "agent_workflow",
+        "complexity": "complex",
+        "routing_reason": "contract review plus risk ranking",
+        "issues": [
+            {"id": "I1", "issue": "Deviations from the leasing playbook"},
+            {"id": "I2", "issue": "Exposure ranking"},
+        ],
+        "agent_tasks": [
+            {
+                "id": "task_1",
+                "skill_name": "review-contract",
+                "title": "Clause review",
+                "issue_ids": ["I1"],
+                "task": "Review the lease clause by clause and write the redline docx.\ncoverage: clauses",
+                "depends_on": [],
+            },
+            {
+                "id": "task_2",
+                "skill_name": "legal-risk-assessment",
+                "title": "Risk ranking",
+                "issue_ids": ["I2"],
+                "task": "Rank the exposure.\ncoverage: exposure",
+                "depends_on": [],
+            },
+        ],
+        "integration_instructions": "Lead with the two flags.",
+    }
+)
 
 
 class MockProvider:
-    """Mock provider whose responses are scripted by an agent role.
-
-    The orchestrator's system prompt mentions "orchestrator"; the sub-agent's
-    system prompt is the SKILL.md (begins with "---\\nname: ...").  We branch
-    on that.
-    """
-
     name = "mock"
+    model = "mock-model"
     supports_hosted_web_search = False
     supports_file_search = False
     supports_structured_outputs = False
-    model = "mock-model"
 
     def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
+        self.artifact: str | None = None
+        self.bundles_seen: str = ""
 
     def run(self, system, messages, tools=(), *, max_iterations=None, structured_output=None):
-        return self.tool_runner(system, messages, tools, max_iterations=max_iterations or 1)
+        return RunResult(text=_PLAN, provider=self.name, model=self.model)
 
-    def stream(self, *args, **kwargs) -> Iterator[StreamEvent]:
-        result = self.run(*args, **kwargs)
-        yield StreamEvent("delta", {"text": result.text})
-        yield StreamEvent("done", {"text": result.text})
+    def tool_runner(self, *args, **kwargs):
+        return self.run(*args, **kwargs)
 
-    def tool_runner(
-        self,
-        system: str,
-        messages: list[Message],
-        tools: Iterable[Tool],
-        *,
-        max_iterations: int,
-        structured_output: Optional[type] = None,
-    ) -> RunResult:
+    def stream(self, system, messages, tools=(), *, max_iterations=None, **_: Any) -> Iterator[StreamEvent]:
         tools_by_name = {getattr(t, "name", None): t for t in tools}
-        self.calls.append({"system_head": system[:80], "tool_names": list(tools_by_name.keys())})
-
-        # Orchestrator side: dispatch to the review-contract sub-agent.
-        if "legal AI helper orchestrator" in system or "aviation legal-helper orchestrator" in system:
-            run_skill_tool = tools_by_name["run_skill"]
-            sub_text = run_skill_tool.call(
+        content = json.dumps(messages[-1]["content"], ensure_ascii=False)
+        if "name: review-contract" in system:
+            self.artifact = tools_by_name["write_docx"].call(
                 {
-                    "skill_name": "review-contract",
-                    "task": (
-                        "Review the sample aircraft lease against relevant skill/playbook "
-                        "sections and produce a docx redline deliverable."
-                    ),
+                    "filename": "mock_review.docx",
+                    "title": "Mock Lease Review",
+                    "sections": [{"heading": "Summary", "body_markdown": "Two deviations flagged."}],
                 }
             )
-            log_turn(
-                {
-                    "provider": self.name,
-                    "model": self.model,
-                    "tool_calls": [{"name": "run_skill", "result_preview": sub_text[:80]}],
-                    "response_content": sub_text,
-                    "phase": "orchestrator",
-                }
+            text = (
+                "## Findings\n- Liability minimum below playbook "
+                f"[Lease, cl. 12]({self.artifact}) (label: contract)\n\n"
+                "## Out of scope\n- none\n\n## Sources\n- Lease — local — supports #1"
             )
-            return RunResult(
-                text=sub_text,
-                provider=self.name,
-                model=self.model,
-                tool_calls=[
-                    ToolCallRecord(name="run_skill", arguments={"skill_name": "review-contract"})
-                ],
-            )
-
-        # Sub-agent side (a compact skill manifest with task-scoped tools).
-        write_docx_tool = tools_by_name["write_docx"]
-        artifact = write_docx_tool.call(
-            {
-                "filename": "mock_review.docx",
-                "title": "Mock Aviation Lease Review",
-                "sections": [
-                    {
-                        "heading": "Summary",
-                        "body_markdown": (
-                            "Reviewed sample aircraft lease.  "
-                            "Top finding: IDERA package present (GREEN). "
-                            "AD threshold at US$2M (YELLOW).  "
-                            "Liability minimum US$750M (YELLOW)."
-                        ),
-                    }
-                ],
-            }
-        )
-        final = (
-            "## Review Summary\n\nAircraft: A321-200 MSN 7842.\n\n"
-            "- IDERA: PASS\n- AD threshold: FLAG (US$2M, below US$5M playbook)\n"
-            "- Liability minimum: FLAG (US$750M, playbook US$1B)\n\n"
-            f"Redline package written to: {artifact}"
-        )
-        log_turn(
-            {
-                "provider": self.name,
-                "model": self.model,
-                "tool_calls": [{"name": "write_docx", "result": artifact}],
-                "response_content": final,
-                "phase": "sub_agent",
-            }
-        )
-        return RunResult(
-            text=final,
-            provider=self.name,
-            model=self.model,
-            tool_calls=[ToolCallRecord(name="write_docx", arguments={"filename": "mock_review.docx"})],
-            artifact_paths=[artifact],
-        )
+            log_turn({"provider": self.name, "model": self.model, "phase": "sub_agent",
+                      "tool_calls": [{"name": "write_docx", "result": self.artifact}]})
+        elif "name: legal-risk-assessment" in system:
+            text = "## Findings\n- Liability gap is ORANGE (label: risk)\n\n## Sources\n- Lease — local"
+        else:
+            self.bundles_seen = content
+            text = f"## 结论\n\n两处偏离。Redline: {self.artifact}\n\n## 资料来源\n1. 租赁合同第12条 — 用户提供\n"
+            log_turn({"provider": self.name, "model": self.model, "phase": "orchestrator",
+                      "response_content": text})
+        yield StreamEvent("delta", {"text": text})
+        yield StreamEvent("done", {"text": text})
 
 
-def test_full_orchestrator_subagent_run(tmp_path, monkeypatch):
-    # Patch the orchestrator tool's lazy provider build to return our mock.
-    settings = load_settings(refresh=True)
+def test_complex_turn_runs_specialists_and_integrates(tmp_path, monkeypatch):
+    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
     setup_logging(settings)
     mock = MockProvider()
 
-    # The orchestrator tool does a deferred import; patch the source module
-    # so the deferred ``from ..providers import build_provider`` resolves to
-    # our mock factory.
-    import legal_helper.providers as providers_mod
+    import legal_helper.workflow as workflow_mod
+    from legal_helper.workflow import WorkflowExecutor
 
-    monkeypatch.setattr(providers_mod, "build_provider", lambda settings, **kw: mock)
+    monkeypatch.setattr(workflow_mod, "build_provider", lambda *a, **kw: mock)
 
-    agent = OrchestratorAgent(provider=mock, settings=settings)
-    result = agent.run("Please review the sample aircraft lease.")
+    events = list(WorkflowExecutor(settings=settings, provider=mock).stream("请审阅这份租赁合同并评估风险。"))
+    done = [ev for ev in events if ev.kind == "done"]
+    assert len(done) == 1
+    final = done[0].data["text"]
 
-    # 1. orchestrator returned text from the sub-agent
-    assert "Review Summary" in result.text
-    assert "IDERA" in result.text
+    # 1. the specialists ran and the integrator saw both bundles and the issues
+    started = [ev.data.get("id") for ev in events if ev.kind == "agent_task_started"]
+    assert sorted(started) == ["task_1", "task_2"]
+    assert "bundle:task_1" in mock.bundles_seen and "bundle:task_2" in mock.bundles_seen
+    assert "Issues to resolve" in mock.bundles_seen
 
-    # 2. the .docx artifact actually exists
-    p = Path("/")  # find the artifact via the result text
-    found_path = None
-    for token in result.text.split():
-        token = token.rstrip(".,)")
-        if token.endswith(".docx") and Path(token).is_file():
-            found_path = Path(token)
-            break
-    assert found_path is not None and found_path.is_file(), "redline artifact not written"
-    assert "outputs" in str(found_path)
+    # 2. the .docx artifact exists and the answer names it
+    assert mock.artifact and Path(mock.artifact).is_file()
+    assert re.search(r"mock_review\.docx", final)
 
-    # 3. JSONL log contains both phases with shared run_id structure
-    log_file = jsonl_path(settings)
-    records = [json.loads(line) for line in log_file.read_text().splitlines() if line.strip()]
-    orch_records = [r for r in records if r.get("agent") == "orchestrator"]
-    sub_records = [r for r in records if r.get("agent") == "review-contract"]
-    assert orch_records, "no orchestrator JSONL records"
-    assert sub_records, "no sub-agent JSONL records"
-    parent_run_id = orch_records[-1]["run_id"]
-    assert all(r.get("parent_run_id") == parent_run_id for r in sub_records), \
-        "sub-agent records should reference the orchestrator run_id as parent"
+    # 3. JSONL log carries both phases, the specialist under the run as parent
+    records = [json.loads(line) for line in jsonl_path(settings).read_text().splitlines() if line.strip()]
+    orch = [r for r in records if r.get("agent") == "orchestrator"]
+    sub = [r for r in records if r.get("agent") == "review-contract"]
+    assert orch, "no orchestrator JSONL records"
+    assert sub, "no specialist JSONL records"
+    parent_run_id = orch[-1]["run_id"]
+    assert all(r.get("parent_run_id") == parent_run_id for r in sub)

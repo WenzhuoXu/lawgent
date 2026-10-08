@@ -49,4 +49,22 @@ enable_cite_check: false
 verify_before_reveal: true              # audit (and repair) before the answer is shown
 max_repair_rounds: 1                    # repair passes a failed audit may trigger; 0 = advisory
 
+# Answer length: auto sizes each answer from the router's complexity
+# (simple → brief, standard → focused, complex → full memo); a chat can pin one
+# in Settings. It sets only the provider's verbosity and one sentence in the
+# request — never an output-token, tool-round or tool-budget limit.
+answer_length: auto                     # auto | brief | focused | full
+
+# Which model tier and reasoning effort each role runs at. Defaults live in
+# config.DEFAULT_ROLE_PROFILES; list only the roles you want to change.
+# effort: a level, "user" (the chat's setting) or "cap:<level>".
+# Roles: router, decomposer, author, specialist, integrator, cite_check,
+# summariser, title, deck.
+# role_profiles:
+#   router:     {tier: fast, effort: low}
+#   decomposer: {tier: fast, effort: low}
+#   author:     {tier: main, effort: user}
+#   specialist: {tier: main, effort: "cap:medium"}
+#   integrator: {tier: main, effort: "cap:medium"}
+
 external_skill_max_iterations: 0         # external procedural skills (ppt-master); 0 = no limit

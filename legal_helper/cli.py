@@ -269,6 +269,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     # watching the log.
     for problem in unresolvable_render_binaries():
         print(f"warning: {problem}", flush=True)
+    # Same for a stdio MCP server whose command does not resolve: without this
+    # it surfaces only as a child that died at spawn ("CONNECTION_CLOSED").
+    from .mcp.registry import load_registry, unresolvable_stdio_specs
+
+    try:
+        for name, command in unresolvable_stdio_specs(load_registry()):
+            print(f"warning: MCP server {name!r}: command {command!r} does not resolve", flush=True)
+    except Exception as exc:  # noqa: BLE001 — a broken .mcp.json must not stop the server
+        print(f"warning: could not check MCP commands: {exc}", flush=True)
     uvicorn.run(
         "legal_helper.server:app",
         host=args.host,

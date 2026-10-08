@@ -266,3 +266,20 @@ def test_a_pinned_threshold_cannot_raise_the_ceiling_past_the_pricing_cliff():
     settings = load_settings(refresh=True)
     decision = compaction_decision([_m("user", "hi")], settings, threshold=0.95)
     assert decision.ceiling_tokens <= OPENAI_LONG_CONTEXT_THRESHOLD
+
+
+def test_context_fill_reads_the_last_request_not_the_turn_sum():
+    from legal_helper.context import context_tokens_from_usage
+
+    # A 30-round OpenAI turn sums to far more than the window; the context
+    # held at the end was the last request's input.
+    assert context_tokens_from_usage(
+        {"input_tokens": 3_640_000, "cached_input_tokens": 2_900_000, "last_request_input_tokens": 251_000}
+    ) == 251_000
+    # Older payloads: Anthropic buckets add up, OpenAI's cached tokens are
+    # already inside input_tokens and must not be counted twice.
+    assert context_tokens_from_usage(
+        {"input_tokens": 40, "cache_read_input_tokens": 3_000, "cache_creation_input_tokens": 200}
+    ) == 3_240
+    assert context_tokens_from_usage({"input_tokens": 9_000, "cached_input_tokens": 8_000}) == 9_000
+    assert context_tokens_from_usage(None) == 0

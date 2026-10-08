@@ -46,7 +46,9 @@ def test_docx_writer_round_trip(tmp_path):
     doc = Document(str(p))
     full = "\n".join(par.text for par in doc.paragraphs)
     assert "Lease Review" in full
-    assert "Not legal advice" in full
+    # The disclaimer is metadata, never part of the instrument (D-12).
+    assert "Not legal advice" not in full
+    assert doc.core_properties.comments == "Not legal advice. For testing only."
     assert "Risk Findings" in full
     # Table rendered with 4 rows (header + 3) and 3 columns.
     assert doc.tables, "table not rendered"

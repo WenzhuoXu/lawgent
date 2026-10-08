@@ -1,7 +1,7 @@
 """Office file-format recipe tools.
 
-Read deeper how-to recipes for ``write_docx`` / ``write_xlsx`` / ``write_pptx``
-/ ``write_pdf`` on demand. Lives outside any specialist skill so the
+Read deeper how-to recipes for ``write_docx`` / ``write_xlsx`` / ``write_pdf``
+and for decks (``create_deck`` plus the existing-deck edit tools) on demand. Lives outside any specialist skill so the
 orchestrator, the general-answer direct-LLM path, and every specialist can
 load them.
 """
@@ -23,8 +23,8 @@ _VALID_FORMATS = ("docx", "xlsx", "pptx", "pdf")
 @beta_tool
 def list_format_recipes() -> str:
     """List office file-format recipes available for write_docx / write_xlsx
-    / write_pptx / write_pdf. Returns a JSON object whose ``recipes`` field
-    enumerates the supported format keys.
+    / write_pdf and for decks (create_deck, edit_pptx_text, reshape_pptx).
+    Returns a JSON object whose ``recipes`` field enumerates the format keys.
     """
     recipes = [
         name for name in _VALID_FORMATS

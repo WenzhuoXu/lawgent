@@ -254,13 +254,6 @@ def test_list_skill_dir_refuses_to_escape(sandbox, proc_skill):
 # --------------------------------------------------------------------------
 
 
-def test_the_authoring_runtime_is_registered_for_the_orchestrator():
-    from legal_helper.tools import orchestrator_tools
-
-    names = {getattr(t, "name", getattr(t, "__name__", "")) for t in orchestrator_tools()}
-    assert {"write_text_file", "run_skill_script", "list_skill_dir"} <= names
-
-
 def test_an_external_skill_gets_the_production_toolset(monkeypatch, proc_skill):
     from legal_helper.tools import skill_tools_for_task
 
@@ -307,3 +300,91 @@ def test_no_skill_tool_loop_is_capped_by_default(proc_skill):
     )
     for value in (settings.external_skill_max_iterations, settings.sub_agent_max_iterations):
         assert iteration_limit(value, settings) is None
+
+
+# --------------------------------------------------------------------------
+# run_skill_script — Node scripts (.mjs / .js), same containment
+# --------------------------------------------------------------------------
+
+
+def _node():
+    from legal_helper.documents.writers._node import find_node
+
+    return find_node()
+
+
+@pytest.fixture()
+def node_skill(monkeypatch, tmp_path):
+    """A procedural skill whose gate is an ES module, like gongwen-gbt9704-skill."""
+    root = tmp_path / "roots"
+    skill = root / "node-proc"
+    (skill / "scripts").mkdir(parents=True)
+    (skill / "SKILL.md").write_text("---\nname: node-proc\n---\nprocedure\n")
+    (skill / "scripts" / "gate.mjs").write_text(
+        "import process from 'node:process';\n"
+        "console.log('checked', ...process.argv.slice(2));\n"
+        "process.exit(process.argv.includes('--fail') ? 4 : 0);\n"
+    )
+    (skill / "scripts" / "legacy.js").write_text("console.log('cjs', process.argv.length);\n")
+    (skill / "scripts" / "run.sh").write_text("echo should never run\n")
+    outside = tmp_path / "outside.mjs"
+    outside.write_text("console.log('should never run');\n")
+    monkeypatch.setenv("LEGAL_HELPER_SKILL_ROOTS", str(root))
+    return skill, outside
+
+
+@pytest.mark.skipif(_node() is None, reason="node not installed")
+def test_run_skill_script_runs_an_mjs_gate_under_node(sandbox, node_skill):
+    payload = json.loads(
+        _call(run_skill_script, skill="node-proc", script="scripts/gate.mjs", args=["a b", "c"])
+    )
+    assert payload["exit_code"] == 0
+    assert "checked a b c" in payload["stdout"]
+    assert payload["command"][0] == _node()
+    # argv is a list: "a b" arrived as one argument, not two shell words.
+    assert payload["command"][-2:] == ["a b", "c"]
+
+
+@pytest.mark.skipif(_node() is None, reason="node not installed")
+def test_a_node_gate_verdict_is_data_and_js_runs_too(sandbox, node_skill):
+    failed = json.loads(
+        _call(run_skill_script, skill="node-proc", script="scripts/gate.mjs", args=["--fail"])
+    )
+    assert failed["exit_code"] == 4
+    legacy = json.loads(_call(run_skill_script, skill="node-proc", script="scripts/legacy.js"))
+    assert legacy["exit_code"] == 0 and "cjs" in legacy["stdout"]
+
+
+@pytest.mark.parametrize("script", ["../outside.mjs", "scripts/../../outside.mjs", "../../outside.mjs"])
+def test_run_skill_script_refuses_node_scripts_outside_the_skill(sandbox, node_skill, script):
+    result = _call(run_skill_script, skill="node-proc", script=script)
+    assert result.startswith("ERROR"), f"{script} was not refused"
+    assert "outside the skill directory" in result
+
+
+def test_run_skill_script_refuses_other_interpreters(sandbox, node_skill):
+    result = _call(run_skill_script, skill="node-proc", script="scripts/run.sh")
+    assert result.startswith("ERROR") and "only .py" in result
+
+
+def test_a_script_symlinked_out_of_the_skill_is_refused(sandbox, node_skill, tmp_path):
+    skill, outside = node_skill
+    (skill / "scripts" / "sneaky.mjs").symlink_to(outside)
+    result = _call(run_skill_script, skill="node-proc", script="scripts/sneaky.mjs")
+    assert result.startswith("ERROR") and "outside the skill directory" in result
+
+
+def test_a_symlinked_skill_directory_can_run_its_own_scripts(sandbox, monkeypatch, tmp_path):
+    """Staged skills are links into a checkout (root/ppt-master -> repo/skills/…)."""
+    checkout = tmp_path / "checkout" / "linked-proc"
+    (checkout / "scripts").mkdir(parents=True)
+    (checkout / "SKILL.md").write_text("---\nname: linked-proc\n---\nprocedure\n")
+    (checkout / "scripts" / "gate.py").write_text("print('linked ok')\n")
+    root = tmp_path / "linked-root"
+    root.mkdir()
+    (root / "linked-proc").symlink_to(checkout, target_is_directory=True)
+    monkeypatch.setenv("LEGAL_HELPER_SKILL_ROOTS", str(root))
+    payload = json.loads(_call(run_skill_script, skill="linked-proc", script="scripts/gate.py"))
+    assert payload["exit_code"] == 0 and "linked ok" in payload["stdout"]
+    listing = json.loads(_call(list_skill_dir, skill="linked-proc", subpath="scripts"))
+    assert "gate.py" in listing["files"]

@@ -33,11 +33,9 @@ from typing import Any, Literal, Optional
 RunStatus = Literal["running", "complete", "paused", "failed", "cancelled"]
 TaskStatus = Literal["pending", "active", "complete", "failed"]
 
-# Why a run stopped short. "deadlock" and "error_threshold" are the two the
-# scheduler can detect on its own; the rest come from outside.
-PauseReason = Literal[
-    "cancelled", "error", "deadlock", "error_threshold", "provider_unavailable"
-]
+# Why a run stopped short: the user cancelled, the provider was unavailable
+# (out of credit), a turn raised, or the client went away mid-turn.
+PauseReason = Literal["cancelled", "provider_unavailable", "error", "abandoned"]
 
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -71,7 +69,7 @@ class RunSnapshot:
     title: str = ""
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
-    pause_reason: Optional[str] = None
+    pause_reason: Optional[PauseReason] = None
     error: Optional[str] = None
     plan: Optional[dict[str, Any]] = None
     tasks: dict[str, TaskRecord] = field(default_factory=dict)
@@ -240,7 +238,7 @@ class RunStore:
         self,
         status: RunStatus,
         *,
-        pause_reason: Optional[str] = None,
+        pause_reason: Optional[PauseReason] = None,
         error: Optional[str] = None,
     ) -> None:
         self.snapshot.status = status

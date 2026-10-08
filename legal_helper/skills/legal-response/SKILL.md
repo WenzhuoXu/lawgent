@@ -1,6 +1,6 @@
 ---
 name: legal-response
-description: Draft a careful response to a regulator, authority, or counterparty communication — agency inquiry, enforcement letter, formal investigation notice, data-subject access request, or counterparty legal demand. Use for monitor letters, regulator findings, on-the-record requests, DSARs, official complaints, and internal incident escalations. Produces the analysis bundle the orchestrator turns into a draft reply.
+description: Draft a careful response to a regulator, authority, or counterparty communication — agency inquiry, enforcement letter, formal investigation notice, data-subject access request, or counterparty legal demand. Use for monitor letters, regulator findings, on-the-record requests, DSARs, official complaints, and internal incident escalations. Produces the analysis behind a draft reply.
 argument-hint: "<incoming communication topic or attachment>"
 allowed_connectors: [ecfr_search, federal_register_search, govinfo_search, eurlex_search, "pkulaw_*", flk_npc_search, ethiopia_law_search, ethiopia_law_fetch]
 rag_collections: [general]
@@ -9,30 +9,20 @@ rag_collections: [general]
 # /legal-response — Authority / Counterparty Response
 
 Draft analysis for responses to a regulator, authority, or counterparty
-demand. The skill produces the underlying claims, options, and limits; the
-orchestrator authors the final letter or filing.
+demand: the underlying claims, options, and limits behind the final letter
+or filing.
 
 **Not legal advice.** Drafts must be reviewed by qualified counsel before
 service / filing.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5. Emit exactly:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. No tables, walkthroughs, action
-matrices, or sanity-check sections.
+Artefacts this skill produces: the response outline, or draft paragraphs when the task asks for a draft.
 
 ## Inputs
 
@@ -62,6 +52,8 @@ Provide the inbound communication or its key facts:
 5. **Reporting / escalation map**: who else needs to know (DPO, regulator,
    insurer, board, outside counsel).
 6. **Sanity check** per general playbook §3. No invented citations.
+7. **A reply or 律师函 delivered as a file** is written with `disclaimer="none"`
+   and a `disclaimer_reason` — the letter goes out under counsel's name.
 
 ## Reporting / authority taxonomy
 
@@ -77,7 +69,7 @@ Use the right authority bucket per implicated jurisdiction:
 ## Pointers
 
 - Citation + language: `/playbook/general_playbook.md` §1 + §2.
-- Sanity check: general playbook §3 + §4.
+- Sanity checks: general playbook §3.
 - Universal regulator disclosure carveout: general playbook §6.
 - When the **aviation** pack is active, also apply
   `/domains/aviation/overlays/legal-response.md`.

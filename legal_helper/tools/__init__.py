@@ -24,6 +24,9 @@ from .citations import (
 )
 from .connectors_tools import all_connector_tools, visible_connector_tools
 from .contract import extract_clauses
+from .dates import compute_period
+from .decks import create_deck
+from .procedures import run_procedure
 from .diagrams import render_flowchart_image
 from .documents import (
     copy_xlsx_sheet,
@@ -42,11 +45,9 @@ from .documents import (
     read_document,
     render_docx_pages,
     render_pdf_pages,
-    read_deck_stylesheet,
     render_pptx_slides,
     render_xlsx_pages,
     view_image,
-    write_pptx_from_html,
     reshape_docx,
     reshape_pptx,
     reshape_xlsx,
@@ -54,10 +55,10 @@ from .documents import (
     split_pdf,
     write_docx,
     write_pdf,
-    write_pptx,
     write_xlsx,
 )
 from .fetch_attach import fetch_url_to_artifact
+from .redline_tools import compare_docx, redline_docx
 from .skill_runtime import (
     list_skill_dir,
     run_skill_script,
@@ -72,15 +73,11 @@ from .legal_search import (
     legal_source_search,
 )
 from .mcp_tools import visible_mcp_function_tools
-from .orchestrator import run_skill
 from .project_tools import project_brief_read, project_memory_search, project_memory_write
 from .rag_tools import retrieve_legal
 from .skill_resources import (
     list_skill_references,
-    list_skill_sections,
-    read_playbook_section,
     read_skill_reference,
-    read_skill_section,
 )
 
 
@@ -170,54 +167,6 @@ def _skill_rag_collections(skill_name: str) -> list[str]:
     return [str(name).strip() for name in raw if str(name).strip()]
 
 
-def orchestrator_tools() -> list[Any]:
-    """Tools available to the parent orchestrator."""
-    return [
-        run_skill,
-        write_text_file,
-        run_skill_script,
-        list_skill_dir,
-        render_flowchart_image,
-        write_docx,
-        write_pdf,
-        inspect_docx,
-        edit_docx_text,
-        reshape_docx,
-        render_docx_pages,
-        inspect_pdf,
-        extract_pdf_tables,
-        render_pdf_pages,
-        merge_pdfs,
-        split_pdf,
-        rotate_pdf_pages,
-        write_xlsx,
-        write_pptx,
-        inspect_xlsx,
-        inspect_xlsx_range,
-        edit_xlsx_cells,
-        edit_xlsx_cells_checked,
-        reshape_xlsx,
-        copy_xlsx_sheet,
-        diff_xlsx,
-        render_xlsx_pages,
-        inspect_pptx,
-        edit_pptx_text,
-        reshape_pptx,
-        render_pptx_slides,
-        view_image,
-        write_pptx_from_html,
-        read_deck_stylesheet,
-        read_document,
-        fetch_url_to_artifact,
-        list_format_recipes,
-        read_format_recipe,
-        project_memory_write,
-        project_memory_search,
-        project_brief_read,
-        ground_answer_tool,
-    ]
-
-
 def skill_tools(skill_name: str) -> list[Any]:
     return skill_tools_for_task(skill_name)
 
@@ -237,8 +186,6 @@ def _external_skill_tools() -> list[Any]:
         render_docx_pages,
         view_image,
         inspect_pptx,
-        list_skill_sections,
-        read_skill_section,
         list_skill_references,
         read_skill_reference,
     ]
@@ -262,21 +209,25 @@ def skill_tools_for_task(
     if is_external_skill(skill_name):
         return apply_skill_tool_policy(_external_skill_tools(), skill_name)
 
+    # SKILL.md and the general playbook are inlined in the specialist's prompt;
+    # tools that re-read their sections only spent rounds (10 such calls in one
+    # two-specialist run). The long `references/` tail stays reachable.
     base: list[Any] = [
-        list_skill_sections,
-        read_skill_section,
         list_skill_references,
         read_skill_reference,
-        read_playbook_section,
+        compute_period,
     ]
     base.extend([
         read_document,
+        create_deck,
         render_flowchart_image,
         write_docx,
         write_pdf,
         inspect_docx,
         edit_docx_text,
         reshape_docx,
+        redline_docx,
+        compare_docx,
         render_docx_pages,
         inspect_pdf,
         extract_pdf_tables,
@@ -285,7 +236,6 @@ def skill_tools_for_task(
         split_pdf,
         rotate_pdf_pages,
         write_xlsx,
-        write_pptx,
         inspect_xlsx,
         inspect_xlsx_range,
         edit_xlsx_cells,
@@ -299,8 +249,6 @@ def skill_tools_for_task(
         reshape_pptx,
         render_pptx_slides,
         view_image,
-        write_pptx_from_html,
-        read_deck_stylesheet,
         fetch_url_to_artifact,
         list_format_recipes,
         read_format_recipe,
@@ -366,11 +314,15 @@ def skill_tools_for_task(
 __all__ = [
     "all_connector_tools",
     "list_skill_dir",
+    "run_procedure",
     "run_skill_script",
     "write_text_file",
     "aviation_source_search",
     "cite_check_report_tool",
+    "compare_docx",
+    "compute_period",
     "copy_xlsx_sheet",
+    "create_deck",
     "courtlistener_search",
     "ecfr_search",
     "extract_citations_tool",
@@ -393,9 +345,7 @@ __all__ = [
     "legal_source_search",
     "list_format_recipes",
     "list_skill_references",
-    "list_skill_sections",
     "merge_pdfs",
-    "orchestrator_tools",
     "project_brief_read",
     "project_memory_search",
     "project_memory_write",
@@ -409,16 +359,12 @@ __all__ = [
     "render_pdf_pages",
     "render_xlsx_pages",
     "view_image",
-    "write_pptx_from_html",
-    "read_deck_stylesheet",
-    "read_playbook_section",
     "read_skill_reference",
-    "read_skill_section",
+    "redline_docx",
     "reshape_docx",
     "reshape_pptx",
     "reshape_xlsx",
     "retrieve_legal",
-    "run_skill",
     "skill_tools",
     "skill_tools_for_task",
     "rotate_pdf_pages",
@@ -428,6 +374,5 @@ __all__ = [
     "visible_connector_tools",
     "write_docx",
     "write_pdf",
-    "write_pptx",
     "write_xlsx",
 ]

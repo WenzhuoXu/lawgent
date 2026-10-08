@@ -46,6 +46,7 @@ defenses:
     element_zh: 不可抗力致不能履行，且已及时通知并提供证明
     element_en: Force majeure prevented performance; timely notice + proof
     burden: respondent
+    stage: arises
     evidence_hints: [不可抗力证明, 通知记录, 影响范围证据]
     authority:
       - source: 《中华人民共和国民法典》
@@ -54,6 +55,7 @@ defenses:
     element_zh: 原告未采取适当措施防止损失扩大
     element_en: Claimant failed to mitigate the expanded loss
     burden: respondent
+    stage: quantum
     evidence_hints: [扩大损失时间线, 可行减损措施证据]
     authority:
       - source: 《中华人民共和国民法典》
@@ -62,6 +64,7 @@ defenses:
     element_zh: 约定违约金过分高于实际损失，请求调减
     element_en: Agreed liquidated damages far exceed actual loss — adjust
     burden: respondent
+    stage: quantum
     evidence_hints: [实际损失证据, 违约金与损失对比计算]
     authority:
       - source: 《中华人民共和国民法典》
@@ -70,6 +73,7 @@ defenses:
     element_zh: 诉讼时效已经届满
     element_en: The limitation period has expired
     burden: respondent
+    stage: exercisable
     evidence_hints: [权利人知情时点证据, 无中断/中止事由的时间线]
     authority:
       - source: 《中华人民共和国民法典》

@@ -54,3 +54,31 @@ def test_section_cap_evicts_oldest_first():
     assert len(merged["Facts"]) == _MAX_BULLETS_PER_SECTION
     assert merged["Facts"][0] == "fact 5"
     assert merged["Facts"][-1] == f"fact {_MAX_BULLETS_PER_SECTION + 4}"
+
+
+def test_housekeeping_calls_run_at_pinned_low_effort(monkeypatch):
+    """Summaries and titles run after the user is released, but they still bill."""
+    import legal_helper.memory as memory
+    from legal_helper.chat_models import ChatMessage
+    from legal_helper.config import load_settings
+
+    seen: list[tuple[str, bool]] = []
+
+    class _Provider:
+        def run(self, **kwargs):
+            from legal_helper.providers import RunResult
+
+            return RunResult(text="+ Facts | x", provider="openai", model="m")
+
+    def fake_build(settings, fast=False):
+        seen.append((settings.openai_reasoning_effort, fast))
+        return _Provider()
+
+    monkeypatch.setattr(memory, "build_provider", fake_build)
+    settings = load_settings(refresh=True).model_copy(update={"openai_reasoning_effort": "xhigh"})
+    msgs = [ChatMessage(id="1", chat_id="c", role="user", content="hello", created_at="", metadata={})]
+    memory.summarize_with_fast_model(settings, msgs, "")
+    memory.summarize_title_with_fast_model(settings, msgs)
+    for provider_name in ("anthropic",):
+        memory.summarize_title_with_fast_model(settings.model_copy(update={"provider": provider_name}), msgs)
+    assert seen == [("low", True), ("none", True), ("none", True)]

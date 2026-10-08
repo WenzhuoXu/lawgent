@@ -9,8 +9,8 @@ scalar choice is the most common source of bad xlsx outputs.
 |---|---|
 | `inspect_xlsx` | First call on any unknown workbook — sheets, dimensions, formula counts, preview rows. |
 | `inspect_xlsx_range` | Before editing a region — real cell coordinates, formulas, number formats, merged ranges, hidden rows/columns. |
-| `read_document` | Quick text dump only. Never derive edit coordinates from its markdown output: blank rows and merged headers shift row numbers. |
-| `write_xlsx` | Build a new workbook from scratch (rows + charts + conditional formats + data validations). |
+| `read_document` | Quick text dump of .xlsx / .xls / .ods / .et. Never derive edit coordinates from its markdown output: blank rows and merged headers shift row numbers. |
+| `write_xlsx` | Build a new workbook from scratch (rows + number formats + charts + conditional formats + data validations). Formula values are computed and stored. |
 | `edit_xlsx_cells` | Low-risk scalar cell replacements. |
 | `edit_xlsx_cells_checked` | High-stakes scalar replacements with `check_expected=true` preconditions and `protected_ranges` guards. |
 | `reshape_xlsx` | **Any structural reshape** — insert / delete / move rows or columns, merge / unmerge, copy a styled row, bulk styling, row heights, column widths. |
@@ -37,11 +37,18 @@ styling — exactly the failure mode of `附件4_手册地图模板_..._A类调�
    - structural reshape → `reshape_xlsx` (see ops below)
    - new sibling sheet from template → `copy_xlsx_sheet`
    - new workbook from scratch → `write_xlsx`
-4. `diff_xlsx(source, output, ranges=[...])` to prove changed range == intent
+4. Read the edit's result: each `reshape_xlsx` op lists its `side_effects`
+   (merges, validations, conditional formats and formula references that
+   moved; references now `#REF!` under `formulas_now_ref_error`), and every
+   edit recalculates the workbook and lists `formula_errors` by cell. An edit
+   that names its source as the output writes `<name>_v2.xlsx` instead.
+5. `diff_xlsx(source, output, ranges=[...])` to prove changed range == intent
    and `protected_ranges` have `diff_count=0`.
-5. When layout matters, `render_xlsx_pages(output)` and look at the JPGs for
-   broken merges, missing borders, overflowing wrap-text, gap rows.
-6. `inspect_xlsx` / `inspect_xlsx_range` the output one more time before
+6. When layout matters, `render_xlsx_pages(output)` and look at the JPGs for
+   broken merges, missing borders, overflowing wrap-text, gap rows. Its lint
+   reports error values (`formula_error_value`, by `Sheet!A1`) and formulas
+   with no stored value.
+7. `inspect_xlsx` / `inspect_xlsx_range` the output one more time before
    declaring done.
 
 ## `reshape_xlsx` operations
@@ -66,15 +73,35 @@ Ops apply in order; later ops see the state left by earlier ones.
 - `set_row_height` — `row`, `height` (points).
 - `set_col_width` — `col` (letter or 1-based index), `width` (Excel units).
 
+## Values, dates and formats (write_xlsx)
+
+- **Dates.** A cell that is exactly an ISO date (`"2026-10-07"`) or date-time
+  (`"2026-10-07 14:30"`) is stored as a real date with a `yyyy-mm-dd` format, so
+  it sorts, filters and subtracts. Prefix `'` to keep such a string as text
+  (`"'2026-10-07"`).
+- **Number formats.** Each `Sheet` takes `number_formats`, a list of
+  `{range, format}`: `range` is a column (`"C"`), a span (`"C:E"`) or an A1
+  range (`"C2:C40"`); `format` is an Excel code — `"#,##0.00"` for amounts,
+  `"0.0%"`, `"¥#,##0.00"`, `"yyyy-mm-dd"`. Give every amount column one.
+- **Widths** are measured, a Chinese character counting as two Latin ones;
+  text longer than the widest column (60) wraps.
+
 ## Formulas
 
 Strings beginning with `=` in `write_xlsx`'s row values are persisted as live
-formulas (e.g. `"=SUM(B2:B9)"`). On save, `write_xlsx` runs a pure-Python
-recalc pass and surfaces any `#REF!` / `#DIV/0!` / `#NAME?` / `#VALUE!` /
-`#N/A` / `#NUM!` / `#NULL!` errors as `formula_errors` on the return value.
-Fix every flagged error before declaring the workbook done. When using
-`reshape_xlsx`'s `move_range`, keep `translate=true` so formula refs follow
-the moved cells.
+formulas (e.g. `"=SUM(B2:B9)"`). After writing, every formula is computed —
+LibreOffice recalculates a copy, and the pure-Python `formulas` engine stands
+in without soffice and for functions LibreOffice 7.3 lacks (XLOOKUP) — and the
+result is stored as the cell's cached value, so pandas, previews and
+`read_document` see numbers rather than blanks; the file is otherwise exactly
+what was written. Any `#REF!` / `#DIV/0!` / `#NAME?` / `#VALUE!` / `#N/A` /
+`#NUM!` / `#NULL!` result comes back as `formula_errors`, and a formula no
+engine could evaluate as `unevaluated_formulas`. Fix every flagged error
+before declaring the workbook done. When using `reshape_xlsx`'s `move_range`,
+keep `translate=true` so formula refs follow the moved cells. The edit tools
+recalculate after writing too, so an edited workbook keeps its stored values;
+a file that lost them elsewhere is reported by `render_xlsx_pages` as
+`formula_without_cached_value`.
 
 ## Charts (write_xlsx only)
 

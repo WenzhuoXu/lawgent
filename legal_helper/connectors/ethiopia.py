@@ -348,7 +348,11 @@ def ethiopia_law_fetch(proclamation: str, max_chars: int = 16000) -> str:
     (``/pr_{num}_{year}/en/txt``), and falls back to extracting the original
     bilingual gazette PDF (``/pdf/.../pr_{num}_{year}.pdf``) when no typed
     transcript exists. The PDF is the Amharic + English scan, so extracted
-    text may interleave Ge'ez script around the English clauses.
+    text may interleave Ge'ez script around the English clauses. When the body
+    comes back garbled, empty or about a different instrument, do not cite it
+    and do not report the pinpoint as unavailable: search the web for the
+    official English text (the gazette, the regulator's pages, UNCTAD
+    Investment Laws) and cite that.
 
     Args:
         proclamation: Proclamation reference in any of these forms:

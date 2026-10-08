@@ -1,14 +1,17 @@
 # GB/T 9704-style 公文 memo template
 
-Render with `write_docx_document(..., layout="gbt9704")` (or the `write_docx`
-tool once the `layout` parameter is threaded through). The layout applies:
+Render with the `write_docx` tool and `layout="gbt9704"` (GB/T 9704-2012,
+checked against the gongwen-gbt9704-skill verifier). The layout applies:
 
-- Page: A4 with 天头 3.7cm / 地脚 3.5cm / 订口(左) 2.8cm / 翻口(右) 2.6cm.
-- Body: 仿宋-class 三号 (16pt), fixed ~28pt line pitch, 首行缩进 2 字符,
-  black text throughout (Word/LibreOffice substitute Noto CJK SC when
-  仿宋/黑体/楷体 are not installed).
-- Headings: 一级标题 黑体, 二级标题 楷体, 三级及以下 仿宋加粗 — all 三号.
-- Title: 宋体-class, bold, 二号 (22pt), centered, no first-line indent.
+- Page: A4 with 天头 3.7cm / 地脚 3.5cm / 订口(左) 2.8cm / 翻口(右) 2.6cm;
+  22 lines × 28 characters.
+- Body: 仿宋 三号 (16pt), 28pt line pitch, 首行缩进 2 字符, black text.
+- Headings come from the 层次序数 in the text: 一、 黑体, （一） 楷体,
+  1. 仿宋, （1） 仿宋 — all 三号, 空二字, not bold (the face carries the weight).
+- Title: 方正小标宋简体 二号 (22pt), centered, not bold.
+- Page numbers: "— n —" in 四号宋体, odd pages right, even pages left.
+- The file names the GB fonts; the reader's Word/WPS renders them. A review
+  render on a host without them draws open stand-ins and says so.
 
 This is a *-style* layout for internal legal memos (请示/报告/法律意见书);
 formal red-header 发文 (红头文件) additionally needs the issuing organ's

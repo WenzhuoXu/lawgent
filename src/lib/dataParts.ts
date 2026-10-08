@@ -120,6 +120,7 @@ export type PhaseId =
   | "planning"
   | "gathering"
   | "integrating"
+  | "drafting"
   | "auditing";
 
 export type PhaseData = { phase: PhaseId; detail?: string };

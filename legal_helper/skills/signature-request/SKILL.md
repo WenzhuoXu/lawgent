@@ -8,30 +8,19 @@ rag_collections: [general]
 
 # /signature-request — Closing / Execution Package
 
-Produce the analytical bundle the orchestrator turns into a closing
-checklist + signature matrix.
+Produce the analysis behind a closing checklist + signature matrix.
 
-**Not legal advice.** The bundle drives a draft package; counsel signs off
-before execution.
+**Not legal advice.** The analysis drives a draft package; counsel signs
+off before execution.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. No signature-matrix tables or closing
-spreadsheets in the bundle — orchestrator authors those.
+Artefacts this skill produces: the signature matrix (party · signatory · authority evidence · document · execution method).
 
 ## Inputs
 
@@ -66,7 +55,7 @@ sequencing dependency.
 ## Pointers
 
 - Authority hierarchy + citation: `/playbook/general_playbook.md` §0 + §2.
-- Sanity-check + label set: general playbook §3 + §4.
+- Sanity checks: general playbook §3; finding labels: the bundle contract.
 - Universal regulator / disclosure considerations: general playbook §6.
 - When the **aviation** pack is active, also apply
   `/domains/aviation/overlays/signature-request.md` for registry filings

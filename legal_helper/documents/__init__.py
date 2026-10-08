@@ -9,17 +9,14 @@ Layout:
 - ``redline.py``     — Native Word tracked changes (w:ins/w:del) + comments.
 - ``pdf.py``         — PDF inspect, render, merge, split, rotate primitives.
 - ``writers/``       — Polished artifact writers, one module per output format
-  (docx, pdf, pptx, xlsx), plus the HTML→PPTX converter and its design system.
-- ``graph_layout.py``— Diagram geometry from Graphviz: flows, mindmaps and
-  structure charts as node boxes and routed edge polylines, in slide inches.
-- ``diagrams.py``    — Mermaid as an authoring syntax and a raster renderer,
-  adapting ``graph_layout`` onto a slide's flowchart block.
-- ``quality.py``     — Deterministic quality checks over a written file and its
-  renders: geometry, typography, contrast, canvas coverage.
-- ``wireframe.py``   — Slide geometry drawn as a labelled picture, with lint
-  findings coloured in, so a reviewer judges arrangement visually.
-- ``review.py``      — The bounded lint → critique → repair loop that runs
-  before a deck's path is handed back.
+  (docx, pdf, xlsx). Decks are not written here: ``tools/decks.create_deck``
+  drives the external ppt-master skill.
+- ``graph_layout.py``— CJK-aware text measurement shared by the writers and the
+  linter, and the render binaries (Graphviz ``dot``, ``d2``) diagrams need.
+- ``diagrams.py``    — Diagram pictures: Mermaid flowcharts and mind maps drawn
+  by Graphviz, other Mermaid types by mermaid-cli, nested containers by d2.
+- ``quality.py``     — Deterministic conformance checks over a written file:
+  geometry, typography, contrast, table fit.
 """
 
 from .office import (
@@ -36,7 +33,6 @@ from .office import (
     inspect_pptx_deck,
     inspect_xlsx_range_workbook,
     inspect_xlsx_workbook,
-    render_xlsx_to_images,
     reshape_docx_document,
     reshape_pptx_deck,
     reshape_xlsx_workbook,
@@ -59,7 +55,6 @@ from .writers import (
     recalc_xlsx_workbook,
     write_docx_document,
     write_pdf_document,
-    write_pptx_deck,
     write_xlsx_workbook,
 )
 
@@ -86,7 +81,6 @@ __all__ = [
     "recalc_xlsx_workbook",
     "redline_docx_document",
     "render_pdf_to_images",
-    "render_xlsx_to_images",
     "reshape_docx_document",
     "reshape_pptx_deck",
     "reshape_xlsx_workbook",
@@ -94,6 +88,5 @@ __all__ = [
     "split_pdf_file",
     "write_docx_document",
     "write_pdf_document",
-    "write_pptx_deck",
     "write_xlsx_workbook",
 ]

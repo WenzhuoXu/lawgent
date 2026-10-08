@@ -29,18 +29,19 @@ usable interface to:
    pack-specific playbook. Aviation is the first populated pack; future
    packs (healthcare, fintech, employment) drop in without touching the
    core.
-2. **PRC primary, comparative secondary.** PRC source hierarchy
-   (法律 → 行政法规 → 部门规章 → 规范性文件 → 司法解释 → 指导案例) is
-   the default. US / EU appear when relevant; never as default.
+2. **PRC primary, comparative secondary.** PRC legislation (宪法 → 法律 →
+   行政法规 → 地方性法规 / 规章) and judicial authority (司法解释; cases with a
+   weight label: 指导性案例 应当参照, 入库案例 参考, others persuasive) are the
+   default, per playbook §0. US / EU appear when relevant; never as default.
 3. **Provider parity.** Anthropic Claude (`claude-opus-5-5`) and OpenAI
    GPT (`gpt-6.1-sol`) are first-class peers behind one `Provider` protocol.
    All tools — connectors, MCP-discovered, RAG, citations — surface as
    plain function tools to both SDKs; no provider-native MCP path.
-4. **Sub-agent runtime.** Orchestrator fans out via `run_skill`; each
-   sub-agent gets a forked context with only its compact manifest.
-   Progressive-disclosure resource tools (`list_skill_sections`,
-   `read_skill_section`, `read_playbook_section`) pull deep content on
-   demand.
+4. **One author per answer, specialists only when the work splits.** A
+   router plans each turn; simple and standard turns are answered by one
+   tool-armed author holding the playbook and the routed skill's method;
+   complex turns are decomposed into issues and 2-3 parallel specialists whose
+   bundles one integrator turns into the answer.
 5. **Grounded answers.** Three source-of-truth tiers:
    - **RAG** (local bge-m3 + Qdrant) for indexed corpora.
    - **Connectors / MCPs** for live primary sources (eCFR, Federal
@@ -55,33 +56,31 @@ usable interface to:
 ## Architecture
 
 ```
-                user request
-                     │
-                     ▼
-    Orchestrator agent ── pack-aware system prompt
-                     │
-   run_skill(name, task)  +  write_docx / write_pdf / read_document
-                     ▼
-        SkillAgent (forked context)
-        ├── compact manifest from SKILL.md frontmatter
-        ├── jurisdiction + active-pack notice in the system prompt
-        ├── pointers to load on demand:
-        │       /playbook/general_playbook.md
-        │       /domains/<pack>/playbook.md     (when pack is active)
-        │       /domains/<pack>/overlays/<this-skill>.md
-        ├── jurisdiction- and pack-filtered tools:
-        │       connectors/{us_federal,us_courts,eu,prc,aviation}
-        │       MCP-discovered tools (function-tool adapter)
-        │       retrieve_legal (RAG)
-        │       extract_citations_tool / validate_citations_tool
-        │       read_document / write_docx / write_pdf / extract_clauses
-        ▼
-       Findings + Sources block
-                     │
-                     ▼
-         Orchestrator authors user-facing answer
-            (resolves dedup, picks one organising axis,
-             builds the 资料来源与核验 table)
+                 user request (+ chat digest, files, generated deliverables)
+                              │
+                              ▼
+         router (fast tier) ── newest-first view of the chat
+         mode · complexity · one task · must-cover points · fact conflicts
+                              │
+          ┌───────────────────┴────────────────────┐
+     simple / standard                          complex
+          │                                        │
+          ▼                                        ▼
+   single-pass author                     decomposer (fast tier)
+   (playbook + routed skill method,       issues + 2-3 specialists
+    research + document tools,                     │
+    create_deck → ppt-master)                      ▼
+          │                            SkillAgent × N (parallel, forked
+          │                            context, chat digest as cache prefix)
+          │                            Findings · Issues · Artefacts ·
+          │                            Out of scope · Sources
+          │                                        │
+          │                                        ▼
+          │                              integrator (author prompt,
+          │                              conflict rule, open gaps)
+          └───────────────────┬────────────────────┘
+                              ▼
+             answer contract + answer lint → (optional) citation audit
 ```
 
 ## Repository layout
@@ -98,8 +97,11 @@ legal_helper/
 ├── legal_helper/
 │   ├── cli.py / __main__.py
 │   ├── server.py        # FastAPI; /domains, /jurisdictions, /chat/*
-│   ├── agent.py         # OrchestratorAgent + SkillAgent (pack-aware)
-│   ├── workflow.py      # planner-driven chat executor
+│   ├── workflow.py      # router, planner, single-pass author, specialists, integrator
+│   ├── authoring.py     # the answer author's system prompt
+│   ├── answer_contract.py  # the one output contract (author + specialist)
+│   ├── answer_lint.py   # deterministic answer clean-up (stream filter)
+│   ├── agent.py         # SkillAgent (pack-aware specialists, external skills)
 │   ├── config.py        # Settings with jurisdiction + packs
 │   ├── providers/       # Anthropic + OpenAI behind one Protocol
 │   ├── connectors/      # in-process search functions (US/EU/PRC/aviation)
@@ -107,17 +109,17 @@ legal_helper/
 │   ├── citations/       # audit + extract + validate + format + prc
 │   ├── rag/             # bge-m3 + Qdrant + hierarchical chunker
 │   ├── tools/           # function-tool registrations
-│   ├── skills/          # 10 generic SKILL.md files (<100 lines each)
+│   ├── skills/          # 15 generic SKILL.md files (<100 lines each)
 │   ├── playbook/        # general_playbook.md (PRC-first)
 │   ├── domains/         # domain packs (aviation populated; others future)
-│   ├── document_writers/
+│   ├── documents/       # read / edit / redline / write / render / lint
 │   ├── webui/           # static fallback UI
 │   └── webui_dist/      # vite build output
 ├── src/                 # React + Vite source
 ├── examples/
 │   ├── general/         # generic samples (NDA, employment, compliance inquiry)
 │   └── aviation/        # aviation samples (lease, MRO NDA, AD situation)
-└── tests/               # 136 unit tests + 2 live-API smoke tests
+└── tests/               # unit + contract tests; 2 opt-in live-API smoke tests
 ```
 
 ## Domain packs

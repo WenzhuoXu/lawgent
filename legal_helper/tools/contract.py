@@ -11,18 +11,6 @@ import re
 from anthropic import beta_tool
 
 
-# Recognize section/clause headings:
-#   "1. Title", "1.2 Title", "ARTICLE I — Title", "SECTION 4.1 Title"
-_HEADING_RE = re.compile(
-    r"""^(
-        (?:ARTICLE\s+[IVXLCDM\d]+|SECTION\s+[\d.]+|SCHEDULE\s+[A-Z\d]+|EXHIBIT\s+[A-Z\d]+|ANNEX\s+[A-Z\d]+|APPENDIX\s+[A-Z\d]+)
-        (?:\s*[—\-:.\s]+.*)?
-        |
-        \d+(?:\.\d+){0,3}\s+[A-Z][A-Za-z0-9 ,/&()\-']+
-    )$""",
-    re.VERBOSE,
-)
-
 # Generic commercial clause categories — apply across jurisdictions and
 # domains. Aviation-specific tags (hull insurance, IDERA, AD/SB, etc.) are
 # kept in ``domains/aviation/contract_tags.py`` and merged in only when the
@@ -44,10 +32,29 @@ _CATEGORY_TAGS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
+# The same categories in Chinese contract language. ``\b`` never fires between
+# two Han characters (both are word characters), so these carry no boundaries.
+_CATEGORY_TAGS_ZH: list[tuple[str, re.Pattern[str]]] = [
+    ("limitation_of_liability", re.compile(r"责任限制|责任上限|赔偿限额|赔偿总额不超过")),
+    ("indemnification", re.compile(r"赔偿|补偿|免受损害|使其免责")),
+    ("insurance", re.compile(r"保险")),
+    ("export_control", re.compile(r"出口管制|两用物项|制裁")),
+    ("governing_law", re.compile(r"适用法律|法律适用|管辖法院|管辖权|准据法")),
+    ("term_and_termination", re.compile(r"期限|终止|解除|续期|续约|届满")),
+    ("assignment_novation", re.compile(r"转让|让与|控制权变更")),
+    ("data_protection", re.compile(r"个人信息|数据保护|数据安全|数据出境")),
+    ("confidentiality", re.compile(r"保密|商业秘密")),
+    ("force_majeure", re.compile(r"不可抗力")),
+    ("payment_terms", re.compile(r"付款|支付|价款|租金|发票|违约金|滞纳金|利息")),
+    ("dispute_resolution", re.compile(r"争议解决|仲裁|诉讼|调解|协商解决")),
+    ("warranties", re.compile(r"陈述与保证|陈述和保证|保证|承诺")),
+]
+
+
 def _active_category_tags() -> list[tuple[str, re.Pattern[str]]]:
     """Return generic categories plus any pack-contributed categories for
     the currently active domain packs."""
-    tags = list(_CATEGORY_TAGS)
+    tags = list(_CATEGORY_TAGS) + list(_CATEGORY_TAGS_ZH)
     try:
         from ..config import current_settings
 
@@ -66,58 +73,121 @@ def _active_category_tags() -> list[tuple[str, re.Pattern[str]]]:
 
 def _categorize(heading: str, body: str) -> list[str]:
     text = f"{heading}\n{body}"
-    hits = [name for name, pat in _active_category_tags() if pat.search(text)]
+    hits: list[str] = []
+    for name, pat in _active_category_tags():
+        if name not in hits and pat.search(text):
+            hits.append(name)
     return hits
 
 
+def _clause_record(clause, body: str, by_index: list) -> dict:
+    heading = clause.heading() if clause.label else clause.title
+    record = {
+        "label": clause.label,
+        "heading": heading,
+        "title": clause.title,
+        "level": clause.depth,
+        "parent": by_index[clause.parent].heading() if clause.parent is not None else None,
+        "body": body.strip(),
+        "categories": _categorize(heading, body),
+    }
+    if clause.paragraph is not None:
+        record["paragraph"] = clause.paragraph
+    return record
+
+
 def _split_clauses(text: str) -> list[dict]:
-    """Split a contract into a list of {heading, body, categories}."""
-    lines = text.splitlines()
-    clauses: list[dict] = []
-    current_heading: str | None = None
-    current_body: list[str] = []
+    """Clauses of plain text / markdown / PDF text, flat in document order.
 
-    def flush() -> None:
-        if current_heading is None and not current_body:
-            return
-        heading = current_heading or "PREAMBLE"
-        body = "\n".join(current_body).strip()
-        clauses.append(
-            {
-                "heading": heading,
-                "body": body,
-                "categories": _categorize(heading, body),
-            }
-        )
+    Each clause's ``body`` runs to the next clause of any level, so no text is
+    repeated; ``level`` and ``parent`` carry the hierarchy. Text before the
+    first clause is the PREAMBLE.
+    """
+    from ..documents.clauses import clause_index_from_text
 
-    for raw in lines:
-        line = raw.rstrip()
-        if not line.strip():
-            current_body.append("")
-            continue
-        if _HEADING_RE.match(line.strip()):
-            flush()
-            current_heading = line.strip()
-            current_body = []
-            continue
-        current_body.append(line)
-    flush()
-    return [c for c in clauses if c["heading"] != "PREAMBLE" or c["body"]]
+    units, clauses = clause_index_from_text(text)
+    lines = (text or "").splitlines()
+    out: list[dict] = []
+    first = clauses[0].start if clauses else len(lines)
+    preamble = "\n".join(lines[:first]).strip()
+    if preamble:
+        out.append({"label": "", "heading": "PREAMBLE", "title": "", "level": 0, "parent": None,
+                    "body": preamble, "categories": _categorize("PREAMBLE", preamble)})
+    for clause in clauses:
+        body = "\n".join(lines[clause.start + 1:clause.own_end])
+        out.append(_clause_record(clause, body, clauses))
+    for clause, record in zip(clauses, out[1 if preamble else 0:]):
+        record["line"] = clause.start
+    return out
+
+
+def _split_docx_clauses(path) -> list[dict]:
+    """Clauses of a Word document from its own numbering (第一条 as Word shows
+    it), with each clause's body paragraph index for redline_docx anchors."""
+    from ..documents.docx_reader import read_docx
+
+    reading = read_docx(path)
+    clauses = reading.clauses()
+    out: list[dict] = []
+    first = clauses[0].start if clauses else len(reading.blocks)
+    preamble = reading.render_blocks(reading.blocks[:first]).strip()
+    if preamble:
+        out.append({"label": "", "heading": "PREAMBLE", "title": "", "level": 0, "parent": None,
+                    "body": preamble, "categories": _categorize("PREAMBLE", preamble)})
+    for clause in clauses:
+        body = reading.render_blocks(reading.blocks[clause.start + 1:clause.own_end])
+        out.append(_clause_record(clause, body, clauses))
+    return out
 
 
 @beta_tool
-def extract_clauses(text: str) -> str:
-    """Heuristically split a contract into clauses and tag generic commercial
-    categories (governing law, indemnification, payment terms, force majeure,
-    etc.). When a domain pack is active, additional pack-specific tags are
-    surfaced too.
+def extract_clauses(text: str = "", path: str = "") -> str:
+    """Split a contract into its clauses and tag generic commercial categories
+    (governing law, indemnification, payment terms, force majeure, etc.).
+    When a domain pack is active, pack-specific tags are surfaced too.
 
-    Returns a JSON string: ``[{heading, body, categories: [..]} ...]``.
-    Use this to locate where each material provision lives before doing the
-    detailed clause-by-clause review.
+    Pass ``path`` for a file: a .docx (or .doc/.rtf/.odt/.wps) is indexed
+    from Word's own numbering, so labels come out exactly as the document
+    shows them (第一条, 1.1, Article 5) with each clause's paragraph index for
+    redline_docx; other formats are read as text. Or pass ``text`` already
+    in hand. Labels recognised in text: 第X编/章/节/条/款, 一、, （一）, 1. / 1.1
+    / 1.1.1, (1), ①, Article / Section / Clause N, Schedule / Exhibit / Annex.
+
+    Returns a JSON list in document order: ``[{label, heading, title, level,
+    parent, paragraph?, line?, body, categories}]``; ``body`` runs to the next
+    clause of any level, and text before the first clause is PREAMBLE.
 
     Args:
-        text: Full contract text (already extracted from PDF/DOCX).
+        text: Contract text (already extracted). Ignored when ``path`` is given.
+        path: Absolute or project-relative path to the contract file.
     """
-    clauses = _split_clauses(text)
+    if path:
+        from pathlib import Path
+
+        from ..config import current_settings
+        from ..documents.intake import (
+            WORD_LEGACY_SUFFIXES,
+            WORD_SUFFIXES,
+            UnsupportedFormat,
+            effective_suffix,
+            read_any,
+            read_legacy_word,
+        )
+
+        p = Path(path)
+        if not p.is_absolute():
+            p = current_settings().project_root / path
+        if not p.is_file():
+            return json.dumps({"error": f"File not found: {p}"}, ensure_ascii=False)
+        try:
+            suffix = effective_suffix(p)
+            docx = p if suffix in WORD_SUFFIXES else (read_legacy_word(p)[1] if suffix in WORD_LEGACY_SUFFIXES else None)
+            if docx is not None:
+                return json.dumps(_split_docx_clauses(docx), ensure_ascii=False)
+            text = read_any(p)
+        except UnsupportedFormat as exc:
+            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+        except Exception as exc:  # noqa: BLE001
+            return json.dumps({"error": f"could not read {p.name}: {exc}"}, ensure_ascii=False)
+    clauses = _split_clauses(text or "")
     return json.dumps(clauses, ensure_ascii=False)

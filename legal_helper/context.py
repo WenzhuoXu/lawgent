@@ -354,8 +354,27 @@ def render_recent(
         content = m.content
         if m.role == "assistant":
             content = compact_verification_appendix(content)
-        out.append(f"{m.role.upper()}: {_truncate_to_tokens(content, per_message_cap_tokens)}")
+        # Each turn carries its date, so "the hearing next week" in a turn from
+        # last month is not read against today.
+        stamp = _turn_date(getattr(m, "created_at", ""))
+        label = f"{m.role.upper()} [{stamp}]" if stamp else m.role.upper()
+        out.append(f"{label}: {_truncate_to_tokens(content, per_message_cap_tokens)}")
     return "\n".join(out)
+
+
+def _turn_date(created_at: str) -> str:
+    """``YYYY-MM-DD`` of a stored ISO timestamp in Asia/Shanghai, or ``""``."""
+    from datetime import datetime, timedelta, timezone
+
+    if not created_at:
+        return ""
+    try:
+        moment = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone(timedelta(hours=8))).date().isoformat()
 
 
 # Compaction thresholds are model-strength dependent, not universal. Measured
@@ -405,6 +424,28 @@ def compaction_threshold_for(settings: "Settings") -> float:
     except Exception:  # noqa: BLE001 — never let tiering break a turn
         model = None
     return FAST_COMPACTION_THRESHOLD if is_fast_tier(model) else FRONTIER_COMPACTION_THRESHOLD
+
+
+def context_tokens_from_usage(usage: Optional[dict]) -> int:
+    """How full the context window was on a turn's last request.
+
+    Providers report ``last_request_input_tokens`` on their done event. The
+    rest of a turn's usage is summed over every request of its tool loop —
+    right for billing, wrong here: read as context fill, 90 of 460 OpenAI turns
+    "exceeded" the 259K ceiling and one read 3.64M on a 1.05M-window model.
+    Without the field (an older payload, or a turn that never reached a
+    provider) the summed reading is the fallback: Anthropic counts cached
+    input in separate buckets, OpenAI inside ``input_tokens``, and the OpenAI
+    usage dict carries no Anthropic bucket keys, so neither is counted twice.
+    """
+    usage = usage or {}
+    last = int(usage.get("last_request_input_tokens") or 0)
+    if last > 0:
+        return last
+    return sum(
+        int(usage.get(key) or 0)
+        for key in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+    )
 
 
 def compaction_decision(
@@ -484,6 +525,7 @@ __all__ = [
     "is_fast_tier",
     "compaction_threshold_for",
     "compaction_decision",
+    "context_tokens_from_usage",
     "should_compact",
     "CompactionDecision",
     "WindowedContext",

@@ -8,30 +8,20 @@ rag_collections: [general]
 
 # /meeting-briefing — Counterparty / Authority Meeting Prep
 
-Produce the analytical bundle the orchestrator turns into a briefing
-memo: counterparty profile, governing law, open issues, positions, and
-procedural plan.
+Produce the analysis behind a briefing memo: counterparty profile,
+governing law, open issues, positions, and procedural plan.
 
-**Not legal advice.** The bundle is internal work product; counsel
-validates positions before any commitment.
+**Not legal advice.** This is internal work product; counsel validates
+positions before any commitment.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**.
+Artefacts this skill produces: the issue list (issue · our position · counterparty's likely position · ask · fallback).
 
 ## Inputs
 
@@ -66,6 +56,6 @@ authority, court / arbitral tribunal, customs / immigration / police.
 ## Pointers
 
 - Authority hierarchy + citation: `/playbook/general_playbook.md` §0 + §2.
-- Sanity-check + label set: general playbook §3 + §4.
+- Sanity checks: general playbook §3; finding labels: the bundle contract.
 - When the **aviation** pack is active, also apply
   `/domains/aviation/overlays/meeting-briefing.md`.

@@ -1,12 +1,14 @@
 /** Shared REST/domain types for the Legal Helper backend. */
 
 export type ProviderId = "anthropic" | "openai";
-export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export type AnswerLength = "auto" | "brief" | "focused" | "full";
 
 export type ChatSettings = {
   provider: ProviderId;
   model: string;
   reasoning_effort?: ReasoningEffort;
+  answer_length?: AnswerLength;
   skill_hint?: string | null;
   enable_web_search?: boolean;
   enable_web_fetch?: boolean;

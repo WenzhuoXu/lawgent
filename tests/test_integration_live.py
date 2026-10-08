@@ -25,22 +25,23 @@ def test_review_contract_live_anthropic():
 
     os.environ["MODEL_PROVIDER"] = "anthropic"
 
-    from legal_helper.agent import OrchestratorAgent
     from legal_helper.config import load_settings
+    from legal_helper.workflow import WorkflowExecutor
 
     settings = load_settings(refresh=True)
-    agent = OrchestratorAgent(settings=settings)
     sample = Path("examples/aviation/sample_aircraft_lease.md").resolve()
-    result = agent.run(
-        "Review this sample aircraft lease against the aviation playbook. "
-        "Focus on IDERA, insurance, AD/SB allocation, and return conditions.",
-        attachments=[sample],
+    events = list(
+        WorkflowExecutor(settings=settings).stream(
+            "Review this sample aircraft lease against the aviation playbook. "
+            "Focus on IDERA, insurance, AD/SB allocation, and return conditions.",
+            attachments=[sample],
+        )
     )
-
-    assert result.text, "empty Anthropic response"
-    text = result.text.lower()
+    done = [ev for ev in events if ev.kind == "done"]
+    assert done and done[-1].data.get("text"), "empty anthropic response"
+    text = done[-1].data["text"].lower()
     assert any(
         kw in text
         for kw in ("idera", "return condition", "airworthiness", "ad/sb", "av52", "avn52", "av67", "avn67")
-    ), f"output should mention an aviation-specific clause; got: {result.text[:400]}"
-    assert result.tool_calls or result.hosted_tool_calls, "expected at least one tool call"
+    ), f"output should mention an aviation-specific clause; got: {text[:400]}"
+    assert any(ev.kind in {"tool_call", "hosted_tool_call"} for ev in events), "expected at least one tool call"

@@ -1,0 +1,114 @@
+# 房屋租赁合同纠纷（出租人请求支付租金、解除合同、返还租赁物）— lessor's claims.
+# Pinpoints checked 2026-10-07 against the 民法典 text at court.gov.cn.
+# Re-verify every pinpoint via pkulaw_fatiao before use (README rule).
+# 城镇房屋租赁 issues governed by the SPC 房屋租赁合同解释 (一房数租, 违法建筑)
+# are not covered here — decompose from that interpretation directly.
+name: lease_rent
+display_name: 房屋租赁合同之诉（租金/解除/返还）/ Lease — rent, termination, return
+cause_of_action: 房屋租赁合同纠纷
+legal_basis:
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第七百零三条
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第七百二十一条
+  - source: 《中华人民共和国民法典》
+    pinpoint: 第七百二十二条
+elements:
+  - id: valid_lease
+    element_zh: 租赁合同依法成立并生效（六个月以上未采用书面形式、无法确定期限的，视为不定期租赁，合同仍有效）
+    element_en: A valid lease (6+ months unwritten with no provable term = periodic lease)
+    burden: claimant
+    evidence_hints: [租赁合同, 租金支付记录, 入住/交接记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百零三条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百零七条
+  - id: premises_delivered
+    element_zh: 出租人已按约定交付租赁物并在租期内保持其符合约定用途
+    element_en: Lessor delivered the premises and kept them fit for the agreed use
+    burden: claimant
+    evidence_hints: [交接单, 钥匙交付记录, 水电开户/使用记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百零八条
+  - id: rent_due
+    element_zh: 租金已到期（未约定或约定不明的，不满一年的租期届满时支付，一年以上的每届满一年时支付）
+    element_en: Rent has fallen due (statutory default timing if none agreed)
+    burden: claimant
+    evidence_hints: [租金及支付期限条款, 欠租明细, 催收记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百二十一条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百七十九条
+  - id: termination_ground
+    element_zh: 主张解除的：承租人无正当理由未付或迟延支付租金，经催告在合理期限内仍未支付，且出租人已通知解除（或以起诉方式主张）
+    element_en: For termination — unjustified non-payment, demand with a reasonable period, then notice
+    burden: claimant
+    evidence_hints: [催告函及送达证据, 解除通知及送达证据, 起诉状副本送达]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百二十二条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百六十五条
+  - id: return_due
+    element_zh: 主张返还的：租期届满或合同已解除，承租人应返还符合约定或使用后状态的租赁物
+    element_en: For return — lease expired or terminated; premises to be returned
+    burden: claimant
+    evidence_hints: [租期条款, 解除生效时点证据, 现状照片]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百三十三条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百六十六条
+defenses:
+  - id: third_party_claim
+    element_zh: 因第三人主张权利，致使承租人不能对租赁物使用、收益（承租人应及时通知出租人），请求减少或不支付租金
+    element_en: Third-party claim prevented use — rent reduced or not payable
+    burden: respondent
+    stage: quantum
+    evidence_hints: [第三人主张权利的证据, 无法使用的期间, 通知出租人的记录]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百二十三条
+  - id: premises_damaged
+    element_zh: 因不可归责于承租人的事由致租赁物部分或全部毁损、灭失，请求减少或不支付租金（不能实现合同目的的可解除）
+    element_en: Damage not attributable to the lessee — rent reduced or not payable
+    burden: respondent
+    stage: quantum
+    evidence_hints: [毁损原因证据, 鉴定意见, 不能使用的期间]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百二十九条
+  - id: repair_default
+    element_zh: 出租人未在合理期限内履行维修义务（非因承租人过错），承租人自行维修费用由出租人负担，影响使用的相应减少租金或延长租期
+    element_en: Lessor failed to repair — costs borne by lessor; rent reduced or term extended
+    burden: respondent
+    stage: quantum
+    evidence_hints: [报修记录, 维修费用票据, 影响使用的证据]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百一十二条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第七百一十三条
+  - id: rent_paid
+    element_zh: 租金已经支付或已依法抵销
+    element_en: Rent was paid or validly set off
+    burden: respondent
+    stage: extinguished
+    evidence_hints: [转账记录, 收据, 抵销通知]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第五百五十七条
+  - id: limitation
+    element_zh: 诉讼时效已经届满（先定性：同一债务分期履行的，自最后一期届满起算；各期独立的定期给付，逐期起算——按现行类案确认）
+    element_en: Limitation expired — classify first (one debt in instalments runs from the last one)
+    burden: respondent
+    stage: exercisable
+    evidence_hints: [各期租金到期日, 无催收/对账/承诺的时间线]
+    authority:
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十八条
+      - source: 《中华人民共和国民法典》
+        pinpoint: 第一百八十九条

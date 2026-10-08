@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Iterable, Iterator, Optional
 
 from openai import OpenAI
 
 from ..config import Settings
+from ..context import estimate_tokens
 from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
 from ..tool_budget import apply_result_budget, budget_log_fields
 from ..turn_compaction import InTurnContext, iteration_limit
 from ..tools.multimodal import split_inline_images, to_openai_tool_content
 from ..usage import record_usage
-from .base import Message, RunResult, StreamEvent, Tool, ToolCallRecord
+from .base import JSON_OBJECT, VERBOSITY_LEVELS, Message, RunResult, StreamEvent, Tool, ToolCallRecord
+from .progress import ToolProgressThrottle, hosted_progress_event
+from .tool_exec import run_tool_calls
 
 
 # Sent when the tool loop is cut off by a positive `max_iterations` (the
@@ -29,13 +33,91 @@ CEILING_SYNTHESIS_NUDGE = (
     "verified with the tools you had, say so explicitly instead of omitting it."
 )
 
+# --- per-model request capabilities ------------------------------------------
+# Measured with live calls on 2026-10-07; a 400 names the values a model takes.
+# A model missing from a table keeps the conservative behaviour it had before.
+
+# Reasoning effort each model accepts. gpt-6.1-sol rejects "none" and
+# "minimal"; gpt-6-luna takes "none" but not "minimal". Omitting the parameter
+# runs either model at "medium" — so the old rule of omitting it for "none"
+# made every "none" luna call (titles, routing) reason at medium.
+_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+OPENAI_REASONING_EFFORTS: dict[str, tuple[str, ...]] = {
+    "gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max"),
+    "gpt-6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
+}
+
+# Models that accept `text.verbosity` (low | medium | high), alone and next to a
+# strict json_schema `text.format`.
+OPENAI_VERBOSITY_MODELS = frozenset({"gpt-6.1-sol", "gpt-6-luna"})
+
+# Models that accept an explicit `prompt_cache_breakpoint` on a content block.
+# The breakpoint is added in the default (implicit) mode, where it takes one of
+# the four cache-write slots and the automatic end-of-input breakpoint still
+# applies — `prompt_cache_options.mode: "explicit"` would switch that one off
+# and with it the in-turn caching the tool loop relies on.
+OPENAI_EXPLICIT_CACHE_MODELS = frozenset({"gpt-6.1-sol", "gpt-6-luna"})
+# Shortest prefix the API will cache (GPT-5.6 and later). Below it a breakpoint
+# writes nothing, so the system text stays in `instructions`, as before.
+OPENAI_MIN_CACHEABLE_TOKENS = 1_024
+_CACHE_BREAKPOINT = {"mode": "explicit"}
+
+
+def reasoning_effort_for(model: str, effort: Optional[str]) -> Optional[str]:
+    """The `reasoning.effort` to send for ``effort`` on ``model``; None to omit.
+
+    A level the model rejects becomes the nearest level it accepts (ties go
+    to the cheaper side), so a caller asking for "none" on gpt-6.1-sol gets
+    "low" rather than a 400 or the model's "medium" default.
+    """
+    level = (effort or "").strip().lower()
+    if not level:
+        return None
+    accepted = OPENAI_REASONING_EFFORTS.get(model)
+    if accepted is None:
+        return None if level in {"none", "minimal"} else level
+    if level in accepted:
+        return level
+    if level not in _EFFORT_ORDER:
+        return None
+    rank = _EFFORT_ORDER.index(level)
+    return min(accepted, key=lambda v: (abs(_EFFORT_ORDER.index(v) - rank), _EFFORT_ORDER.index(v)))
+
+
+def verbosity_for(model: str, verbosity: Optional[str]) -> Optional[str]:
+    level = (verbosity or "").strip().lower()
+    if level in VERBOSITY_LEVELS and model in OPENAI_VERBOSITY_MODELS:
+        return level
+    return None
+
+
+def _stable_prefix_tokens(system: str, openai_tools: list[dict[str, Any]]) -> int:
+    """Estimated size of what precedes the conversation: tool schemas + system."""
+    tools_text = json.dumps(openai_tools, ensure_ascii=False, sort_keys=True) if openai_tools else ""
+    return estimate_tokens(system) + estimate_tokens(tools_text)
+
+
+def _developer_prefix(system: str) -> dict[str, Any]:
+    """The system text as a developer message carrying a cache breakpoint.
+
+    `instructions` cannot carry an explicit breakpoint, and one-shot calls
+    (planner, summariser) never reach the automatic one: the luna planner read
+    0.7% of its input from cache in September. A breakpoint after the stable
+    text makes it a read on the next call with the same prefix.
+    """
+    return {
+        "role": "developer",
+        "content": [{"type": "input_text", "text": system, "prompt_cache_breakpoint": dict(_CACHE_BREAKPOINT)}],
+    }
+
 
 def _accumulate_usage(usage_total: dict[str, Any], u: Any) -> None:
     """Fold one Responses-API usage object into a running total.
 
     Captures the cached-input subset (``input_tokens_details.cached_tokens``)
     alongside the headline counts so the cost center can price it at the
-    discounted cached rate.
+    discounted cached rate, and the cache-write count the API now reports
+    (``cache_write_tokens``) as ``cache_write_input_tokens`` for telemetry.
     """
     if u is None:
         return
@@ -47,6 +129,22 @@ def _accumulate_usage(usage_total: dict[str, Any], u: Any) -> None:
     cached = getattr(details, "cached_tokens", None) if details is not None else None
     if cached:
         usage_total["cached_input_tokens"] = usage_total.get("cached_input_tokens", 0) + cached
+    written = getattr(details, "cache_write_tokens", None) if details is not None else None
+    if written:
+        usage_total["cache_write_input_tokens"] = usage_total.get("cache_write_input_tokens", 0) + written
+
+
+def _with_last_request(usage_total: dict[str, Any], last_input: Optional[int]) -> dict[str, Any]:
+    """Usage for callers: the turn totals plus the last request's input size.
+
+    ``input_tokens`` is summed over every request of the tool loop — right for
+    billing, wrong for "how full is the context". A 30-round turn summed to
+    3.64M on a 1.05M-window model, and the compaction decision read that sum.
+    """
+    out = dict(usage_total)
+    if last_input:
+        out["last_request_input_tokens"] = int(last_input)
+    return out
 
 
 def _output_refs(resp: Any) -> list[dict[str, Any]]:
@@ -86,6 +184,22 @@ def _tool_to_openai(tool: Any) -> dict[str, Any]:
         "description": desc or "",
         "parameters": schema or {"type": "object", "properties": {}},
     }
+
+
+def _parse_args(args: str) -> dict[str, Any]:
+    """Function-call arguments as a dict; {} for empty, non-object or cut-off JSON.
+
+    A response stopped at the output ceiling can end mid-argument, and
+    `json.loads` on that used to raise out of the whole tool loop.
+    """
+    text = (args or "").strip()
+    if not text.startswith("{"):
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _call_local_tool(tools_by_name: dict[str, Any], name: str, args_json: str) -> str:
@@ -171,6 +285,46 @@ def _is_max_output_truncation(resp: Any) -> bool:
     return reason == "max_output_tokens"
 
 
+def _stop_reason(resp: Any, *, truncated: bool) -> str:
+    """Normalized stop reason, in the Anthropic vocabulary where one exists.
+
+    ``truncated`` is whether any request of the loop hit the output ceiling —
+    the condition the stream path already reports, so both paths agree.
+    """
+    if truncated or _is_max_output_truncation(resp):
+        return "max_tokens"
+    if resp is not None and getattr(resp, "status", None) == "incomplete":
+        details = getattr(resp, "incomplete_details", None)
+        return str(getattr(details, "reason", None) or "incomplete")
+    return "stop"
+
+
+_HOSTED_CALL_TYPES = {"web_search_call", "file_search_call", "code_interpreter_call"}
+_HOSTED_PROGRESS_NAMES = {"web_search_call": "web_search", "file_search_call": "file_search"}
+
+
+def _hosted_arguments(item: Any) -> dict[str, Any]:
+    """What a hosted call searched for, so a source chip can name it.
+
+    The Anthropic path already carries the query on `hosted_tool_call`; the
+    OpenAI path shipped `{}` and its chips had nothing to show.
+    """
+    action = getattr(item, "action", None)
+    if action is not None:
+        query = getattr(action, "query", None)
+        queries = getattr(action, "queries", None)
+        if not query and queries:
+            query = queries[0]
+        url = getattr(action, "url", None)
+        out = {k: v for k, v in (("query", query), ("url", url)) if v}
+        if out:
+            return out
+    queries = getattr(item, "queries", None)  # file_search_call
+    if queries:
+        return {"query": queries[0]}
+    return {}
+
+
 class OpenAIProvider:
     name = "openai"
     supports_hosted_web_search = True
@@ -188,6 +342,135 @@ class OpenAIProvider:
         self.model = settings.openai_fast_model if fast else settings.openai_model
         self.reasoning_effort = settings.openai_reasoning_effort
 
+    # ----- request shape -----------------------------------------------------
+
+    def _base_request(
+        self,
+        system: str,
+        openai_tools: list[dict[str, Any]],
+        *,
+        verbosity: Optional[str],
+        structured_output: Optional[type] = None,
+        reasoning_summary: bool = False,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Per-loop request parameters, plus input items that open the conversation.
+
+        A system prompt large enough to cache goes in as a developer message
+        with a cache breakpoint, sent once: `previous_response_id` carries it
+        to every chained request, which `instructions` would not.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "tools": openai_tools or None,
+            # Honor the configured output ceiling (parity with the Anthropic
+            # max_tokens param); without it the truncation notice would blame
+            # a knob that does nothing.
+            "max_output_tokens": self.settings.max_tokens,
+        }
+        prefix: list[dict[str, Any]] = []
+        if system:
+            if (
+                self.model in OPENAI_EXPLICIT_CACHE_MODELS
+                and _stable_prefix_tokens(system, openai_tools) >= OPENAI_MIN_CACHEABLE_TOKENS
+            ):
+                prefix.append(_developer_prefix(system))
+            else:
+                kwargs["instructions"] = system
+        effort = reasoning_effort_for(self.model, self.reasoning_effort)
+        if effort:
+            kwargs["reasoning"] = {"effort": effort}
+            if reasoning_summary:
+                # Request a reasoning summary so we can stream a "thinking"
+                # preview; degrades gracefully if the org lacks summary access.
+                kwargs["reasoning"]["summary"] = "auto"
+        text: dict[str, Any] = {}
+        if structured_output == JSON_OBJECT:
+            text["format"] = {"type": "json_object"}
+        elif structured_output is not None and hasattr(structured_output, "model_json_schema"):
+            text["format"] = {
+                "type": "json_schema",
+                "name": structured_output.__name__,
+                "schema": structured_output.model_json_schema(),
+                "strict": True,
+            }
+        level = verbosity_for(self.model, verbosity)
+        if level:
+            text["verbosity"] = level
+        if text:
+            kwargs["text"] = text
+        return kwargs, prefix
+
+    def _run_function_calls(
+        self,
+        pending: list[tuple[str, str, str]],
+        tools_by_name: dict[str, Any],
+        iteration: int,
+    ) -> list[dict[str, Any]]:
+        """Execute one response's function calls; return their outputs in order.
+
+        Independent read-only calls run side by side (`tool_exec`); the
+        started/finished events still go out in call order, so each result
+        lands on its own tool card.
+        """
+        names = [name for _, name, _ in pending]
+        durations: list[int] = [0] * len(pending)
+        outputs: list[dict[str, Any]] = [{} for _ in pending]
+
+        def before(i: int) -> None:
+            call_id, name, args = pending[i]
+            log_workflow_event(
+                "local_tool_call_started",
+                {
+                    "provider": self.name,
+                    "model": self.model,
+                    "tool_name": name,
+                    "arguments": _parse_args(args),
+                    "iteration": iteration,
+                },
+            )
+
+        def work(i: int) -> str:
+            _, name, args = pending[i]
+            started = time.monotonic()
+            try:
+                return _call_local_tool(tools_by_name, name, args)
+            finally:
+                durations[i] = int((time.monotonic() - started) * 1000)
+
+        def after(i: int, raw_output: str) -> None:
+            call_id, name, _ = pending[i]
+            output_str, images = split_inline_images(raw_output)
+            # Image-carrying results keep their protocol intact; text-only
+            # results are cut to the tool's declared model-facing budget.
+            budgeted = apply_result_budget(name, output_str) if not images else None
+            log_workflow_event(
+                "local_tool_call_finished",
+                {
+                    "provider": self.name,
+                    "model": self.model,
+                    "tool_name": name,
+                    "output_preview": output_str[:1200],
+                    "output_chars": len(output_str),
+                    "iteration": iteration,
+                    "duration_ms": durations[i],
+                    **({"calls_in_response": len(pending)} if len(pending) > 1 else {}),
+                    **({"inline_images": len(images)} if images else {}),
+                    **budget_log_fields(budgeted),
+                },
+            )
+            outputs[i] = {
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": (
+                    to_openai_tool_content(raw_output)
+                    if images
+                    else (budgeted.text if budgeted is not None else output_str)
+                ),
+            }
+
+        run_tool_calls(names, work, before=before, after=after)
+        return outputs
+
     # ----- core run paths ---------------------------------------------------
 
     def run(
@@ -198,6 +481,7 @@ class OpenAIProvider:
         *,
         max_iterations: Optional[int] = None,
         structured_output: Optional[type] = None,
+        verbosity: Optional[str] = None,
     ) -> RunResult:
         return self.tool_runner(
             system,
@@ -205,6 +489,7 @@ class OpenAIProvider:
             tools,
             max_iterations=max_iterations or self.settings.max_iterations,
             structured_output=structured_output,
+            verbosity=verbosity,
         )
 
     def tool_runner(
@@ -215,6 +500,7 @@ class OpenAIProvider:
         *,
         max_iterations: int,
         structured_output: Optional[type] = None,
+        verbosity: Optional[str] = None,
     ) -> RunResult:
         tools_list = list(tools)
         openai_tools = [_tool_to_openai(t) for t in tools_list]
@@ -224,7 +510,10 @@ class OpenAIProvider:
             if n:
                 tools_by_name[n] = t
 
-        input_items: list[dict[str, Any]] = _stringify_input_messages(messages)
+        kwargs_base, prefix_items = self._base_request(
+            system, openai_tools, verbosity=verbosity, structured_output=structured_output
+        )
+        input_items: list[dict[str, Any]] = [*prefix_items, *_stringify_input_messages(messages)]
         previous_response_id: Optional[str] = None
 
         all_tool_calls: list[ToolCallRecord] = []
@@ -232,27 +521,8 @@ class OpenAIProvider:
         final_text = ""
         usage_total: dict[str, Any] = {}
         last_response_id: Optional[str] = None
-
-        kwargs_base: dict[str, Any] = {
-            "model": self.model,
-            "instructions": system,
-            "tools": openai_tools or None,
-            # Honor the configured output ceiling (parity with the Anthropic
-            # max_tokens param); without it the truncation notice below would
-            # blame a knob that does nothing.
-            "max_output_tokens": self.settings.max_tokens,
-        }
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            kwargs_base["reasoning"] = {"effort": self.reasoning_effort}
-        if structured_output is not None and hasattr(structured_output, "model_json_schema"):
-            kwargs_base["text"] = {
-                "format": {
-                    "type": "json_schema",
-                    "name": structured_output.__name__,
-                    "schema": structured_output.model_json_schema(),
-                    "strict": True,
-                }
-            }
+        last_resp: Any = None
+        truncated = False
 
         iterations = 0
         ceiling_hit = False
@@ -268,7 +538,9 @@ class OpenAIProvider:
                 "provider": self.name,
                 "model": self.model,
                 "tools_offered": [tdef.get("name", tdef.get("type")) for tdef in openai_tools],
-                "reasoning_effort": self.reasoning_effort,
+                "reasoning_effort": (kwargs_base.get("reasoning") or {}).get("effort"),
+                **({"verbosity": kwargs_base["text"]["verbosity"]} if "verbosity" in kwargs_base.get("text", {}) else {}),
+                "cache_prefix": bool(prefix_items),
             },
         )
         with TurnTimer() as t:
@@ -283,7 +555,9 @@ class OpenAIProvider:
                         kwargs["previous_response_id"] = previous_response_id
 
                 resp = self.client.responses.create(**kwargs)
+                last_resp = resp
                 last_response_id = getattr(resp, "id", None)
+                truncated = truncated or _is_max_output_truncation(resp)
                 history.extend(_output_refs(resp))
                 if in_turn is not None:
                     in_turn.observe_openai(getattr(resp, "usage", None))
@@ -299,16 +573,13 @@ class OpenAIProvider:
                         pending_function_calls.append((call_id, name, args))
                         call_names[str(call_id)] = name
                         all_tool_calls.append(
-                            ToolCallRecord(
-                                name=name,
-                                arguments=(json.loads(args) if args else {}) if args.strip().startswith("{") else {},
-                                raw={"call_id": call_id},
-                            )
+                            ToolCallRecord(name=name, arguments=_parse_args(args), raw={"call_id": call_id})
                         )
-                    elif itype in {"web_search_call", "file_search_call", "code_interpreter_call"}:
+                    elif itype in _HOSTED_CALL_TYPES:
+                        arguments = _hosted_arguments(item)
                         record = ToolCallRecord(
                             name=itype,
-                            arguments={},
+                            arguments=arguments,
                             is_hosted=True,
                             raw={"id": getattr(item, "id", None)},
                         )
@@ -321,6 +592,7 @@ class OpenAIProvider:
                                 "tool_name": itype,
                                 "tool_id": getattr(item, "id", None),
                                 "iteration": iterations,
+                                "arguments": arguments,
                             },
                         )
 
@@ -331,47 +603,7 @@ class OpenAIProvider:
                     break
 
                 # Append function_call_output items and continue
-                input_items = []
-                for call_id, name, args in pending_function_calls:
-                    log_workflow_event(
-                        "local_tool_call_started",
-                        {
-                            "provider": self.name,
-                            "model": self.model,
-                            "tool_name": name,
-                            "arguments": (json.loads(args) if args and args.strip().startswith("{") else {}),
-                            "iteration": iterations,
-                        },
-                    )
-                    raw_output = _call_local_tool(tools_by_name, name, args)
-                    output_str, images = split_inline_images(raw_output)
-                    # Image-carrying results keep their protocol intact; text-only
-                    # results are cut to the tool's declared model-facing budget.
-                    budgeted = apply_result_budget(name, output_str) if not images else None
-                    log_workflow_event(
-                        "local_tool_call_finished",
-                        {
-                            "provider": self.name,
-                            "model": self.model,
-                            "tool_name": name,
-                            "output_preview": output_str[:1200],
-                            "output_chars": len(output_str),
-                            "iteration": iterations,
-                            **({"inline_images": len(images)} if images else {}),
-                            **budget_log_fields(budgeted),
-                        },
-                    )
-                    input_items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": (
-                                to_openai_tool_content(raw_output)
-                                if images
-                                else (budgeted.text if budgeted is not None else output_str)
-                            ),
-                        }
-                    )
+                input_items = self._run_function_calls(pending_function_calls, tools_by_name, iterations)
                 history.extend(input_items)
                 previous_response_id = last_response_id
                 if limit is not None and iterations >= limit:
@@ -391,7 +623,7 @@ class OpenAIProvider:
                 )
                 if not final_text.strip():
                     final_text = self._forced_synthesis_text(
-                        system=system,
+                        kwargs_base=kwargs_base,
                         input_items=input_items,
                         previous_response_id=previous_response_id,
                         usage_total=usage_total,
@@ -406,6 +638,7 @@ class OpenAIProvider:
             except Exception:
                 structured_payload = None
 
+        stop_reason = _stop_reason(last_resp, truncated=truncated)
         log_turn(
             {
                 "provider": self.name,
@@ -420,8 +653,9 @@ class OpenAIProvider:
                 "usage": usage_total,
                 "latency_ms": t.latency_ms,
                 "openai_response_id": last_response_id,
-                "reasoning_effort": self.reasoning_effort,
+                "reasoning_effort": (kwargs_base.get("reasoning") or {}).get("effort"),
                 "iterations": iterations,
+                "stop_reason": stop_reason,
                 "provider_capabilities": {
                     "hosted_web_search": self.supports_hosted_web_search,
                     "file_search": self.supports_file_search,
@@ -442,6 +676,7 @@ class OpenAIProvider:
                 "has_sources": _has_sources(final_text),
                 "latency_ms": t.latency_ms,
                 "iterations": iterations,
+                "stop_reason": stop_reason,
             },
         )
 
@@ -449,12 +684,13 @@ class OpenAIProvider:
             text=final_text,
             provider=self.name,
             model=self.model,
-            usage=usage_total,
+            usage=_with_last_request(usage_total, getattr(in_turn, "last_input_tokens", None)),
             tool_calls=all_tool_calls,
             hosted_tool_calls=all_hosted_calls,
             structured_payload=structured_payload,
             response_id=last_response_id,
             iterations=iterations,
+            stop_reason=stop_reason,
         )
 
     # ----- tool-loop ceiling recovery ---------------------------------------
@@ -462,11 +698,16 @@ class OpenAIProvider:
     def _forced_synthesis_kwargs(
         self,
         *,
-        system: str,
+        kwargs_base: dict[str, Any],
         input_items: list[dict[str, Any]],
         previous_response_id: Optional[str],
     ) -> dict[str, Any]:
-        """One more call with the tool results but WITHOUT tools."""
+        """One more call with the tool results but WITHOUT tools.
+
+        Everything else matches the loop's own requests: the system text (in
+        `instructions`, or carried by `previous_response_id` as the developer
+        prefix), the reasoning effort and any structured-output format.
+        """
         items = list(input_items or [])
         items.append(
             {
@@ -474,22 +715,16 @@ class OpenAIProvider:
                 "content": [{"type": "input_text", "text": CEILING_SYNTHESIS_NUDGE}],
             }
         )
-        kwargs: dict[str, Any] = {
-            "model": self.model,
-            "instructions": system,
-            "input": items,
-            "max_output_tokens": self.settings.max_tokens,
-        }
+        kwargs = {k: v for k, v in kwargs_base.items() if k != "tools" and v is not None}
+        kwargs["input"] = items
         if previous_response_id is not None:
             kwargs["previous_response_id"] = previous_response_id
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            kwargs["reasoning"] = {"effort": self.reasoning_effort}
         return kwargs
 
     def _forced_synthesis_text(
         self,
         *,
-        system: str,
+        kwargs_base: dict[str, Any],
         input_items: list[dict[str, Any]],
         previous_response_id: Optional[str],
         usage_total: dict[str, Any],
@@ -497,7 +732,7 @@ class OpenAIProvider:
         try:
             resp = self.client.responses.create(
                 **self._forced_synthesis_kwargs(
-                    system=system,
+                    kwargs_base=kwargs_base,
                     input_items=input_items,
                     previous_response_id=previous_response_id,
                 )
@@ -514,19 +749,17 @@ class OpenAIProvider:
     def _forced_synthesis_stream(
         self,
         *,
-        system: str,
+        kwargs_base: dict[str, Any],
         input_items: list[dict[str, Any]],
         previous_response_id: Optional[str],
         text_buffer: list[str],
         usage_total: dict[str, Any],
     ) -> Iterator[StreamEvent]:
         kwargs = self._forced_synthesis_kwargs(
-            system=system,
+            kwargs_base=kwargs_base,
             input_items=input_items,
             previous_response_id=previous_response_id,
         )
-        if self.reasoning_effort and self.reasoning_effort != "none":
-            kwargs["reasoning"] = {"effort": self.reasoning_effort, "summary": "auto"}
         try:
             with self.client.responses.stream(**kwargs) as stream:
                 for event in stream:
@@ -556,6 +789,7 @@ class OpenAIProvider:
         tools: Iterable[Tool] = (),
         *,
         max_iterations: Optional[int] = None,
+        verbosity: Optional[str] = None,
     ) -> Iterator[StreamEvent]:
         """Stream text deltas; tool calls are still handled in a loop.
 
@@ -567,7 +801,10 @@ class OpenAIProvider:
         openai_tools = [_tool_to_openai(t) for t in tools_list]
         tools_by_name: dict[str, Any] = {n: t for t in tools_list if (n := getattr(t, "name", None))}
 
-        input_items: list[dict[str, Any]] = _stringify_input_messages(messages)
+        kwargs_base, prefix_items = self._base_request(
+            system, openai_tools, verbosity=verbosity, reasoning_summary=True
+        )
+        input_items: list[dict[str, Any]] = [*prefix_items, *_stringify_input_messages(messages)]
         previous_response_id: Optional[str] = None
         text_buffer: list[str] = []
         truncated = False
@@ -578,6 +815,7 @@ class OpenAIProvider:
         in_turn = InTurnContext.for_settings(self.settings, provider=self.name, model=self.model)
         history: list[dict[str, Any]] = list(input_items)
         call_names: dict[str, str] = {}
+        final: Any = None
 
         log_workflow_event(
             "provider_turn_started",
@@ -585,34 +823,27 @@ class OpenAIProvider:
                 "provider": self.name,
                 "model": self.model,
                 "tools_offered": [tdef.get("name", tdef.get("type")) for tdef in openai_tools],
-                "reasoning_effort": self.reasoning_effort,
+                "reasoning_effort": (kwargs_base.get("reasoning") or {}).get("effort"),
+                **({"verbosity": kwargs_base["text"]["verbosity"]} if "verbosity" in kwargs_base.get("text", {}) else {}),
+                "cache_prefix": bool(prefix_items),
                 "stream": True,
             },
         )
         with TurnTimer() as t:
             while limit is None or iterations < limit:
                 iterations += 1
-                kwargs: dict[str, Any] = {
-                    "model": self.model,
-                    "instructions": system,
-                    "tools": openai_tools or None,
-                    "input": input_items,
-                    # Same output ceiling as the non-streaming path.
-                    "max_output_tokens": self.settings.max_tokens,
-                }
-                if self.reasoning_effort and self.reasoning_effort != "none":
-                    # Request a reasoning summary so we can stream a "thinking"
-                    # preview; degrades gracefully if the org lacks summary access.
-                    kwargs["reasoning"] = {"effort": self.reasoning_effort, "summary": "auto"}
+                kwargs: dict[str, Any] = {k: v for k, v in kwargs_base.items() if v is not None}
+                kwargs["input"] = input_items
                 if previous_response_id is not None:
                     if in_turn is not None and in_turn.before_openai_request(history, call_names):
                         kwargs["input"] = history
                     else:
                         kwargs["previous_response_id"] = previous_response_id
-                kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
                 pending: list[tuple[str, str, str]] = []
                 last_response_id: Optional[str] = None
+                progress = ToolProgressThrottle()
+                searching: set[str] = set()
                 with self.client.responses.stream(**kwargs) as stream:
                     for event in stream:
                         et = getattr(event, "type", "")
@@ -628,6 +859,47 @@ class OpenAIProvider:
                         elif et == "response.reasoning_summary_part.added":
                             # separate summary parts with a blank line
                             yield StreamEvent("reasoning_delta", {"text": "\n\n"})
+                        elif et == "response.function_call_arguments.delta":
+                            snapshot = getattr(event, "snapshot", None)
+                            ev = progress.update(
+                                getattr(event, "item_id", None),
+                                chars_so_far=len(snapshot) if isinstance(snapshot, str) else None,
+                                added=len(getattr(event, "delta", "") or ""),
+                            )
+                            if ev is not None:
+                                yield ev
+                        elif et == "response.output_item.added":
+                            item = getattr(event, "item", None)
+                            if getattr(item, "type", None) == "function_call":
+                                progress.open(getattr(item, "id", None), getattr(item, "name", ""), getattr(item, "call_id", None))
+                        elif et in {"response.web_search_call.searching", "response.file_search_call.searching"}:
+                            item_id = getattr(event, "item_id", None)
+                            if item_id and item_id not in searching:
+                                searching.add(item_id)
+                                kind = et.split(".")[1]
+                                yield hosted_progress_event(
+                                    provider=self.name,
+                                    model=self.model,
+                                    tool_name=_HOSTED_PROGRESS_NAMES.get(kind, kind),
+                                    tool_id=item_id,
+                                    status="searching",
+                                )
+                        elif et == "response.output_item.done":
+                            item = getattr(event, "item", None)
+                            itype = getattr(item, "type", None)
+                            if itype == "function_call":
+                                progress.close(getattr(item, "id", None))
+                            elif itype in _HOSTED_PROGRESS_NAMES:
+                                arguments = _hosted_arguments(item)
+                                yield hosted_progress_event(
+                                    provider=self.name,
+                                    model=self.model,
+                                    tool_name=_HOSTED_PROGRESS_NAMES[itype],
+                                    tool_id=getattr(item, "id", None),
+                                    status="completed",
+                                    query=arguments.get("query"),
+                                    url=arguments.get("url"),
+                                )
                         elif et in {"response.completed", "response.incomplete"}:
                             final = getattr(event, "response", None)
                             if _is_max_output_truncation(final):
@@ -647,11 +919,7 @@ class OpenAIProvider:
                                         )
                                     )
                                     call_names[str(pending[-1][0])] = pending[-1][1]
-                                elif getattr(item, "type", None) in {
-                                    "web_search_call",
-                                    "file_search_call",
-                                    "code_interpreter_call",
-                                }:
+                                elif getattr(item, "type", None) in _HOSTED_CALL_TYPES:
                                     tool_name = getattr(item, "type", "")
                                     event_data = {
                                         "provider": self.name,
@@ -659,6 +927,7 @@ class OpenAIProvider:
                                         "tool_name": tool_name,
                                         "tool_id": getattr(item, "id", None),
                                         "iteration": iterations,
+                                        "arguments": _hosted_arguments(item),
                                     }
                                     log_workflow_event("hosted_tool_call", event_data)
                                     yield StreamEvent("hosted_tool_call", event_data)
@@ -666,56 +935,18 @@ class OpenAIProvider:
                 if not pending:
                     break
 
-                input_items = []
-                for call_id, name, args in pending:
-                    parsed_args = json.loads(args) if args and args.strip().startswith("{") else {}
+                # The model asked for these together; announce them all, then
+                # run them (side by side where tool_policy allows it).
+                for _, name, args in pending:
                     yield StreamEvent(
                         "tool_call",
                         {
                             "name": name,
-                            "arguments": parsed_args,
+                            "arguments": _parse_args(args),
                             "agent": agent_name_var.get(),
                         },
                     )
-                    log_workflow_event(
-                        "local_tool_call_started",
-                        {
-                            "provider": self.name,
-                            "model": self.model,
-                            "tool_name": name,
-                            "arguments": parsed_args,
-                            "iteration": iterations,
-                        },
-                    )
-                    raw_output = _call_local_tool(tools_by_name, name, args)
-                    output_str, images = split_inline_images(raw_output)
-                    # Image-carrying results keep their protocol intact; text-only
-                    # results are cut to the tool's declared model-facing budget.
-                    budgeted = apply_result_budget(name, output_str) if not images else None
-                    log_workflow_event(
-                        "local_tool_call_finished",
-                        {
-                            "provider": self.name,
-                            "model": self.model,
-                            "tool_name": name,
-                            "output_preview": output_str[:1200],
-                            "output_chars": len(output_str),
-                            "iteration": iterations,
-                            **({"inline_images": len(images)} if images else {}),
-                            **budget_log_fields(budgeted),
-                        },
-                    )
-                    input_items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": call_id,
-                            "output": (
-                                to_openai_tool_content(raw_output)
-                                if images
-                                else (budgeted.text if budgeted is not None else output_str)
-                            ),
-                        }
-                    )
+                input_items = self._run_function_calls(pending, tools_by_name, iterations)
                 history.extend(input_items)
                 previous_response_id = last_response_id
                 # Reaching here means the model asked for more tools. If a
@@ -738,7 +969,7 @@ class OpenAIProvider:
                 )
                 if not "".join(text_buffer).strip():
                     yield from self._forced_synthesis_stream(
-                        system=system,
+                        kwargs_base=kwargs_base,
                         input_items=input_items,
                         previous_response_id=previous_response_id,
                         text_buffer=text_buffer,
@@ -754,6 +985,7 @@ class OpenAIProvider:
             )
             final_text += notice
             yield StreamEvent("delta", {"text": notice})
+        stop_reason = _stop_reason(final, truncated=truncated)
         record_usage(self.name, self.model, usage_total, state_dir=getattr(self.settings, "state_dir", None))
         log_turn(
             {
@@ -767,6 +999,7 @@ class OpenAIProvider:
                 "openai_response_id": previous_response_id,
                 "stream": True,
                 "iterations": iterations,
+                "stop_reason": stop_reason,
             }
         )
         log_workflow_event(
@@ -781,14 +1014,15 @@ class OpenAIProvider:
                 "has_evidence_verification_log": _has_evidence_log(final_text),
                 "has_claim_level_sanity_check": _has_claim_check(final_text),
                 "has_sources": _has_sources(final_text),
+                "stop_reason": stop_reason,
             },
         )
         yield StreamEvent(
             "done",
             {
                 "text": final_text,
-                "usage": usage_total,
-                "stop_reason": "max_tokens" if truncated else "stop",
+                "usage": _with_last_request(usage_total, getattr(in_turn, "last_input_tokens", None)),
+                "stop_reason": stop_reason,
             },
         )
 

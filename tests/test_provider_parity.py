@@ -83,17 +83,17 @@ def test_both_providers_share_runresult_fields():
     assert "IDERA" in ra.text and "IDERA" in ro.text
 
 
-def test_orchestrator_dispatches_through_both_providers(monkeypatch):
-    """The same orchestrator flow runs end-to-end through Anthropic and OpenAI mocks."""
-    settings = load_settings(refresh=True)
+def test_a_workflow_turn_runs_through_both_providers(tmp_path):
+    """The same chat turn runs end-to-end through Anthropic and OpenAI mocks."""
+    from legal_helper.workflow import WorkflowExecutor
 
-    from legal_helper.agent import OrchestratorAgent
-
+    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
     for provider in (MockAnthropicProvider(), MockOpenAIProvider()):
-        agent = OrchestratorAgent(provider=provider, settings=settings)
-        result = agent.run("Review the lease.")
-        assert "Aviation review complete" in result.text
-        assert result.provider in {"anthropic", "openai"}
+        events = list(WorkflowExecutor(settings=settings, provider=provider).stream("Review the lease."))
+        done = [ev for ev in events if ev.kind == "done"]
+        assert len(done) == 1
+        assert done[0].data["text"] == "ok"
+        assert not [ev for ev in events if ev.kind == "error"]
 
 
 def test_all_nine_skills_loadable_under_either_provider():

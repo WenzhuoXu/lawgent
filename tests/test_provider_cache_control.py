@@ -10,11 +10,14 @@ from unittest.mock import patch
 from legal_helper.config import load_settings
 from legal_helper.providers.anthropic_provider import (
     AnthropicProvider,
+    _automatic_cache_kwarg,
     _cached_system,
     _tools_with_cache_breakpoint,
 )
 from legal_helper.providers.openai_provider import OpenAIProvider
 from legal_helper.usage import month_summary
+
+ONE_HOUR = {"type": "ephemeral", "ttl": "1h"}
 
 
 def _usage(inp=0, out=0, cread=0, cwrite=0) -> SimpleNamespace:
@@ -72,7 +75,9 @@ class _FakeStreamRunner:
 
 def _provider(tmp_path, runner, captured: dict) -> AnthropicProvider:
     provider = AnthropicProvider.__new__(AnthropicProvider)
-    provider.settings = SimpleNamespace(max_tokens=1000, max_iterations=3, state_dir=tmp_path)
+    provider.settings = SimpleNamespace(
+        max_tokens=1000, max_iterations=3, state_dir=tmp_path, openai_reasoning_effort="medium"
+    )
     provider.model = "claude-test"
 
     def tool_runner(**kwargs):
@@ -88,12 +93,14 @@ def _provider(tmp_path, runner, captured: dict) -> AnthropicProvider:
 # ----- cache_control breakpoints -------------------------------------------
 
 
-def test_cached_system_wraps_prompt_with_ephemeral_breakpoint():
+def test_cached_system_wraps_prompt_with_one_hour_breakpoint():
+    # The stable prefix outlives the 5-minute default between turns; a 1h
+    # entry is read when the user comes back 5–60 minutes later.
     assert _cached_system("You are a PRC legal assistant.") == [
         {
             "type": "text",
             "text": "You are a PRC legal assistant.",
-            "cache_control": {"type": "ephemeral"},
+            "cache_control": ONE_HOUR,
         }
     ]
     # Empty prompts pass through untouched (an empty text block would 400).
@@ -104,7 +111,7 @@ def test_tools_breakpoint_annotates_last_dict_tool_without_mutating_input():
     web = {"type": "web_search_20250305", "name": "web_search"}
     tools = [{"name": "a"}, web]
     out = _tools_with_cache_breakpoint(tools)
-    assert out[-1]["cache_control"] == {"type": "ephemeral"}
+    assert out[-1]["cache_control"] == ONE_HOUR
     assert "cache_control" not in web  # original never mutated
     assert out[0] is tools[0]  # non-last tools untouched
     assert _tools_with_cache_breakpoint([]) == []
@@ -120,25 +127,79 @@ def test_tools_breakpoint_copies_beta_function_tool():
     tool = BetaFunctionTool(lookup)
     out = _tools_with_cache_breakpoint([tool])
     assert out[0] is not tool
-    assert out[0].to_dict()["cache_control"] == {"type": "ephemeral"}
+    assert out[0].to_dict()["cache_control"] == ONE_HOUR
     assert tool._cache_control is None  # shared tool object never mutated
     assert out[0].call({"q": "民法典"}) == "民法典"  # copy still executes
+
+
+def _lookup_tool():
+    from anthropic.lib.tools import beta_tool
+
+    @beta_tool
+    def lookup(q: str) -> str:
+        """Look up a statute."""
+        return q
+
+    return lookup
 
 
 def test_run_and_stream_kwargs_carry_cache_breakpoints(tmp_path):
     final = SimpleNamespace(content=[_text_block("ok")], usage=_usage(1, 1), id="m1")
     captured: dict = {}
     provider = _provider(tmp_path, _FakeMessageRunner([final]), captured)
-    provider.run("sys prompt", [{"role": "user", "content": "hi"}], tools=[{"name": "t"}])
-    assert captured["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert captured["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    provider.run("sys prompt", [{"role": "user", "content": "hi"}], tools=[_lookup_tool()], max_iterations=0)
+    assert captured["system"][0]["cache_control"] == ONE_HOUR
+    assert captured["tools"][-1].to_dict()["cache_control"] == ONE_HOUR
+    # The fourth breakpoint follows the conversation, so each round of a tool
+    # loop reads the previous round from cache.
+    assert captured["cache_control"] == {"type": "ephemeral"}
 
     captured_stream: dict = {}
     stream_runner = _FakeStreamRunner([_FakeTurnStream([], final)])
     provider2 = _provider(tmp_path, stream_runner, captured_stream)
-    list(provider2.stream("sys prompt", [{"role": "user", "content": "hi"}], tools=[{"name": "t"}]))
-    assert captured_stream["system"][0]["cache_control"] == {"type": "ephemeral"}
-    assert captured_stream["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    list(provider2.stream("sys prompt", [{"role": "user", "content": "hi"}], tools=[_lookup_tool()]))
+    assert captured_stream["system"][0]["cache_control"] == ONE_HOUR
+    assert captured_stream["tools"][-1].to_dict()["cache_control"] == ONE_HOUR
+    assert captured_stream["cache_control"] == {"type": "ephemeral"}
+
+
+def test_one_shot_calls_get_no_automatic_breakpoint(tmp_path):
+    """A router, planner, summary or title call has no second round to read
+    it; an automatic breakpoint there only bills the write premium."""
+    final = SimpleNamespace(content=[_text_block("ok")], usage=_usage(1, 1), id="m1")
+    for tools, max_iterations in (([], 0), ([{"type": "web_search_20250305", "name": "web_search"}], 0), ([_lookup_tool()], 1)):
+        captured: dict = {}
+        provider = _provider(tmp_path, _FakeMessageRunner([final]), captured)
+        provider.run("sys prompt", [{"role": "user", "content": "hi"}], tools=tools, max_iterations=max_iterations)
+        assert "cache_control" not in captured, (tools, max_iterations)
+        assert captured["system"][0]["cache_control"] == ONE_HOUR  # the stable prefix still caches
+
+
+def test_automatic_breakpoint_is_added_only_while_a_slot_is_free():
+    system = _cached_system("sys")
+    tools = _tools_with_cache_breakpoint([{"name": "t"}])
+    digest = {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "digest", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "question"},
+        ],
+    }
+    # tools + system + digest = 3 explicit; the automatic one is the fourth.
+    assert _automatic_cache_kwarg(tools, system, [digest]) == {"cache_control": {"type": "ephemeral"}}
+    # A fourth explicit marker (here inside a tool_result) leaves no slot; a
+    # fifth breakpoint would be a 400.
+    marked_result = {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "tu_1",
+                "content": [{"type": "text", "text": "r", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
+    assert _automatic_cache_kwarg(tools, system, [digest, marked_result]) == {}
 
 
 # ----- per-turn usage + tool_use accumulation ------------------------------
@@ -300,13 +361,20 @@ def test_system_prompts_carry_no_per_turn_content():
     """A date, a path or an id in the system block re-bills the whole prefix."""
     import re
 
-    from legal_helper.agent import OrchestratorAgent, SkillAgent
+    from legal_helper.agent import SkillAgent
+    from legal_helper.authoring import author_system_prompt
     from legal_helper.config import current_settings
     from legal_helper.providers import build_provider
 
-    provider = build_provider(current_settings())
+    settings = current_settings()
+    provider = build_provider(settings)
     prompts = {
-        "orchestrator": OrchestratorAgent()._system_prompt(),
+        # The date, the answer language and the length tier go in the request
+        # tail (answer_contract.author_tail), never here.
+        "single-pass author": author_system_prompt(
+            settings, mode="single_pass", skill_name="litigation-analysis"
+        ),
+        "integrator": author_system_prompt(settings, mode="integration"),
         "legal-response": SkillAgent("legal-response", provider)._system_prompt(),
         "cite-check": SkillAgent("cite-check", provider)._system_prompt(),
     }
@@ -330,3 +398,101 @@ def test_a_system_prompt_is_byte_identical_across_builds():
     first = SkillAgent("legal-response", provider)._system_prompt()
     second = SkillAgent("legal-response", provider)._system_prompt()
     assert first == second
+
+
+# --- OpenAI: the stable prefix as a cacheable developer message -------------
+# `instructions` cannot carry an explicit breakpoint, so a one-shot call (the
+# planner, the summariser) never reached a cached prefix: the luna planner read
+# 0.7% of its input from cache in September.
+
+
+def _openai(model: str = "gpt-6.1-sol") -> OpenAIProvider:
+    settings = load_settings(refresh=True).model_copy(update={"openai_model": model})
+    return OpenAIProvider(settings)
+
+
+def _fake_response(n: int, items=None, text: str = "done"):
+    items = items if items is not None else [SimpleNamespace(type="message", content=[SimpleNamespace(text=text)])]
+    return SimpleNamespace(id=f"resp_{n}", output=items, output_text=text if items and items[0].type == "message" else "", usage=None)
+
+
+def test_openai_large_system_prompt_moves_to_a_developer_breakpoint():
+    provider = _openai()
+    calls: list[dict] = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            fc = SimpleNamespace(type="function_call", call_id="c1", id="fc1", name="nope", arguments="{}")
+            return _fake_response(1, [fc])
+        return _fake_response(2)
+
+    big_system = "你是一名中国法律研究助手。请逐条引用法律条文并注明条款。" * 60  # ~1.7K tokens
+    with patch.object(provider.client.responses, "create", side_effect=fake_create):
+        provider.tool_runner(big_system, [{"role": "user", "content": "q"}], [], max_iterations=0)
+
+    first = calls[0]
+    assert "instructions" not in first
+    dev = first["input"][0]
+    assert dev["role"] == "developer"
+    assert dev["content"][0]["text"] == big_system
+    assert dev["content"][0]["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    # Implicit mode stays on: an explicit-only mode would switch off the
+    # automatic breakpoint the in-turn tool loop is cached by.
+    assert "prompt_cache_options" not in first
+    # previous_response_id carries the developer message; re-sending it (or
+    # `instructions`) on a chained request would duplicate the system prompt.
+    second = calls[1]
+    assert second["previous_response_id"] == "resp_1"
+    assert "instructions" not in second
+    assert all(item.get("role") != "developer" for item in second["input"])
+
+
+def test_openai_small_system_prompt_stays_in_instructions():
+    # Below the 1,024-token minimum a breakpoint writes nothing.
+    provider = _openai()
+    calls: list[dict] = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        return _fake_response(1)
+
+    with patch.object(provider.client.responses, "create", side_effect=fake_create):
+        provider.tool_runner("You write short chat titles.", [{"role": "user", "content": "q"}], [], max_iterations=1)
+
+    assert calls[0]["instructions"] == "You write short chat titles."
+    assert calls[0]["input"] == [{"role": "user", "content": "q"}]
+
+
+def test_openai_unverified_model_keeps_instructions_even_when_large():
+    provider = _openai("gpt-5.4")
+    calls: list[dict] = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        return _fake_response(1)
+
+    with patch.object(provider.client.responses, "create", side_effect=fake_create):
+        provider.tool_runner("rule. " * 2000, [{"role": "user", "content": "q"}], [], max_iterations=1)
+
+    assert "instructions" in calls[0]
+    assert calls[0]["input"][0]["role"] == "user"
+
+
+def test_one_hour_cache_writes_are_kept_apart_for_pricing(tmp_path):
+    """1h writes bill at 2x, 5m writes at 1.25x; the total alone cannot price them."""
+    usage = SimpleNamespace(
+        input_tokens=4,
+        output_tokens=100,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=5_028,
+        cache_creation=SimpleNamespace(ephemeral_1h_input_tokens=4_909, ephemeral_5m_input_tokens=119),
+    )
+    final = SimpleNamespace(content=[_text_block("ok")], usage=usage, id="m1")
+    provider = _provider(tmp_path, _FakeMessageRunner([final]), {})
+    result = provider.run("sys", [{"role": "user", "content": "hi"}], tools=[])
+    assert result.usage["cache_creation_input_tokens"] == 5_028
+    assert result.usage["cache_creation_1h_input_tokens"] == 4_909
+    # The ledger's math is unchanged: it still records the total as before.
+    summary = month_summary(state_dir=tmp_path)
+    assert summary["totals"]["cache_write_tokens"] == 5_028

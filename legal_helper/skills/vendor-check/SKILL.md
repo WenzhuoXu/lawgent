@@ -8,30 +8,19 @@ rag_collections: [general]
 
 # /vendor-check — Third-Party Diligence
 
-Produce the analytical bundle the orchestrator turns into a vendor-onboarding
-memo + scoring sheet.
+Produce the analysis behind a vendor-onboarding memo + scoring sheet.
 
-**Not legal advice.** The bundle drives a recommendation; counsel + the
+**Not legal advice.** The analysis drives a recommendation; counsel + the
 business owner approve onboarding.
 
 ## Output Contract (binding)
 
-Same as `/playbook/general_playbook.md` §4 and §5:
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task. As the author of
+a final answer, follow the author contract instead and put these artefacts in
+the answer where they help the reader.
 
-````
-## Findings
-- [self-contained claim, ONE sentence, ≤60 English words, inline pinpoint `[Source, art./§/p.]`] (label: treaty | regulation | case | guidance | local-law | best-practice | risk | drafting)
-- ...
-
-## Out of scope
-- ...
-
-## Sources
-- [source name] — [URL or local path] — supports findings #X[, online-checked: yes/no, pinpoint: confirmed/unavailable]
-````
-
-Hard ceiling **≤ 2000 characters**. No scoring tables — orchestrator
-authors those at presentation time.
+Artefacts this skill produces: the diligence table (area · finding · source · status · required action).
 
 ## Inputs
 

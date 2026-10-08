@@ -107,11 +107,21 @@ def _format_comments(comments: list[dict[str, str]]) -> list[str]:
 
 
 def extract_docx_text(path: Path, *, include_comments: bool = True) -> str:
-    """Markdown-style text via the tiered converter or python-docx (fallback).
+    """Markdown for a .docx as Word shows it: the in-tree reader first.
 
-    Word comments are not surfaced by either converter; we always overlay them
-    from ``_docx_comments`` when ``include_comments`` is True.
+    :mod:`.docx_reader` renders tracked changes as CriticMarkup, labels
+    headers and footers, and keeps auto-numbering labels in their own form
+    (第一条, not 第1条) — the three things the tiered converter lost. The
+    converter and then python-docx remain as fallbacks for a package the
+    reader cannot parse, and say so, because a silent fallback is how the
+    losses went unnoticed in the first place.
     """
+    from .docx_reader import read_docx
+
+    try:
+        return read_docx(path).render(include_comments=include_comments)
+    except Exception as exc:  # noqa: BLE001 — fall back, but say so below
+        reader_error = f"{type(exc).__name__}: {exc}"
     from ._convert import convert_to_markdown
 
     try:
@@ -122,27 +132,100 @@ def extract_docx_text(path: Path, *, include_comments: bool = True) -> str:
         comments = _docx_comments(path)
         if comments:
             body = body + "\n" + "\n".join(_format_comments(comments))
-    return body
+    note = (
+        f"[read with the fallback converter ({reader_error[:200]}); tracked changes, "
+        "headers/footers and numbering labels may not be shown as Word shows them]"
+    )
+    return f"{note}\n\n{body}"
 
 
-def inspect_docx_document(path: Path) -> dict[str, Any]:
+def inspect_docx_document(
+    path: Path,
+    *,
+    paragraph_offset: int = 0,
+    paragraph_limit: int = 150,
+    preview_chars: int = 80,
+) -> dict[str, Any]:
+    """Structure of a .docx, with every body paragraph under its edit index.
+
+    ``index`` is the 0-based position in ``Document.paragraphs`` — the index
+    ``reshape_docx`` ops and ``redline_docx`` take. Headings are flagged in
+    place rather than numbered separately: listing them 1-based in a list of
+    their own made a model pass "paragraph 4" to an op that edited the
+    paragraph after the one it meant.
+    """
     from docx import Document
+    from docx.styles import BabelFish
+
+    from .docx_reader import read_docx
 
     doc = Document(str(path))
+    reading = read_docx(path)
+    body = reading.body_paragraphs()
+    entries: list[dict[str, Any]] = []
     headings: list[dict[str, Any]] = []
-    for idx, para in enumerate(doc.paragraphs, start=1):
-        style = para.style.name if para.style is not None else ""
-        if style.lower().startswith("heading") and para.text.strip():
-            headings.append({"paragraph": idx, "style": style, "text": para.text.strip()})
-    comments = _docx_comments(path)
+    empty = 0
+    for block in body:
+        text = block.labelled_text()
+        flat = " ".join(text.split())
+        if not flat and not block.extras:
+            empty += 1
+            continue
+        entry: dict[str, Any] = {"index": block.paragraph}
+        if block.style_name and block.style_name.lower() not in {"normal", ""}:
+            # The name reshape_docx's set_paragraph_style / insert_paragraph take
+            # ("Heading 1"), not the internal one styles.xml stores ("heading 1").
+            entry["style"] = BabelFish.internal2ui(block.style_name)
+        if block.heading_level:
+            entry["heading"] = block.heading_level
+            headings.append({"index": block.paragraph, "level": block.heading_level, "text": flat[:120]})
+        if block.numbering is not None:
+            if block.numbering.is_bullet:
+                entry["list"] = "bullet"
+            elif block.numbering.label:
+                entry["label"] = block.numbering.label
+                entry["label_is_auto_numbering"] = True
+        if block.has_revisions():
+            entry["tracked_revisions"] = block.revision_marks
+        if block.extras:
+            entry["text_boxes"] = len(block.extras)
+        limit = max(20, int(preview_chars))
+        entry["text"] = flat if len(flat) <= limit else flat[:limit] + "…"
+        entries.append(entry)
+    start = max(0, int(paragraph_offset))
+    size = int(paragraph_limit)
+    window = entries[start:] if size <= 0 else entries[start:start + size]
+    tables: list[dict[str, Any]] = []
+    last_para = -1
+    for block in reading.blocks:
+        if block.kind == "paragraph" and block.paragraph is not None:
+            last_para = block.paragraph
+        elif block.kind == "table" and block.table is not None:
+            cols = max((sum(c.span for c in row) for row in block.rows), default=0)
+            tables.append({
+                "table_index": block.table,
+                "rows": len(block.rows),
+                "cols": cols,
+                "after_paragraph": last_para,
+            })
     props = doc.core_properties
-    return {
+    payload: dict[str, Any] = {
         "filename": path.name,
         "paragraph_count": len(doc.paragraphs),
+        "nonempty_paragraph_count": len(entries),
+        "empty_paragraph_count": empty,
         "table_count": len(doc.tables),
         "section_count": len(doc.sections),
-        "comment_count": len(comments),
+        "comment_count": len(reading.comments),
+        "index_note": (
+            "index = 0-based position in the document's body paragraphs; reshape_docx "
+            "(after/index/indices) and redline_docx (paragraph) take this number. Empty "
+            "paragraphs are omitted from the list but keep their index. A label marked "
+            "label_is_auto_numbering is Word numbering, not text in the paragraph."
+        ),
+        "paragraphs": window,
         "headings": headings,
+        "tables": tables,
         "core_properties": {
             "title": props.title or "",
             "author": props.author or "",
@@ -151,51 +234,389 @@ def inspect_docx_document(path: Path) -> dict[str, Any]:
             "last_modified_by": props.last_modified_by or "",
         },
     }
+    if len(window) < len(entries):
+        shown_from = window[0]["index"] if window else None
+        shown_to = window[-1]["index"] if window else None
+        payload["paragraphs_shown"] = f"{len(window)} of {len(entries)} non-empty (indices {shown_from}–{shown_to})"
+        if start + len(window) < len(entries):
+            payload["next_paragraph_offset"] = start + len(window)
+    revisions = reading.revisions
+    if revisions.total or revisions.formatting:
+        payload["tracked_changes"] = {
+            "insertions": revisions.insertions,
+            "deletions": revisions.deletions,
+            "moves": revisions.moves,
+            "formatting_changes": revisions.formatting,
+            "authors": list(revisions.authors),
+            "note": "Edit paragraphs that carry tracked changes with redline_docx; edit_docx_text and reshape_docx refuse them.",
+        }
+    if reading.protection:
+        payload["protection"] = reading.protection
+    return payload
 
 
-def _replace_paragraph_text(para: Any, find: str, replace: str) -> int:
+# -- run-preserving text edits ---------------------------------------------
+#
+# Every DOCX text edit works on the paragraph's text-bearing *elements*
+# (``w:t``, ``w:tab``, ``w:br``), never on whole runs. The previous edit
+# collapsed a cross-run match into ``runs[0]`` and blanked the rest, which
+# deleted footnote and comment references riding in those runs while
+# reporting success; it only saw direct runs, so hyperlink text survived at
+# the end of a "replaced" paragraph; and it walked ``row.cells``, which
+# repeats a merged cell, so the cell was edited twice.
+
+_W_URI = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+_MC_URI = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+
+
+def _wt(name: str) -> str:
+    return f"{{{_W_URI}}}{name}"
+
+
+_TOKEN_SKIP = frozenset(
+    {_wt("pPr"), _wt("del"), _wt("moveFrom"), _wt("p"), _wt("txbxContent"), _wt("tbl")}
+)
+_GRAPHIC_TAGS = frozenset({_wt("drawing"), _wt("pict"), _wt("object"), f"{{{_MC_URI}}}AlternateContent"})
+_REVISION_ELEMENTS = (_wt("ins"), _wt("del"), _wt("moveFrom"), _wt("moveTo"))
+
+
+def _text_tokens(p_el: Any) -> list[list[Any]]:
+    """``[element, text, kind]`` for each text-bearing element of a paragraph,
+    in order: ``w:t`` (kind ``t``), ``w:tab`` (``tab``), ``w:br``/``w:cr``
+    (``br``). Deleted text and nested (text-box) paragraphs are excluded."""
+    tokens: list[list[Any]] = []
+
+    def walk(node: Any) -> None:
+        for child in node:
+            tag = child.tag
+            if tag in _TOKEN_SKIP or tag in _GRAPHIC_TAGS:
+                continue
+            if tag == _wt("r"):
+                for rc in child:
+                    if rc.tag == _wt("t"):
+                        tokens.append([rc, rc.text or "", "t"])
+                    elif rc.tag in (_wt("tab"), _wt("ptab")):
+                        tokens.append([rc, "\t", "tab"])
+                    elif rc.tag in (_wt("br"), _wt("cr")):
+                        tokens.append([rc, "\n", "br"])
+                continue
+            walk(child)
+
+    walk(p_el)
+    return tokens
+
+
+def _paragraph_revision_count(p_el: Any) -> int:
+    """Tracked revisions (ins/del/moveFrom/moveTo, incl. the paragraph mark)
+    belonging to this paragraph — not to a text box nested inside it."""
     count = 0
-    for run in para.runs:
-        if find in run.text:
-            count += run.text.count(find)
-            run.text = run.text.replace(find, replace)
-    if count or find not in para.text:
-        return count
-    # Replacement spanning run boundaries. This preserves paragraph style but
-    # necessarily collapses mixed run formatting in that paragraph.
-    new_text = para.text.replace(find, replace)
-    count = para.text.count(find)
-    if para.runs:
-        para.runs[0].text = new_text
-        for run in para.runs[1:]:
-            run.text = ""
-    else:
-        para.add_run(new_text)
+    for el in p_el.iter(*_REVISION_ELEMENTS):
+        anc = el.getparent()
+        while anc is not None and anc is not p_el and anc.tag != _wt("p"):
+            anc = anc.getparent()
+        if anc is p_el:
+            count += 1
     return count
 
 
+def _revision_authors(el: Any) -> list[str]:
+    authors: list[str] = []
+    for rev in el.iter(*_REVISION_ELEMENTS):
+        author = rev.get(_wt("author")) or "unknown author"
+        if author not in authors:
+            authors.append(author)
+    return authors
+
+
+def _set_t(el: Any, text: str) -> None:
+    el.text = text
+    el.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+
+
+def _new_t_after(anchor: Any, text: str) -> Any:
+    from lxml import etree
+
+    t = etree.Element(_wt("t"))
+    _set_t(t, text)
+    anchor.addnext(t)
+    return t
+
+
+def _replace_tokens(tokens: list[list[Any]], find: str, replace: str) -> int:
+    """Replace every occurrence of ``find`` across ``tokens`` in place.
+
+    The replacement lands in the element where the match starts (so it takes
+    that run's formatting); covered text in later elements is trimmed, and a
+    covered tab or break is removed. Runs themselves are never removed or
+    blanked, so a footnote reference, comment anchor, field or drawing that
+    shares a run with matched text survives the edit.
+    """
+    full = "".join(t[1] for t in tokens)
+    if not find or find not in full:
+        return 0
+    starts: list[int] = []
+    pos = 0
+    for token in tokens:
+        starts.append(pos)
+        pos += len(token[1])
+    spans: list[tuple[int, int]] = []
+    i = full.find(find)
+    while i >= 0:
+        spans.append((i, i + len(find)))
+        i = full.find(find, i + len(find))
+    for a, b in reversed(spans):
+        covered = [
+            k for k in range(len(tokens))
+            if tokens[k][1] and starts[k] < b and starts[k] + len(tokens[k][1]) > a
+        ]
+        if not covered:
+            continue
+        first, last = covered[0], covered[-1]
+        el, text, kind = tokens[first]
+        if kind == "t":
+            local_a = a - starts[first]
+            tail = text[b - starts[first]:] if first == last else ""
+            new_text = text[:local_a] + replace + tail
+            _set_t(el, new_text)
+            tokens[first][1] = new_text
+        else:
+            if replace:
+                _new_t_after(el, replace)
+            el.getparent().remove(el)
+            tokens[first][1] = ""
+        for k in covered[1:]:
+            el_k, text_k, kind_k = tokens[k]
+            if k == last and kind_k == "t":
+                new_text = text_k[b - starts[k]:]
+                _set_t(el_k, new_text)
+                tokens[k][1] = new_text
+            elif kind_k == "t":
+                _set_t(el_k, "")
+                tokens[k][1] = ""
+            else:
+                el_k.getparent().remove(el_k)
+                tokens[k][1] = ""
+    return len(spans)
+
+
+def _replace_paragraph_content(p_el: Any, text: str) -> None:
+    """Make ``text`` the paragraph's whole visible text, keeping its runs.
+
+    Every text element is cleared — direct runs, hyperlink runs, everything
+    the old run-only loop left behind — and the new text goes into the first
+    direct run's ``w:t`` (so it keeps that run's formatting). Runs carrying a
+    footnote/comment reference, field or drawing stay where they are.
+    """
+    from lxml import etree
+
+    tokens = _text_tokens(p_el)
+    t_tokens = [t for t in tokens if t[2] == "t"]
+    target = next((t for t in t_tokens if t[0].getparent().getparent() is p_el), None)
+    if target is None and t_tokens:
+        target = t_tokens[0]
+    for el, _, kind in tokens:
+        if target is not None and el is target[0]:
+            continue
+        if kind == "t":
+            _set_t(el, "")
+        else:
+            el.getparent().remove(el)
+    if target is not None:
+        _set_t(target[0], text)
+        return
+    if not text:
+        return
+    run = etree.SubElement(p_el, _wt("r"))
+    first_run = p_el.find(_wt("r"))
+    if first_run is not None and first_run is not run:
+        rpr = first_run.find(_wt("rPr"))
+        if rpr is not None:
+            from copy import deepcopy
+
+            run.append(deepcopy(rpr))
+    t = etree.SubElement(run, _wt("t"))
+    _set_t(t, text)
+
+
+def _in_fallback(el: Any) -> bool:
+    anc = el.getparent()
+    while anc is not None:
+        if anc.tag == f"{{{_MC_URI}}}Fallback":
+            return True
+        anc = anc.getparent()
+    return False
+
+
+def _docx_stories(doc: Any) -> list[tuple[str, Any]]:
+    """The body plus every header and footer part, each once."""
+    stories: list[tuple[str, Any]] = [("body", doc.element.body)]
+    seen: set[int] = set()
+    for rel in doc.part.rels.values():
+        reltype = getattr(rel, "reltype", "") or ""
+        if rel.is_external or not (reltype.endswith("/header") or reltype.endswith("/footer")):
+            continue
+        part = rel.target_part
+        element = getattr(part, "element", None)
+        if element is None or id(element) in seen:
+            continue
+        seen.add(id(element))
+        stories.append(("header" if reltype.endswith("/header") else "footer", element))
+    return stories
+
+
+def docx_find_diagnosis(path: Path, find: str) -> tuple[str, str]:
+    """``(reason, hint)`` for an exact ``find`` that matched nothing.
+
+    Most misses in recorded runs were strings copied from ``read_document``
+    output that are not in the XML: a numbering label Word renders (第1条 /
+    第一条, "1.1"), CriticMarkup, or a tab shown as a space.
+    """
+    if not find:
+        return "not_found", ""
+    if "{++" in find or "{--" in find or "{>>" in find:
+        return "criticmarkup_in_find", (
+            "find contains CriticMarkup ({++…++}/{--…--}) from read_document output; those marks "
+            "show tracked changes and are not text in the document"
+        )
+    if "\n" in find.strip():
+        return "crosses_paragraphs", "find spans more than one paragraph; split it into one change per paragraph"
+    unmarked = strip_markdown_emphasis(find)
+    if unmarked != find:
+        return "markdown_in_find", (
+            f"find contains markdown emphasis (**, *, ~~) from read_document output; the document "
+            f"has the plain text — use find={unmarked!r}"
+        )
+    try:
+        from .docx_reader import read_docx
+
+        reading = read_docx(path)
+    except Exception:  # noqa: BLE001
+        return "not_found", ""
+    stripped = find.strip()
+    for block in reading.blocks:
+        label = block.label()
+        if label and (stripped.startswith(label) or stripped == label):
+            rest = stripped[len(label):].strip()
+            return "label_is_auto_numbering", (
+                f"'{label}' is Word auto-numbering rendered from numbering.xml, not text in the "
+                f"paragraph; anchor with clause='{label}' and find only the words after it"
+                + (f" (e.g. find='{rest[:40]}')" if rest else "")
+            )
+    from .clauses import detect_label
+
+    match = detect_label(stripped)
+    if match is not None:
+        for block in reading.blocks:
+            label = block.label()
+            other = detect_label(label + " x") if label else None
+            if other is not None and other.family == match.family and other.number == match.number:
+                return "label_is_auto_numbering", (
+                    f"'{match.label}' is shown as '{label}', which is Word auto-numbering, not text in "
+                    f"the paragraph; anchor with clause='{label}' and find only the words after it"
+                )
+    normalized = " ".join(find.split())
+    for block in reading.blocks:
+        if block.kind != "paragraph":
+            continue
+        text = block.accepted_text()
+        original = block.original_text()
+        if block.has_revisions() and (find in text or find in original):
+            return "inside_tracked_change", (
+                "the text sits inside or across an existing tracked change; accept or reject that "
+                "change first, or anchor on text outside it (redline_docx never edits a pending revision)"
+            )
+        if text and normalized and normalized in " ".join(text.split()) and find not in text:
+            return "whitespace_mismatch", (
+                "the text exists but its whitespace differs (the document has a tab or line break where "
+                "find has a space)"
+            )
+    for label, blocks in reading.headers + reading.footers:
+        for block in blocks:
+            if find in block.accepted_text():
+                return "in_header_or_footer", f"the text is in the {label.lower()}, which this tool does not edit"
+    for block in reading.blocks:
+        for extra in block.extras:
+            if find in extra.accepted_text():
+                return "in_text_box", "the text is inside a text box, which this tool does not edit"
+    return "not_found", (
+        "no exact match; copy the text exactly as it appears in read_document output, without labels or markup"
+    )
+
+
+def docx_find_hint(path: Path, find: str) -> str:
+    return docx_find_diagnosis(path, find)[1]
+
+
+# Markers glued to an ASCII letter or digit are arithmetic ("2*3*4"), not
+# emphasis; next to Han characters they are emphasis, as the reader emits them.
+_EMPHASIS_RE = re.compile(r"(?<![A-Za-z0-9*\\])(\*{1,3}|~~)(?=\S)(.+?)(?<=\S)\1(?![A-Za-z0-9*])")
+
+
+def strip_markdown_emphasis(text: str) -> str:
+    """``**Lessor**`` → ``Lessor``: the markers read_document adds for bold,
+    italic and strikethrough runs are not text in the document."""
+    previous = None
+    while previous != text:
+        previous = text
+        text = _EMPHASIS_RE.sub(r"\2", text)
+    return text
+
+
 def edit_docx_text_document(source_path: Path, output_path: Path, replacements: list[dict[str, str]]) -> dict[str, Any]:
+    """Copy a .docx replacing exact text in the body, tables, text boxes,
+    headers and footers. Paragraphs with tracked revisions are refused (and
+    reported) rather than rewritten: replacing text inside someone else's
+    pending insertion or deletion destroys the audit trail Word shows."""
     from docx import Document
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document(str(source_path))
+    # Keyed by element (the dict keeps the proxies alive, so lxml hands back
+    # the same objects while iterating); ids of discarded proxies get reused.
+    body_index = {p._p: i for i, p in enumerate(doc.paragraphs)}
+    stories = _docx_stories(doc)
     counts: dict[str, int] = {}
+    refused: list[dict[str, Any]] = []
+    not_found: list[dict[str, str]] = []
     for repl in replacements:
         find = str(repl.get("find") or "")
         replace = str(repl.get("replace") or "")
         if not find:
             continue
         total = 0
-        for para in doc.paragraphs:
-            total += _replace_paragraph_text(para, find, replace)
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    for para in cell.paragraphs:
-                        total += _replace_paragraph_text(para, find, replace)
+        refused_here = 0
+        for story, root in stories:
+            for p_el in root.iter(_wt("p")):
+                tokens = _text_tokens(p_el)
+                if find not in "".join(t[1] for t in tokens):
+                    continue
+                revisions = _paragraph_revision_count(p_el)
+                if revisions:
+                    refused_here += 1
+                    refused.append({
+                        "find": find,
+                        "location": story,
+                        "paragraph": body_index.get(p_el),
+                        "reason": (
+                            f"paragraph carries {revisions} tracked revision(s) by "
+                            f"{', '.join(_revision_authors(p_el))}; edit it with redline_docx so the "
+                            "revision history survives"
+                        ),
+                    })
+                    continue
+                matched = _replace_tokens(tokens, find, replace)
+                if not _in_fallback(p_el):
+                    total += matched
         counts[find] = total
+        if total == 0 and not refused_here:
+            not_found.append({"find": find, "hint": docx_find_hint(source_path, find)})
     doc.save(str(output_path))
-    return {"output_path": str(output_path), "replacements": counts}
+    payload: dict[str, Any] = {"output_path": str(output_path), "replacements": counts}
+    if refused:
+        payload["refused"] = refused
+    if not_found:
+        payload["not_found"] = not_found
+    return payload
 
 
 def _package_rels(zf: zipfile.ZipFile, rels_path: str) -> dict[str, dict[str, str]]:
@@ -321,120 +742,18 @@ def extract_pptx_text(path: Path) -> str:
         return _pptx_text_via_python_pptx(path)
 
 
-_FLOWCHART_KINDS: dict[str, str] = {
-    # MSO_SHAPE enum name -> our FlowNode.kind
-    "FLOWCHART_PROCESS": "process",
-    "FLOWCHART_DECISION": "decision",
-    "FLOWCHART_TERMINATOR": "terminator",
-    "FLOWCHART_DATA": "io",
-    "FLOWCHART_PREDEFINED_PROCESS": "subprocess",
-    "FLOWCHART_MANUAL_INPUT": "data",
-    "FLOWCHART_DOCUMENT": "io",
-}
+def _iter_pptx_shapes(shapes):
+    """Every shape on a slide, groups opened, in z-order.
 
-
-def _emu_to_inches(emu: int | None) -> float | None:
-    if emu is None:
-        return None
-    return round(float(emu) / 914400.0, 3)
-
-
-def _extract_flowchart_payload(slide) -> dict[str, Any]:
-    """Group flowchart node-shapes and line connectors on one slide.
-
-    Returns ``{nodes: [...], edges: [...]}`` with best-effort edge pairing
-    by matching each line shape's endpoints to the nearest node bounding
-    box. ``confidence`` on each edge is the inverse distance heuristic,
-    so the LLM can tell mis-pairings from solid ones.
+    A ppt-master deck keeps every text frame inside a group (38 groups and 112
+    nested text frames on one five-slide deck), so a walk of the top level
+    alone reported such a deck as having no text at all.
     """
-    nodes: list[dict[str, Any]] = []
-    raw_lines: list[dict[str, Any]] = []
-
-    for idx, shape in enumerate(slide.shapes):
-        try:
-            ast = shape.auto_shape_type
-        except Exception:
-            ast = None
-        name = getattr(ast, "name", None) or ""
-        if name in _FLOWCHART_KINDS:
-            text = ""
-            if getattr(shape, "has_text_frame", False):
-                text = shape.text_frame.text.strip()
-            nodes.append({
-                "shape_index": idx,
-                "kind": _FLOWCHART_KINDS[name],
-                "text": text,
-                "x": _emu_to_inches(shape.left),
-                "y": _emu_to_inches(shape.top),
-                "w": _emu_to_inches(shape.width),
-                "h": _emu_to_inches(shape.height),
-                "shape_name": getattr(shape, "name", ""),
-            })
-        elif name == "LINE_INVERSE" or name == "LINE" or (
-            # OOXML line shapes show up as auto_shape_type=None but with
-            # prstGeom prst="line". Detect from the underlying element.
-            ast is None and _shape_is_line(shape)
-        ):
-            x = _emu_to_inches(shape.left)
-            y = _emu_to_inches(shape.top)
-            w = _emu_to_inches(shape.width)
-            h = _emu_to_inches(shape.height)
-            if x is None or y is None or w is None or h is None:
-                continue
-            raw_lines.append({
-                "shape_index": idx,
-                "x1": x, "y1": y,
-                "x2": x + w, "y2": y + h,
-            })
-
-    edges: list[dict[str, Any]] = []
-    for line in raw_lines:
-        from_idx, from_d = _nearest_node(nodes, line["x1"], line["y1"])
-        to_idx, to_d = _nearest_node(nodes, line["x2"], line["y2"])
-        if from_idx is None or to_idx is None:
-            continue
-        # Confidence ~= 1 / (1 + total_distance_in_inches). > 0.5 means both
-        # endpoints landed within ~1 inch of a node center.
-        confidence = round(1.0 / (1.0 + from_d + to_d), 3)
-        edges.append({
-            "shape_index": line["shape_index"],
-            "from_node": from_idx,
-            "to_node": to_idx,
-            "confidence": confidence,
-        })
-    return {"nodes": nodes, "edges": edges}
-
-
-def _shape_is_line(shape) -> bool:
-    try:
-        el = shape._element
-        ns = {"a": _A_NS}
-        prst = el.find(".//a:prstGeom", ns)
-        return prst is not None and prst.get("prst") == "line"
-    except Exception:
-        return False
-
-
-def _nearest_node(
-    nodes: list[dict[str, Any]], px: float, py: float
-) -> tuple[int | None, float]:
-    """Return (shape_index, distance_inches) for the node nearest (px, py).
-
-    Distance is measured from the line endpoint to the node center. Returns
-    (None, inf) when ``nodes`` is empty.
-    """
-    best_idx: int | None = None
-    best_d = float("inf")
-    for n in nodes:
-        if n.get("x") is None:
-            continue
-        cx = n["x"] + (n.get("w") or 0) / 2.0
-        cy = n["y"] + (n.get("h") or 0) / 2.0
-        d = ((px - cx) ** 2 + (py - cy) ** 2) ** 0.5
-        if d < best_d:
-            best_d = d
-            best_idx = int(n["shape_index"])
-    return best_idx, best_d
+    for shape in shapes:
+        if getattr(shape, "shape_type", None) == 6:  # MSO_SHAPE_TYPE.GROUP
+            yield from _iter_pptx_shapes(shape.shapes)
+        else:
+            yield shape
 
 
 def inspect_pptx_deck(path: Path, *, include_text_runs: bool = True) -> dict[str, Any]:
@@ -456,31 +775,35 @@ def inspect_pptx_deck(path: Path, *, include_text_runs: bool = True) -> dict[str
             text_runs: list[str] = []
             table_count = 0
             image_count = 0
-            for shape in slide.shapes:
+            group_count = sum(
+                1 for shape in slide.shapes if getattr(shape, "shape_type", None) == 6
+            )
+            for shape in _iter_pptx_shapes(slide.shapes):
                 if getattr(shape, "has_text_frame", False):
                     text = shape.text.strip()
                     if text:
                         text_runs.append(text)
                 if getattr(shape, "has_table", False):
                     table_count += 1
+                    for row in shape.table.rows:
+                        values = [cell.text.strip() for cell in row.cells]
+                        if any(values):
+                            text_runs.append(" | ".join(values))
                 if getattr(shape, "shape_type", None) == 13:
                     image_count += 1
             notes = notes_by_slide.get(idx, [])
-            fc_payload = _extract_flowchart_payload(slide)
             payload: dict[str, Any] = {
                 "slide": idx,
                 "layout": slide.slide_layout.name,
+                # Top-level shapes: the range ``reshape_pptx``'s shape_index addresses.
                 "shape_count": len(slide.shapes),
+                "group_count": group_count,
                 "table_count": table_count,
                 "image_count": image_count,
                 "text_run_count": len(text_runs),
                 "notes_run_count": len(notes),
                 "title": text_runs[0] if text_runs else "",
-                "flowchart_node_count": len(fc_payload["nodes"]),
-                "flowchart_edge_count": len(fc_payload["edges"]),
             }
-            if fc_payload["nodes"]:
-                payload["flowchart"] = fc_payload
             if include_text_runs:
                 payload["text_runs"] = text_runs
                 payload["speaker_notes"] = notes
@@ -939,6 +1262,12 @@ def _require_sheet(wb, sheet: str):
     return wb[sheet]
 
 
+_RESHAPE_XLSX_OPS = (
+    "insert_rows", "delete_rows", "insert_cols", "delete_cols", "move_range", "copy_row",
+    "merge_range", "unmerge_range", "set_styles", "set_row_height", "set_col_width",
+)
+
+
 def reshape_xlsx_workbook(
     source_path: Path,
     output_path: Path,
@@ -950,10 +1279,15 @@ def reshape_xlsx_workbook(
 
     - ``insert_rows`` / ``delete_rows``        — ``at``, ``count`` (default 1)
     - ``insert_cols`` / ``delete_cols``        — ``at``, ``count`` (default 1)
+      These carry merged ranges, data validations, conditional formats,
+      formula references on every sheet, defined names, tables and row
+      heights with the moved cells, as Excel does, and report each in
+      ``side_effects`` (a reference into deleted cells becomes ``#REF!``).
     - ``move_range``                           — ``range``, ``rows``, ``cols``,
       ``translate`` (bool, defaults True; rewrites formula refs)
     - ``copy_row``                             — ``src_row``, ``dest_row``;
-      copies values, per-cell styles, row height, and overlapping merges
+      copies values (formulas translated as a copy/paste would), per-cell
+      styles, row height, and overlapping merges
     - ``merge_range`` / ``unmerge_range``      — ``range``
     - ``set_styles``                           — ``range`` + any of
       ``font_name``, ``font_size``, ``font_bold``, ``font_italic``,
@@ -966,9 +1300,12 @@ def reshape_xlsx_workbook(
     Returns a summary describing each applied op for audit logging.
     """
     from copy import copy as _shallow_copy
-    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.styles import Border, PatternFill, Side
+    from openpyxl.styles.colors import Color
     from openpyxl.utils import get_column_letter, column_index_from_string
     from openpyxl.utils.cell import range_boundaries
+
+    from .xlsx_shift import structural_shift, translate_copied_formula
 
     def _color(val: Any) -> str | None:
         if not val:
@@ -1003,26 +1340,22 @@ def reshape_xlsx_workbook(
             ws = _require_sheet(wb, sheet)
             entry: dict[str, Any] = {"index": idx, "op": kind, "sheet": sheet}
 
-            if kind == "insert_rows":
+            if kind in {"insert_rows", "delete_rows", "insert_cols", "delete_cols"}:
                 at = int(op["at"])
                 count = int(op.get("count") or 1)
-                ws.insert_rows(at, amount=count)
+                if at < 1 or count < 1:
+                    raise ValueError(f"{kind} needs at >= 1 and count >= 1 (got at={at}, count={count})")
+                effects = structural_shift(
+                    wb,
+                    ws,
+                    axis="row" if kind.endswith("_rows") else "col",
+                    at=at,
+                    count=count,
+                    delete=kind.startswith("delete"),
+                )
                 entry.update({"at": at, "count": count})
-            elif kind == "delete_rows":
-                at = int(op["at"])
-                count = int(op.get("count") or 1)
-                ws.delete_rows(at, amount=count)
-                entry.update({"at": at, "count": count})
-            elif kind == "insert_cols":
-                at = int(op["at"])
-                count = int(op.get("count") or 1)
-                ws.insert_cols(at, amount=count)
-                entry.update({"at": at, "count": count})
-            elif kind == "delete_cols":
-                at = int(op["at"])
-                count = int(op.get("count") or 1)
-                ws.delete_cols(at, amount=count)
-                entry.update({"at": at, "count": count})
+                if effects:
+                    entry["side_effects"] = effects
             elif kind == "move_range":
                 rng = str(op["range"])
                 rows = int(op.get("rows") or 0)
@@ -1034,10 +1367,14 @@ def reshape_xlsx_workbook(
                 src_row = int(op["src_row"])
                 dest_row = int(op["dest_row"])
                 max_col = ws.max_column
+                translated = 0
                 for col in range(1, max_col + 1):
                     src = ws.cell(src_row, col)
                     dst = ws.cell(dest_row, col)
-                    dst.value = src.value
+                    # Copy semantics, as Excel's copy/paste: relative refs follow.
+                    dst.value = translate_copied_formula(src.value, src.coordinate, dst.coordinate)
+                    if dst.value != src.value:
+                        translated += 1
                     if src.has_style:
                         dst.font = _shallow_copy(src.font)
                         dst.fill = _shallow_copy(src.fill)
@@ -1063,6 +1400,8 @@ def reshape_xlsx_workbook(
                     "src_row": src_row, "dest_row": dest_row,
                     "cells_copied": max_col, "added_merges": added_merges,
                 })
+                if translated:
+                    entry["formulas_translated"] = translated
             elif kind == "merge_range":
                 rng = str(op["range"])
                 ws.merge_cells(rng)
@@ -1106,25 +1445,27 @@ def reshape_xlsx_workbook(
                     for c in range(min_col, max_col + 1):
                         cell = ws.cell(r, c)
                         if font_kwargs:
-                            base = cell.font
-                            cell.font = Font(
-                                name=font_kwargs.get("name", base.name),
-                                size=font_kwargs.get("size", base.size),
-                                bold=font_kwargs.get("bold", base.bold),
-                                italic=font_kwargs.get("italic", base.italic),
-                                color=font_kwargs.get("color", getattr(base.color, "rgb", None) if base.color else None),
-                            )
+                            # Start from a copy of the cell's own font. Rebuilding
+                            # Font() from base.color.rgb crashed on theme, indexed
+                            # and auto colours — openpyxl's default font among
+                            # them — and failed 19 of 45 recorded calls; a copy
+                            # also keeps underline, strike and the theme colour.
+                            font = _shallow_copy(cell.font)
+                            for attr, value in font_kwargs.items():
+                                if attr == "color":
+                                    font.color = Color(rgb=value)
+                                else:
+                                    setattr(font, attr, value)
+                            cell.font = font
                         if fill is not None:
                             cell.fill = _shallow_copy(fill)
                         if border is not None:
                             cell.border = _shallow_copy(border)
                         if align_kwargs:
-                            base = cell.alignment
-                            cell.alignment = Alignment(
-                                horizontal=align_kwargs.get("horizontal", base.horizontal),
-                                vertical=align_kwargs.get("vertical", base.vertical),
-                                wrap_text=align_kwargs.get("wrap_text", base.wrap_text),
-                            )
+                            alignment = _shallow_copy(cell.alignment)
+                            for attr, value in align_kwargs.items():
+                                setattr(alignment, attr, value)
+                            cell.alignment = alignment
                         if number_format is not None:
                             cell.number_format = str(number_format)
                         touched += 1
@@ -1146,7 +1487,10 @@ def reshape_xlsx_workbook(
                 ws.column_dimensions[letter].width = width
                 entry.update({"col": letter, "width": width})
             else:
-                raise ValueError(f"Unknown structural op: {kind!r}")
+                raise ValueError(
+                    f"Unknown structural op {kind!r} (operation {idx}). Valid ops: "
+                    + ", ".join(_RESHAPE_XLSX_OPS)
+                )
 
             applied.append(entry)
 
@@ -1180,55 +1524,23 @@ def copy_xlsx_worksheet(
             raise ValueError(f"Sheet already exists: {cleaned}")
         new_ws = wb.copy_worksheet(ws)
         new_ws.title = cleaned
+        # copy_worksheet copies cells, styles, merges and dimensions only; the
+        # validations and conditional formats this docstring promises were
+        # silently dropped.
+        from .xlsx_shift import copy_sheet_extras
+
+        extras = copy_sheet_extras(ws, new_ws)
         _save_with_dir(wb, output_path)
-        return {
+        payload: dict[str, Any] = {
             "path": str(output_path.resolve()),
             "source_sheet": sheet,
             "new_sheet": cleaned,
         }
+        if extras:
+            payload["copied"] = extras
+        return payload
     finally:
         wb.close()
-
-
-def render_xlsx_to_images(
-    source_path: Path,
-    out_dir: Path,
-    filename_prefix: str,
-    dpi: int,
-) -> dict[str, Any]:
-    """Convert an .xlsx to PDF via LibreOffice, then to per-page JPGs.
-
-    Mirrors the docx/pptx visual-QA path. Requires ``soffice`` on PATH.
-    """
-    import shutil
-    import subprocess
-
-    from .pdf import render_pdf_to_images
-
-    soffice = shutil.which("soffice")
-    if not soffice:
-        raise RuntimeError("render_xlsx_to_images requires soffice on PATH")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(out_dir), str(source_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    pdf = out_dir / f"{source_path.stem}.pdf"
-    if not pdf.is_file():
-        candidates = sorted(out_dir.glob("*.pdf"))
-        if not candidates:
-            raise RuntimeError(f"soffice did not produce a PDF in {out_dir}")
-        pdf = candidates[0]
-    rendered = render_pdf_to_images(pdf, out_dir, filename_prefix, dpi)
-    return {"pdf": str(pdf.resolve()), **rendered}
-
-
-# ---------------------------------------------------------------------------
-# DOCX structural-edit primitives
-# ---------------------------------------------------------------------------
 
 
 def _set_cell_text(cell: Any, text: str) -> None:
@@ -1236,19 +1548,32 @@ def _set_cell_text(cell: Any, text: str) -> None:
 
     ``cell.text = …`` replaces the cell's ``w:p`` wholesale, which drops the
     ``w:pPr`` the writer put there — including the suppressed first-line indent
-    that keeps a statute title on one line inside its cell. Writing the run
-    text instead keeps the properties, so an edit does not silently undo the
-    layout the document was built with.
+    that keeps a statute title on one line inside its cell. Writing the text
+    elements instead keeps the properties (and any reference-carrying runs),
+    so an edit does not silently undo the layout the document was built with.
     """
     paragraph = cell.paragraphs[0]
     for extra in list(cell.paragraphs[1:]):
         extra._p.getparent().remove(extra._p)
-    if paragraph.runs:
-        paragraph.runs[0].text = str(text)
-        for run in list(paragraph.runs[1:]):
-            run._r.getparent().remove(run._r)
-    else:
-        paragraph.add_run(str(text))
+    _replace_paragraph_content(paragraph._p, str(text))
+
+
+def _refuse_revised(el: Any, what: str) -> None:
+    """Raise when ``el`` carries tracked revisions: a structural edit there
+    would silently accept or discard someone's pending change."""
+    count = sum(1 for _ in el.iter(*_REVISION_ELEMENTS))
+    if count:
+        raise ValueError(
+            f"{what} carries {count} tracked revision(s) by {', '.join(_revision_authors(el))}; "
+            "reshape_docx would rewrite them as plain text. Make the change with redline_docx "
+            "(tracked) instead, or ask the user to accept/reject the revisions first."
+        )
+
+
+_RESHAPE_DOCX_OPS = (
+    "insert_paragraph", "delete_paragraphs", "set_paragraph_style", "replace_paragraph",
+    "insert_table_row", "delete_table_rows", "set_cell_text",
+)
 
 
 def reshape_docx_document(
@@ -1258,6 +1583,7 @@ def reshape_docx_document(
 ) -> dict[str, Any]:
     """Apply an ordered list of structural ops to a copy of ``source_path``.
 
+    Paragraph indices are the 0-based body indices ``inspect_docx`` lists.
     Supported ``op`` values:
 
     - ``insert_paragraph``   — ``after`` (0-based para index; -1 prepends),
@@ -1265,14 +1591,17 @@ def reshape_docx_document(
     - ``delete_paragraphs``  — ``indices`` (list[int]) **or** ``range``
       ([start, end_inclusive])
     - ``set_paragraph_style``— ``index``, ``style``
-    - ``replace_paragraph``  — ``index``, ``text`` (keeps style; collapses runs)
+    - ``replace_paragraph``  — ``index``, ``text`` (keeps style and the first
+      run's formatting; hyperlink and field-result text is replaced too)
     - ``insert_table_row``   — ``table_index``, ``at`` (0-based; -1 appends),
       ``cells`` (list[str])
     - ``delete_table_rows``  — ``table_index``, ``indices`` (list[int])
     - ``set_cell_text``      — ``table_index``, ``row``, ``col``, ``text``
+
+    Ops that would rewrite or delete content carrying tracked revisions are
+    refused; use ``redline_docx`` for those.
     """
     from docx import Document
-    from docx.oxml.ns import qn
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     doc = Document(str(source_path))
@@ -1287,26 +1616,20 @@ def reshape_docx_document(
             text = str(op.get("text") or "")
             style = op.get("style")
             paras = doc.paragraphs
+            new_p = _docx_make_paragraph(doc, text, style)
             if after == -1 or not paras:
-                # Prepend: insert before the first body element.
-                body = doc.element.body
-                new_para = doc.add_paragraph(text=text)
-                if style:
-                    new_para.style = doc.styles[str(style)]
-                body.insert(0, new_para._element)
-                # add_paragraph already appended it to body — remove the
-                # duplicate trailing one.
-                body.remove(new_para._element) if False else None  # noqa: E501
+                doc.element.body.insert(0, new_p)
                 entry.update({"after": after, "inserted_index": 0})
+                previous = None
             else:
                 if after >= len(paras):
                     raise ValueError(f"insert_paragraph after={after} out of range (paragraphs={len(paras)})")
-                anchor = paras[after]
-                new_p = anchor._element.addnext(
-                    _docx_make_paragraph(doc, text, style)
-                )
-                _ = new_p
+                previous = paras[after]._element
+                previous.addnext(new_p)
                 entry.update({"after": after, "inserted_index": after + 1})
+            numbering_note = _start_or_continue_list(doc, new_p, previous)
+            if numbering_note:
+                entry["numbering"] = numbering_note
         elif kind == "delete_paragraphs":
             indices = op.get("indices")
             if indices is None and "range" in op:
@@ -1315,13 +1638,13 @@ def reshape_docx_document(
             if not indices:
                 raise ValueError("delete_paragraphs requires 'indices' or 'range'")
             paras = list(doc.paragraphs)
-            removed = 0
-            for i in sorted({int(x) for x in indices}, reverse=True):
-                if 0 <= i < len(paras):
-                    el = paras[i]._element
-                    el.getparent().remove(el)
-                    removed += 1
-            entry.update({"removed": removed})
+            targets = sorted({int(x) for x in indices if 0 <= int(x) < len(paras)}, reverse=True)
+            for i in targets:
+                _refuse_revised(paras[i]._element, f"paragraph {i}")
+            for i in targets:
+                el = paras[i]._element
+                el.getparent().remove(el)
+            entry.update({"removed": len(targets)})
         elif kind == "set_paragraph_style":
             i = int(op["index"])
             style = str(op["style"])
@@ -1336,13 +1659,8 @@ def reshape_docx_document(
             paras = doc.paragraphs
             if not (0 <= i < len(paras)):
                 raise ValueError(f"replace_paragraph index={i} out of range")
-            para = paras[i]
-            for run in para.runs:
-                run.text = ""
-            if para.runs:
-                para.runs[0].text = text
-            else:
-                para.add_run(text)
+            _refuse_revised(paras[i]._p, f"paragraph {i}")
+            _replace_paragraph_content(paras[i]._p, text)
             entry.update({"index": i})
         elif kind == "insert_table_row":
             t_idx = int(op["table_index"])
@@ -1370,13 +1688,13 @@ def reshape_docx_document(
             if not (0 <= t_idx < len(tables)):
                 raise ValueError(f"delete_table_rows table_index={t_idx} out of range")
             table = tables[t_idx]
-            removed = 0
-            for i in indices:
-                if 0 <= i < len(table.rows):
-                    row = table.rows[i]
-                    row._tr.getparent().remove(row._tr)
-                    removed += 1
-            entry.update({"table_index": t_idx, "removed": removed})
+            targets = [i for i in indices if 0 <= i < len(table.rows)]
+            for i in targets:
+                _refuse_revised(table.rows[i]._tr, f"table {t_idx} row {i}")
+            for i in targets:
+                row = table.rows[i]
+                row._tr.getparent().remove(row._tr)
+            entry.update({"table_index": t_idx, "removed": len(targets)})
         elif kind == "set_cell_text":
             t_idx = int(op["table_index"])
             row = int(op["row"])
@@ -1388,12 +1706,15 @@ def reshape_docx_document(
             table = tables[t_idx]
             if not (0 <= row < len(table.rows) and 0 <= col < len(table.rows[row].cells)):
                 raise ValueError("set_cell_text row/col out of range")
-            _set_cell_text(table.rows[row].cells[col], text)
+            cell = table.rows[row].cells[col]
+            _refuse_revised(cell._tc, f"table {t_idx} cell ({row}, {col})")
+            _set_cell_text(cell, text)
             entry.update({"table_index": t_idx, "row": row, "col": col})
         else:
-            raise ValueError(f"Unknown structural op: {kind!r}")
+            raise ValueError(
+                f"Unknown structural op: {kind!r}. Valid ops: {', '.join(_RESHAPE_DOCX_OPS)}"
+            )
         applied.append(entry)
-        _ = qn  # silence linter; we keep it imported for callers that need ns
 
     doc.save(str(output_path))
     return {
@@ -1401,6 +1722,86 @@ def reshape_docx_document(
         "applied_count": len(applied),
         "applied": applied,
     }
+
+
+def _start_or_continue_list(doc: Any, p_el: Any, previous: Any) -> str:
+    """Number an inserted ordered-list paragraph the way Word would.
+
+    Word counts per abstract numbering definition, so a paragraph given the
+    ``List Number`` style simply continued the document's last ordered list —
+    an inserted list opened at 19 instead of 1, which the document lint flags
+    (in a filing "诉讼请求第3项" means item 3). An inserted ordered item now
+    continues the list only when the paragraph right above it belongs to the
+    same list; otherwise it gets its own ``w:num`` with a ``startOverride``,
+    and the items inserted after it continue that new list.
+    """
+    from docx.oxml.ns import qn
+    from lxml import etree
+
+    from .clauses import DocxNumbering, parse_styles
+
+    try:
+        numbering_el = doc.part.numbering_part.element
+    except Exception:  # noqa: BLE001 — no numbering part: nothing to number
+        return ""
+    model = DocxNumbering(etree.tostring(numbering_el), parse_styles(etree.tostring(doc.styles.element)))
+
+    def resolve(el: Any):
+        if el is None or el.tag != qn("w:p"):
+            return None
+        ppr = el.find(qn("w:pPr"))
+        style_el = ppr.find(qn("w:pStyle")) if ppr is not None else None
+        style_id = style_el.get(qn("w:val")) if style_el is not None else ""
+        return model.resolve(ppr, style_id or "")
+
+    mine = resolve(p_el)
+    if mine is None:
+        return ""
+    num_id, ilvl = mine
+    abstract_raw = model.nums[num_id][0]
+    abstract_id, levels = model._abstract_levels(abstract_raw)
+    level = levels.get(ilvl)
+    if level is None or level.fmt in {"bullet", "none"}:
+        return ""
+    above = resolve(previous)
+    if above is not None:
+        above_abstract, _ = model._abstract_levels(model.nums[above[0]][0])
+        if above_abstract == abstract_id:
+            _set_paragraph_numbering(p_el, above[0], ilvl)
+            return "continues the list above"
+    num = numbering_el.add_num(int(abstract_raw))
+    num.add_lvlOverride(ilvl=ilvl).add_startOverride(level.start)
+    _set_paragraph_numbering(p_el, str(num.numId), ilvl)
+    return f"starts a new list at {level.start}"
+
+
+def _set_paragraph_numbering(p_el: Any, num_id: str, ilvl: int) -> None:
+    """Direct ``w:numPr`` on a paragraph, in schema position (after pStyle)."""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    ppr = p_el.find(qn("w:pPr"))
+    if ppr is None:
+        ppr = OxmlElement("w:pPr")
+        p_el.insert(0, ppr)
+    for old in ppr.findall(qn("w:numPr")):
+        ppr.remove(old)
+    num_pr = OxmlElement("w:numPr")
+    level = OxmlElement("w:ilvl")
+    level.set(qn("w:val"), str(ilvl))
+    ident = OxmlElement("w:numId")
+    ident.set(qn("w:val"), str(num_id))
+    num_pr.append(level)
+    num_pr.append(ident)
+    anchor = None
+    for name in ("pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl"):
+        found = ppr.find(qn(f"w:{name}"))
+        if found is not None:
+            anchor = found
+    if anchor is not None:
+        anchor.addnext(num_pr)
+    else:
+        ppr.insert(0, num_pr)
 
 
 def _docx_make_paragraph(doc, text: str, style: str | None):
@@ -1427,23 +1828,6 @@ def _docx_make_paragraph(doc, text: str, style: str | None):
 # ---------------------------------------------------------------------------
 
 
-def _nth_flowchart_shape(slide, n: int):
-    """Return the n-th (0-based) shape on ``slide`` whose auto_shape_type
-    maps to one of our recognized flowchart kinds."""
-    seen = 0
-    for shape in slide.shapes:
-        try:
-            ast = shape.auto_shape_type
-        except Exception:
-            ast = None
-        name = getattr(ast, "name", None) or ""
-        if name in _FLOWCHART_KINDS:
-            if seen == n:
-                return shape
-            seen += 1
-    return None
-
-
 def reshape_pptx_deck(
     source_path: Path,
     output_path: Path,
@@ -1460,11 +1844,10 @@ def reshape_pptx_deck(
     - ``set_shape_text``   — ``slide`` (1-based), one of: ``shape_index``
       (0-based) or ``shape_name`` or ``placeholder_idx`` + ``text``
     - ``set_speaker_notes``— ``slide`` (1-based), ``text``
-    - ``set_flow_node_text``— ``slide`` (1-based), ``node_index`` (0-based
-      among flowchart shapes on the slide, as reported by ``inspect_pptx``)
-      + ``text``
-    - ``move_flow_node``   — ``slide`` (1-based), ``node_index``
-      (0-based), ``x``, ``y`` in inches; optional ``w``, ``h``
+
+    ``shape_name`` also finds a shape inside a group, which is where a
+    ppt-master deck keeps all of its text; ``shape_index`` counts top-level
+    shapes only.
     """
     from pptx import Presentation
     from copy import deepcopy
@@ -1538,7 +1921,7 @@ def reshape_pptx_deck(
                 target = slide.shapes[shape_idx]
             elif "shape_name" in op:
                 name = str(op["shape_name"])
-                for sh in slide.shapes:
+                for sh in _iter_pptx_shapes(slide.shapes):
                     if sh.name == name:
                         target = sh
                         break
@@ -1566,31 +1949,6 @@ def reshape_pptx_deck(
             text = str(op.get("text") or "")
             slide.notes_slide.notes_text_frame.text = text
             entry.update({"slide": slide_idx + 1})
-        elif kind in ("set_flow_node_text", "move_flow_node"):
-            slide_idx = int(op["slide"]) - 1
-            slide = prs.slides[slide_idx]
-            node_idx = int(op.get("node_index", 0))
-            target = _nth_flowchart_shape(slide, node_idx)
-            if target is None:
-                raise ValueError(
-                    f"flowchart node #{node_idx} not found on slide {slide_idx+1}"
-                )
-            if kind == "set_flow_node_text":
-                if not getattr(target, "has_text_frame", False):
-                    raise ValueError("Target flowchart node has no text frame")
-                target.text_frame.text = str(op.get("text") or "")
-                entry.update({"slide": slide_idx + 1, "node_index": node_idx})
-            else:
-                x_in = float(op["x"])
-                y_in = float(op["y"])
-                target.left = int(x_in * 914400)
-                target.top = int(y_in * 914400)
-                if "w" in op:
-                    target.width = int(float(op["w"]) * 914400)
-                if "h" in op:
-                    target.height = int(float(op["h"]) * 914400)
-                entry.update({"slide": slide_idx + 1, "node_index": node_idx,
-                              "x": x_in, "y": y_in})
         else:
             raise ValueError(f"Unknown structural op: {kind!r}")
         applied.append(entry)

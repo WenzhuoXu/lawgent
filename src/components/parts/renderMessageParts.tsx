@@ -39,7 +39,6 @@ import {
 } from "@/components/ai-elements/chain-of-thought";
 import { AuditCard } from "@/components/parts/AuditCard";
 import { SourcesList, splitSources, parseSourcesTable } from "@/components/parts/SourcesList";
-import { buildInlineCitations } from "@/components/parts/InlineCite";
 import { displayToolName } from "@/lib/toolLabels";
 import { rewriteSandboxHref, artifactOrigin } from "@/lib/artifacts";
 import { cn, formatDuration } from "@/lib/utils";
@@ -119,7 +118,6 @@ export function RenderMessageParts({
     .filter((p) => p.type === "data-agentTask")
     .map((p) => (p as DataPart).data as PlanTask);
   const auditPart = parts.find((p) => p.type === "data-audit") as DataPart | undefined;
-  const auditItems = (auditPart?.data as AuditData | undefined)?.items;
   const citeCheckPart = parts.find((p) => p.type === "data-citeCheck") as DataPart | undefined;
   const artifactParts = parts.filter((p) => p.type === "data-artifact") as DataPart[];
   const phasePart = parts.find((p) => p.type === "data-phase") as DataPart | undefined;
@@ -194,22 +192,13 @@ export function RenderMessageParts({
       if (!text) continue;
       const { body: prose, sources } = splitSources(text);
       const sourceRows = sources ? parseSourcesTable(sources) : null;
-      // F3: turn [n] markers in the answer body into InlineCitation hover-cards
-      // keyed to the parsed sources, colored by audit status. Only when we have
-      // a numbered sources table AND the turn is settled (avoids rewriting
-      // half-streamed markers). Falls back to plain prose otherwise.
-      const cites =
-        !isStreaming && sourceRows ? buildInlineCitations(sourceRows, auditItems) : null;
+      // Answers cite inline with full links, so the body renders as-is; the
+      // sources section below it renders as a list with status dots.
       const proseText = rewriteLinks(sourceRows ? prose : text);
       body.push(
         <div key={`txt-${i}`}>
-          <Response
-            className="prose-cjk"
-            animated
-            isAnimating={isStreaming}
-            components={cites?.components}
-          >
-            {cites ? cites.rewrite(proseText) : proseText}
+          <Response className="prose-cjk" animated isAnimating={isStreaming}>
+            {proseText}
           </Response>
           {sourceRows ? <SourcesList markdown={sources!} /> : null}
         </div>,
@@ -284,6 +273,7 @@ const PHASE_LABEL: Record<PhaseData["phase"], string> = {
   planning: "制定研究计划 / Planning",
   gathering: "检索与研究 / Researching",
   integrating: "撰写答复 / Writing",
+  drafting: "生成文件 / Producing the file",
   auditing: "核验引证 / Verifying citations",
 };
 
