@@ -138,8 +138,8 @@ def test_all_nine_skills_loadable_under_either_provider():
 def test_runtime_model_lists_stay_consistent_with_defaults():
     """Both providers' selectable model lists include the configured defaults.
 
-    gpt-6 only ships as named variants (astra/sol/luna); there is no bare
-    "gpt-6" alias, so it must never appear in a selectable list.
+    gpt-6 / gpt-6.1 only ship as named variants (astra/sol/luna); there is no
+    bare "gpt-6" or "gpt-6.1" alias, so neither may appear in a selectable list.
     """
     from legal_helper.config import (
         ANTHROPIC_HIGH_EFFORT_MODELS,
@@ -150,11 +150,12 @@ def test_runtime_model_lists_stay_consistent_with_defaults():
     s = Settings()
     assert s.anthropic_model in ANTHROPIC_HIGH_EFFORT_MODELS
     assert s.openai_model in OPENAI_HIGH_EFFORT_MODELS
-    assert s.openai_model == "gpt-6-sol"
+    assert s.openai_model == "gpt-6.1-sol"
     assert s.openai_fast_model == "gpt-6-luna"
     assert s.anthropic_model == "claude-opus-5-5"
     assert s.anthropic_fast_model == "claude-sonnet-5"
     assert "gpt-6" not in OPENAI_HIGH_EFFORT_MODELS
+    assert "gpt-6.1" not in OPENAI_HIGH_EFFORT_MODELS
     assert s.high_effort_models_for_provider("openai") == list(OPENAI_HIGH_EFFORT_MODELS)
     assert s.high_effort_models_for_provider("anthropic") == list(ANTHROPIC_HIGH_EFFORT_MODELS)
 

@@ -74,7 +74,8 @@ def _ambient_context() -> dict[str, Any]:
 # USD per 1M tokens.  ``cache_read`` / ``cache_write`` are Anthropic buckets;
 # ``cached_input`` is OpenAI's discounted-cached-input rate.  Override or
 # extend without a code change via LEGAL_HELPER_PRICING_JSON (same shape).
-# Rates verified against official pricing pages 2026-09-22 (Anthropic:
+# Rates verified against official pricing pages 2026-09-22, gpt-6.1-sol on
+# 2026-10-07 (Anthropic:
 # platform.claude.com/docs/en/about-claude/pricing; OpenAI:
 # developers.openai.com/api/docs/pricing).
 # Anthropic: cache read = 0.1x input, cache write (5-minute TTL) = 1.25x input.
@@ -107,6 +108,8 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "gpt-6-astra": {"input": 10.00, "output": 50.00, "cached_input": 1.00, "cache_write": 12.50},
     "gpt-6-sol": {"input": 2.00, "output": 10.00, "cached_input": 0.20, "cache_write": 2.50},
     "gpt-6-luna": {"input": 0.10, "output": 0.50, "cached_input": 0.01, "cache_write": 0.125},
+    # gpt-6.1-sol: gpt-6-sol's rates except cached input, which halves to 0.05x.
+    "gpt-6.1-sol": {"input": 2.00, "output": 10.00, "cached_input": 0.10, "cache_write": 2.50},
 }
 
 # OpenAI bills a prompt whose input exceeds this threshold at 2x input (cached
@@ -129,7 +132,7 @@ def is_long_context(rec: dict[str, Any]) -> bool:
 # instead of silently reading as zero spend.
 PROVIDER_FALLBACK_PRICING: dict[str, dict[str, float]] = {
     "anthropic": DEFAULT_PRICING["claude-opus-5-5"],
-    "openai": DEFAULT_PRICING["gpt-6-sol"],
+    "openai": DEFAULT_PRICING["gpt-6.1-sol"],
 }
 
 

@@ -13,9 +13,9 @@ active_domain_packs: []                # e.g. [aviation]; empty = generic legal 
 anthropic_model: claude-opus-5-5       # high-effort primary (opus-5 / 4-8 / 4-7 and haiku-4-5 retired 2026-09-22)
 anthropic_fast_model: claude-sonnet-5  # internal low-effort routing / summarization
 
-openai_model: gpt-6-sol                # high-effort primary (no bare "gpt-6" alias; gpt-5.5 retired 2026-09-11, gpt-5.6 family retired 2026-09-22)
+openai_model: gpt-6.1-sol              # high-effort primary (no bare "gpt-6.1" alias; gpt-5.5 retired 2026-09-11, gpt-5.6 family 2026-09-22, gpt-6-sol 2026-10-07)
 openai_fast_model: gpt-6-luna          # lower-latency routing / classification
-openai_reasoning_effort: medium        # none | low | medium | high | xhigh | max
+openai_reasoning_effort: medium        # none | low | medium | high | xhigh | max  (gpt-6.1-sol has no none: it omits the param and runs at medium)
 openai_enable_file_search: false
 openai_file_search_vector_store_ids: []
 

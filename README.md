@@ -486,7 +486,7 @@ behind. Mermaid stays as an authoring syntax and as the raster renderer; `d2` is
 the one arrangement Graphviz does not match, nested containers.
 
 **Provider parity.** One `Provider` protocol over Anthropic (`claude-opus-5-5`; fast tier
-`claude-sonnet-5`) and OpenAI (`gpt-6-sol`; fast tier `gpt-6-luna`). Streaming, tool calls, reasoning traces, prompt caching,
+`claude-sonnet-5`) and OpenAI (`gpt-6.1-sol`; fast tier `gpt-6-luna`). Streaming, tool calls, reasoning traces, prompt caching,
 and hosted web search all reach parity, and `tests/test_provider_parity.py` asserts the tool
 surfaces match.
 
@@ -621,7 +621,7 @@ citation_style: gb_t_7714         # gb_t_7714 | bluebook | oscola
 active_domain_packs: []           # e.g. [aviation]
 
 anthropic_model: claude-opus-5-5
-openai_model: gpt-6-sol           # always a named variant; there is no bare "gpt-6" alias
+openai_model: gpt-6.1-sol         # always a named variant; there is no bare "gpt-6.1" alias
 max_iterations: 0                 # tool-loop round limit; 0 = none (run until done)
 external_skill_max_iterations: 0  # same, for external procedural skills
 max_concurrent_agents: auto

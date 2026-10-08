@@ -19,10 +19,10 @@ _API_KEY_FILENAME = Path("legal_helper") / "api_key"
 # claude-sonnet-5 is the Anthropic fast tier, so it is offered through
 # ``anthropic_fast_model`` rather than listed here.
 ANTHROPIC_HIGH_EFFORT_MODELS = ("claude-opus-5-5",)
-# gpt-6 ships only as named variants (astra / sol / luna); there is no bare
-# "gpt-6" alias, so always spell out the variant. Every retired model stays
-# priced in usage.py so historical ledger months still replay.
-OPENAI_HIGH_EFFORT_MODELS = ("gpt-6-sol",)
+# gpt-6 / gpt-6.1 ship only as named variants (astra / sol / luna); there is no
+# bare "gpt-6" or "gpt-6.1" alias, so always spell out the variant. Every retired
+# model stays priced in usage.py so historical ledger months still replay.
+OPENAI_HIGH_EFFORT_MODELS = ("gpt-6.1-sol",)
 
 # Why a model stopped being offered, for the log line when a stored selection is
 # migrated off it. Retirement must be enforced at *load*, not only at selection:
@@ -36,6 +36,7 @@ RETIRED_MODELS: dict[str, str] = {
     "gpt-5.6-terra": "retired 2026-09-22: superseded by gpt-6-sol ($2.00/$10.00 against $2.00/$12.00)",
     "gpt-5.6-sol": "retired 2026-09-22: superseded by gpt-6-sol ($2.00/$10.00 against $4.00/$20.00)",
     "gpt-5.6-luna": "retired 2026-09-22: fast tier superseded by gpt-6-luna ($0.10/$0.50 against $0.20/$1.20)",
+    "gpt-6-sol": "retired 2026-10-07: superseded by gpt-6.1-sol (same $2.00/$10.00, cached input $0.10 against $0.20)",
     "claude-opus-5": "retired 2026-09-22: superseded by claude-opus-5-5 ($4.00/$20.00 against $5.00/$25.00)",
     "claude-opus-4-8": "retired 2026-09-22: superseded by claude-opus-5-5 ($4.00/$20.00 against $5.00/$25.00)",
     "claude-opus-4-7": "retired 2026-09-22: superseded by claude-opus-5-5 ($4.00/$20.00 against $5.00/$25.00)",
@@ -95,7 +96,7 @@ class Settings(BaseModel):
     anthropic_fast_model: str = "claude-sonnet-5"
 
     openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-6-sol"
+    openai_model: str = "gpt-6.1-sol"
     openai_fast_model: str = "gpt-6-luna"
     openai_reasoning_effort: str = "medium"
     openai_enable_file_search: bool = False
@@ -264,7 +265,7 @@ def load_settings(*, refresh: bool = False) -> Settings:
             "ANTHROPIC_FAST_MODEL", cfg.get("anthropic_fast_model", "claude-sonnet-5")
         ),
         openai_api_key=_api_key_value("OPENAI_API_KEY"),
-        openai_model=os.getenv("OPENAI_MODEL", cfg.get("openai_model", "gpt-6-sol")),
+        openai_model=os.getenv("OPENAI_MODEL", cfg.get("openai_model", "gpt-6.1-sol")),
         openai_fast_model=os.getenv("OPENAI_FAST_MODEL", cfg.get("openai_fast_model", "gpt-6-luna")),
         openai_reasoning_effort=os.getenv(
             "OPENAI_REASONING_EFFORT", cfg.get("openai_reasoning_effort", "medium")

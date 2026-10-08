@@ -107,7 +107,7 @@ def test_gpt_55_never_bills_cache_writes(tmp_path):
 
 
 def test_fallback_pricing_is_the_current_default():
-    assert usage_mod.PROVIDER_FALLBACK_PRICING["openai"] is usage_mod.DEFAULT_PRICING["gpt-6-sol"]
+    assert usage_mod.PROVIDER_FALLBACK_PRICING["openai"] is usage_mod.DEFAULT_PRICING["gpt-6.1-sol"]
     assert (
         usage_mod.PROVIDER_FALLBACK_PRICING["anthropic"]
         is usage_mod.DEFAULT_PRICING["claude-opus-5-5"]
@@ -130,6 +130,7 @@ def test_new_default_models_are_priced_windowed_and_tiered():
         assert model in usage_mod.DEFAULT_PRICING, model
         assert model in _WINDOWS, model
     assert is_fast_tier("gpt-6-luna")
+    assert not is_fast_tier("gpt-6.1-sol")
     assert not is_fast_tier("claude-sonnet-5")
 
 

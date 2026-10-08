@@ -68,7 +68,7 @@ def test_primary_and_internal_fast_models_are_routed_by_provider(monkeypatch):
     openai = anthropic.model_copy(update={"provider": "openai"})
     assert openai.model_for_provider() == "gpt-5.4"
     assert openai.model_for_provider(fast=True) == "gpt-5.4-mini"
-    assert openai.high_effort_models_for_provider("openai") == ["gpt-6-sol"]
+    assert openai.high_effort_models_for_provider("openai") == ["gpt-6.1-sol"]
 
 
 def test_max_concurrent_agents_is_configurable_and_clamped(monkeypatch):
