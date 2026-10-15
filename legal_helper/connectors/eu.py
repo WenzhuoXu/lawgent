@@ -1,14 +1,8 @@
 """EU law via EUR-Lex.
 
-The legacy ``EURLexWebService/search.htm`` endpoint that this connector used
-to call returns HTTP 404 (the public Quick-Search HTML endpoint that used to
-respond with machine-readable JSON has been retired). Free-text and CELEX
-lookups now go through the Publications Office Cellar SPARQL endpoint at
-``https://publications.europa.eu/webapi/rdf/sparql``, which is open and
-unauthenticated.
-
-The connector still emits the same JSON shape (``source``, ``query``,
-``count``, ``results[...]``) so calling skills do not need to change.
+Search goes through the Publications Office Cellar SPARQL endpoint at
+``https://publications.europa.eu/webapi/rdf/sparql`` and bodies through Cellar
+content negotiation; both are open and unauthenticated.
 """
 
 import json
@@ -239,29 +233,11 @@ def eurlex_search(
     document_type: Optional[str] = None,
     per_page: int = 8,
 ) -> str:
-    """Search EUR-Lex. Returns CELEX + title + ELI + URL only — no body
-    text. Call ``eurlex_fetch(celex)`` on a hit to get the verbatim
-    article body.
-
-    Backed by the Publications Office Cellar SPARQL endpoint. The connector
-    first scans the query for CELEX IDs and citation patterns it can convert
-    deterministically to a CELEX; only when no CELEX candidate matches does
-    it fall back to an English-title full-text search.
-
-    **Pass the citation form, not a sentence.** Recognised inputs:
-
-    - CELEX:                ``32016R0679``, ``62007CJ0549``
-    - Regulation:           ``Regulation (EU) 2016/679`` / ``Regulation 261/2004``
-    - Directive:            ``Directive 2004/82/EC``
-    - Decision:             ``Decision 2008/615/JHA``
-    - CJEU judgment:        ``C-402/07``, ``Joined Cases C-402/07 and C-432/07``
-    - General Court:        ``T-201/04``
-    - Free-text title:      ``GDPR data minimisation`` / ``Schengen Borders Code``
-
-    Extra descriptive words after the citation (party names, topic keywords)
-    don't help and can hurt — they push the connector into the slower
-    title-text fallback. Issue one tight call per CELEX rather than one big
-    multi-citation prose query.
+    """Search EUR-Lex: returns CELEX, title, ELI and URL (no body text —
+    ``eurlex_fetch(celex)`` reads a hit). Pass one citation per call, not a
+    sentence: CELEX (``32016R0679``), ``Regulation (EU) 2016/679``,
+    ``Directive 2004/82/EC``, ``C-402/07``, ``T-201/04``, or a short title
+    phrase; extra words push it into the slower title search.
 
     Args:
         query: Citation, CELEX, or short title phrase.
@@ -309,7 +285,8 @@ def eurlex_search(
     )
 
 
-_CELEX_RE = re.compile(r"^\s*(?:CELEX[:_]?)?(\d{1}\d{4}[A-Z]{1,2}\d{4})\b", re.IGNORECASE)
+# A CELEX argument to eurlex_fetch, optionally prefixed "CELEX:".
+_CELEX_ARG_RE = re.compile(r"^\s*(?:CELEX[:_]?)?(\d{1}\d{4}[A-Z]{1,2}\d{4})\b", re.IGNORECASE)
 
 
 @beta_tool
@@ -326,7 +303,7 @@ def eurlex_fetch(celex: str, language: str = "eng", max_chars: int = 16000) -> s
         language: ISO-639-2/B three-letter language code (default ``eng``).
         max_chars: Maximum body characters returned (default 16000).
     """
-    m = _CELEX_RE.match(celex or "")
+    m = _CELEX_ARG_RE.match(celex or "")
     if not m:
         return json.dumps(
             {"error": f"celex must look like e.g. 32004R0261; got {celex!r}"},

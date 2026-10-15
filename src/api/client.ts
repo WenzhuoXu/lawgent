@@ -1,13 +1,6 @@
-/** Typed fetch wrappers over the Legal Helper REST API. Ported from main.jsx:159. */
+/** Typed fetch wrappers over the Legal Helper REST API. */
 
-import type {
-  ChatDetail,
-  ChatSettings,
-  ChatSummary,
-  ProjectSummary,
-  RuntimeOptions,
-  UsageSummary,
-} from "@/types/chat";
+import type { ChatDetail, ChatSettings, ChatSummary, RuntimeOptions, UsageSummary } from "@/types/chat";
 
 async function api<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const resp = await fetch(path, options);
@@ -27,10 +20,6 @@ function jsonBody(data: unknown): RequestInit {
 export const client = {
   runtimeOptions: () => api<RuntimeOptions>("/api/runtime-options"),
   usage: (month?: string) => api<UsageSummary>(`/api/usage${month ? `?month=${month}` : ""}`),
-  skills: async () => {
-    const r = await api<unknown[] | { skills: unknown[] }>("/api/skills");
-    return { skills: Array.isArray(r) ? r : (r.skills ?? []) };
-  },
 
   listChats: async (): Promise<{ chats: ChatSummary[] }> => {
     const r = await api<ChatSummary[] | { chats: ChatSummary[] }>("/api/chats");
@@ -42,7 +31,6 @@ export const client = {
   patchChat: (id: string, patch: Partial<{ title: string; archived: boolean; settings: ChatSettings }>) =>
     api<ChatSummary>(`/api/chats/${id}`, { ...jsonBody(patch), method: "PATCH" }),
   deleteChat: (id: string) => api(`/api/chats/${id}`, { method: "DELETE" }),
-  cancelRuns: (id: string) => api(`/api/chats/${id}/runs/cancel`, { method: "POST" }),
 
   uploadToChat: async (chatId: string, file: File) => {
     const form = new FormData();
@@ -63,16 +51,4 @@ export const client = {
       `/api/chats/${chatId}/messages/${messageId}/export`,
       jsonBody(watermark ? { format, watermark } : { format }),
     ),
-
-  listProjects: async (): Promise<{ projects: ProjectSummary[] }> => {
-    const r = await api<ProjectSummary[] | { projects: ProjectSummary[] }>("/api/projects");
-    return { projects: Array.isArray(r) ? r : (r.projects ?? []) };
-  },
-  createProject: (data: Partial<ProjectSummary>) => api<ProjectSummary>("/api/projects", jsonBody(data)),
-  getProject: (id: string) => api<ProjectSummary & { context_block?: string }>(`/api/projects/${id}`),
-  assignChatProject: (chatId: string, projectId: string | null) =>
-    api(`/api/chats/${chatId}/project`, jsonBody({ project_id: projectId })),
-  addProjectMemory: (id: string, entry: { type: string; text: string }) =>
-    api(`/api/projects/${id}/memory`, jsonBody(entry)),
-  compactProject: (id: string) => api(`/api/projects/${id}/compact`, jsonBody({})),
 };

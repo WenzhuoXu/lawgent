@@ -14,11 +14,9 @@ for pages that genuinely have no text layer:
       invoked by the caller when both tiers above return empty.
 
 ``anydoc`` has no OCR: an image-only PDF parses successfully but yields
-almost nothing. PDFs therefore no longer come through here on the read path:
+almost nothing. PDFs therefore do not come through here on the read path:
 :func:`legal_helper.documents.pdf.read_pdf_text` measures each page's text
-layer, OCRs the image-only pages and marks every page. The per-document
-``pdf_text_density`` that used to live here had no caller and averaged a scan
-page into its text pages; it is gone.
+layer, OCRs the image-only pages and marks every page.
 
 Word-processing files (.docx, and .doc/.rtf/.odt/.wps via LibreOffice) are
 read by :mod:`.docx_reader`, which keeps tracked changes, headers/footers and
@@ -72,8 +70,8 @@ def markitdown_convert(path: Path) -> str:
 def convert_to_markdown(path: Path) -> str:
     """Return markdown for ``path``, trying anydoc then markitdown.
 
-    Raises only when *both* tiers fail, so existing callers keep their
-    hand-rolled T2 fallback semantics unchanged.
+    Raises only when *both* tiers fail, so a caller can fall back to its own
+    T2 extractor.
     """
     path = Path(path)
     errors: list[str] = []

@@ -27,6 +27,7 @@ import mimetypes
 import os
 import re
 import threading
+import zipfile
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,9 +109,6 @@ def _inline_token_budget() -> int:
             return max(int(raw), 0)
         except ValueError:
             pass
-    # The byte-based predecessor's documented off switch keeps working.
-    if os.getenv("LEGAL_HELPER_INLINE_CORPUS_BYTES", "").strip() == "0":
-        return 0
     from .context import turn_input_ceiling_for
 
     try:
@@ -233,6 +231,44 @@ def _wrap_inline(info: AttachmentInfo, text: str) -> str:
         f"{text}\n"
         f"</attached-file>"
     )
+
+
+_EXTRACTION_FAILED_PREFIXES = ("[file too large to inline", "[error extracting text")
+_MEDIA_DIRS = {".docx": "word/media/", ".docm": "word/media/", ".xlsx": "xl/media/", ".xlsm": "xl/media/"}
+
+
+def _embedded_image_count(info: AttachmentInfo) -> int:
+    """Images inside an OOXML file, which its extracted text cannot show."""
+    prefix = _MEDIA_DIRS.get(info.path.suffix.lower())
+    if not prefix:
+        return 0
+    try:
+        with zipfile.ZipFile(info.path) as z:
+            return sum(1 for n in z.namelist() if n.startswith(prefix) and not n.endswith("/"))
+    except Exception:  # noqa: BLE001 — not a readable zip: say nothing about images
+        return 0
+
+
+def _wrap_full_text(info: AttachmentInfo, text: str) -> str:
+    """An attachment inlined in full, saying so.
+
+    Without the statement the model re-opened inlined files with
+    ``read_document`` to be sure it had all of them: two of five rounds of a
+    27-file turn re-read text it already held. What the text cannot carry —
+    embedded images, and for a workbook its cell addresses — is named, so a
+    second look is taken only for those.
+    """
+    if text.startswith(_EXTRACTION_FAILED_PREFIXES):
+        return _wrap_inline(info, text)
+    notes = ["This is the file's complete extracted text; read_document would return the same text."]
+    images = _embedded_image_count(info)
+    if images:
+        notes.append(
+            f"The file also holds {images} embedded image(s), which text cannot show; render the file to see them."
+        )
+    if info.path.suffix.lower() in {".xlsx", ".xlsm", ".xls"}:
+        notes.append("Cell addresses are not in this text; inspect_xlsx gives them.")
+    return _wrap_inline(info, "[" + " ".join(notes) + "]\n" + text)
 
 
 def _inline_cost(info: AttachmentInfo) -> int:
@@ -607,7 +643,7 @@ def build_anthropic_block(info: AttachmentInfo) -> dict[str, Any]:
             },
         }
     if info.category == "text_inline":
-        return {"type": "text", "text": _wrap_inline(info, extract_inline_text(info))}
+        return {"type": "text", "text": _wrap_full_text(info, extract_inline_text(info))}
     return {"type": "text", "text": _stub_text(info)}
 
 
@@ -646,7 +682,7 @@ def build_openai_block(info: AttachmentInfo) -> dict[str, Any]:
             "image_url": f"data:{media_type};base64,{_image_base64(info)}",
         }
     if info.category == "text_inline":
-        return {"type": "input_text", "text": _wrap_inline(info, extract_inline_text(info))}
+        return {"type": "input_text", "text": _wrap_full_text(info, extract_inline_text(info))}
     return {"type": "input_text", "text": _stub_text(info)}
 
 
@@ -744,7 +780,7 @@ def build_user_content(
                 blocks.append({"type": "text", "text": replacement})
                 continue
             if idx in plan:
-                blocks.append({"type": "text", "text": _wrap_inline(info, plan[idx][1])})
+                blocks.append({"type": "text", "text": _wrap_full_text(info, plan[idx][1])})
                 continue
             blocks.append(build_anthropic_block(info))
             if _is_pptx(info):
@@ -763,7 +799,7 @@ def build_user_content(
                 blocks.append({"type": "input_text", "text": replacement})
                 continue
             if idx in plan:
-                blocks.append({"type": "input_text", "text": _wrap_inline(info, plan[idx][1])})
+                blocks.append({"type": "input_text", "text": _wrap_full_text(info, plan[idx][1])})
                 continue
             blocks.append(build_openai_block(info))
             if _is_pptx(info):

@@ -135,8 +135,8 @@ def load_registry(path: Path | None = None) -> list[McpServerSpec]:
 def unresolvable_stdio_specs(specs: Iterable[McpServerSpec]) -> list[tuple[str, str]]:
     """``(server_name, command)`` for every stdio spec whose command is missing.
 
-    Used by the health probe so a misconfigured launcher surfaces as a named
-    diagnostic rather than as an opaque closed pipe.
+    Printed at ``serve`` startup so a misconfigured launcher surfaces as a
+    named diagnostic rather than as an opaque closed pipe.
     """
     bad: list[tuple[str, str]] = []
     for s in specs:

@@ -51,28 +51,19 @@ describe("sseEventToChunks — simple turn", () => {
     expect(types).toContain("data-phase");
   });
 
-  it("emits a data-plan part for the direct-answer route", () => {
-    const plan = chunks.find((c) => c.type === "data-plan");
-    expect(plan).toBeTruthy();
-    expect((plan as any).data.executionMode).toBe("direct_answer");
-    expect((plan as any).data.complexity).toBe("simple");
-  });
-
   it("emits a skipped audit and finishes exactly once", () => {
     const audit = chunks.find((c) => c.type === "data-audit");
     expect((audit as any).data.skipped).toBe(true);
     const finishes = chunks.filter((c) => c.type === "finish");
     expect(finishes).toHaveLength(1);
-    // `finish` must come after all text; trailing data parts (memory_updated is
-    // persisted by the server AFTER `done`) may follow — that's expected.
+    // `finish` comes after all text; the stream closes at `done`.
     const finishIdx = chunks.findIndex((c) => c.type === "finish");
     expect(chunks.lastIndexOf(chunks.find((c) => c.type === "text-end")!)).toBeLessThan(finishIdx);
-    const after = chunks.slice(finishIdx + 1).map((c) => c.type);
-    expect(after.every((t) => t.startsWith("data-"))).toBe(true);
+    expect(finishIdx).toBe(chunks.length - 1);
   });
 });
 
-describe("sseEventToChunks — complex turn (tools + hosted + plan)", () => {
+describe("sseEventToChunks — complex turn (tools + hosted)", () => {
   const chunks = translateFixture("complex.sse");
 
   it("produces tool-input-available chunks for local tools", () => {

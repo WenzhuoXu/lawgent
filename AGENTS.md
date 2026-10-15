@@ -18,10 +18,15 @@ this repository. Project-level conventions for Claude Code itself live in
 
 - List installed packs: `GET /domains` from the running server, or
   `python -c "from legal_helper.domains import available_packs; print(available_packs())"`.
-- Activate per run: `--domain-pack aviation` on `run`, `chat`, or `serve`.
-- Activate persistently: set `active_domain_packs: [aviation]` in
+- Pin per run: `--domain-pack aviation` on `run`, `chat`, or `serve`.
+- Pin persistently: set `active_domain_packs: [aviation]` in
   `config.yaml` or `LEGAL_HELPER_ACTIVE_DOMAIN_PACKS=aviation` in the
-  environment.
+  environment, or pin it on a project.
+- A pinned pack's playbook is in the author's prompt from the start. An
+  unpinned pack is listed by name, and the author loads it with `load_pack`
+  when it judges the request falls in the domain; there is no keyword
+  detection. A `load_pack` call shows up as an `active_domain_packs` event
+  with `loaded` set.
 - Add a new pack: create `legal_helper/domains/<name>/pack.yaml` +
   `playbook.md` + `overlays/<skill>.md` files. The pack is auto-discovered
   on next process start.
@@ -87,6 +92,8 @@ production web service in the background:
 
 4. Verify:
    - `ss -ltnp | rg ':8010'`
+   - `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8010/` is `200`;
+     `503` means `legal_helper/webui_dist/` has no build (step 2)
    - `curl -s -o /tmp/legal_helper_runtime_options.json -w '%{http_code}' http://127.0.0.1:8010/api/runtime-options`
    - `curl -s http://127.0.0.1:8010/domains | jq`
    - `curl -s http://127.0.0.1:8010/jurisdictions | jq`

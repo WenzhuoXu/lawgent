@@ -2,37 +2,54 @@
  * Typed schemas for the custom `data-*` message parts the transport emits for
  * everything that is NOT plain text / reasoning / a tool call. AI SDK renders
  * these via `message.parts` of type `data-<name>`; we render them with our own
- * part renderers (Task/Plan, AuditCard, ChainOfThought, artifacts, …).
+ * part renderers (WorkflowCard, AuditCard, artifacts, …).
  *
  * Kept as a standalone module so both the live translator (api/sse.ts) and the
  * rehydration builder (lib/eventsToUIMessages.ts) share one source of truth.
  */
 
-export type PlanTask = {
+/** One tool call a workflow specialist made, nested under its row. */
+export type SubTool = {
+  name: string;
+  status: "running" | "complete" | "error";
+  detail?: string;
+};
+
+/** One sub-agent of a tool call: a `run_workflow` specialist, or the
+ * procedure behind `create_deck` / `run_procedure`. */
+export type SpecialistTask = {
   id: string;
+  /** the tool part this sub-agent belongs to */
+  parentCallId: string;
   skillName?: string;
   title?: string;
   detail?: string;
-  dependsOn?: string[];
   /** pending → running → complete | error */
   status: "pending" | "running" | "complete" | "error";
+  /** completed | truncated | empty | refused | failed | reused | cancelled */
+  outcome?: string;
   /** live rolling preview tail (agent_delta), transient */
   tail?: string;
-  totalChars?: number;
-  responseChars?: number;
+  /** the latest action, e.g. "Searching the web · 民法典 第577条" */
+  activity?: string;
   toolCount?: number;
+  totalTokens?: number;
   durationMs?: number;
+  elapsedMs?: number;
+  error?: string;
+  /** pages authored so far, and the target when one was set (decks) */
+  current?: number;
+  total?: number;
+  tools?: SubTool[];
   /** retrieved-source chips for this step (FIG1 cot-srb) */
   sources?: { label: string; kind?: string }[];
 };
 
-export type PlanData = {
-  title?: string;
-  executionMode?: string;
-  complexity?: "simple" | "standard" | "complex" | string;
-  routingReason?: string;
-  userLanguage?: string;
-  taskIds: string[];
+/** A `run_workflow` call's objective and wall-clock, keyed by its tool part. */
+export type WorkflowData = {
+  partId: string;
+  objective?: string;
+  durationMs?: number;
 };
 
 export type CiteCheckData = {
@@ -111,15 +128,12 @@ export type PacksData = { packs: string[] };
 
 export type DegradedData = { failedTaskIds?: string[]; message?: string };
 
-export type ErrorData = { message: string; outOfMoney?: boolean };
-
-/** Live phase of the current turn — drives the status line while the model
- * plans/routes before any text or tool call is visible. */
+/** Live phase of the current turn — drives the status line shown while the
+ * turn works; cleared once the answer text begins. */
 export type PhaseId =
-  | "routing"
-  | "planning"
+  | "thinking"
   | "gathering"
-  | "integrating"
+  | "workflow"
   | "drafting"
   | "auditing";
 
@@ -127,8 +141,8 @@ export type PhaseData = { phase: PhaseId; detail?: string };
 
 /** The `data` part payload map — keys become `data-<key>` part types. */
 export type LegalDataParts = {
-  plan: PlanData;
-  agentTask: PlanTask;
+  workflow: WorkflowData;
+  agentTask: SpecialistTask;
   citeCheck: CiteCheckData | null;
   audit: AuditData;
   compaction: CompactionData;
@@ -136,7 +150,6 @@ export type LegalDataParts = {
   artifact: ArtifactData;
   packs: PacksData;
   degraded: DegradedData;
-  error: ErrorData;
   phase: PhaseData;
   usage: UsageData;
 };
@@ -147,8 +160,5 @@ export type LegalMessageMetadata = {
   provider?: string;
   model?: string;
   createdAt?: string;
-  finishedAt?: string;
   durationMs?: number;
-  reasoningPreview?: string;
-  reasoningChars?: number;
 };

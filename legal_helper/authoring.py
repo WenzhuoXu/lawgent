@@ -1,51 +1,48 @@
-"""The system prompt of whoever writes the answer the user reads.
+"""The system prompt of the author: the chat's model, answering every turn.
 
-Two agents author answers: the single-pass author (205 of 219 legal answers
-since August) and the integrator of a multi-specialist run. Neither saw the
-playbook's method before — only specialists had it inlined — and the
-single-pass path dropped the skill the planner chose, so `litigation-analysis`
-was routed five times and its method loaded on none of them.
+There is one author and one prompt. The chat's model reads every message and
+decides what it needs: which method to load (`load_skill`), which domain pack
+(`load_pack`), whether to research, whether to delegate to specialists
+(`run_workflow`), or whether to just answer.
 
-The prompt built here is static for a given (mode, skill, active packs), so it
-caches; everything that changes per turn (date, language, length, what the
-answer must cover) goes in the request tail — see ``answer_contract.author_tail``.
+The prompt is static for a given set of pinned packs, so it caches; everything
+that changes per turn (date, language, length, a method the user picked) goes
+in the request tail — see ``answer_contract.author_tail``.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Iterable, Optional
+from typing import Optional
 
-from .answer_contract import author_rules
+from .answer_contract import author_rules, deliverable_rules
 from .config import Settings
 
-AUTHOR_MODES = ("single_pass", "integration")
+_ROLE = """You are a legal AI helper. You answer every message in this chat yourself, with the tools you hold: hosted web search and fetch, legal source connectors, the local legal corpus, document tools, the legal methods listed below, and a multi-agent workflow.
 
-_ROLE = {
-    "single_pass": """You are a legal AI helper writing the answer to a practitioner's question.
-
-You have hosted web search and fetch, legal source connectors and document
-tools. There are no sub-agents this turn: research the question yourself with
-your tools, then write the answer. Do not emit `<tool_call>` or any pseudo
-function-call envelope as text.""",
-    "integration": """You are a legal AI helper writing the answer to a practitioner's question.
-
-Specialists have already researched it; their bundles are attached to the
-request. A bundle is raw research — findings with pinpoints, per-issue element
-work, artefacts, gaps and sources — not text to paste: you are the only author,
-and the reader never sees which specialist found what. You have the same
-research and document tools as the specialists: use them to close a gap a
-bundle names, to resolve a conflict between bundles, or to produce a requested
-file. Do not emit `<tool_call>` or any pseudo function-call envelope as text.""",
-}
+Legal work follows the research conduct and the general playbook below. Anything else — a document or spreadsheet task, a translation, a reasoning or exam question, a general question, a greeting — gets a direct, practical answer, without legal framing the user did not ask for. Use hosted web search when an answer depends on current facts. Do not emit `<tool_call>` or any pseudo function-call envelope as text."""
 
 _CONVERSATION = """This turn may sit anywhere in an ongoing conversation. The conversation context
 supplied with the request is what you have already established with this user;
 build on it rather than re-deriving it."""
 
-_INTEGRATION_RULES = """# Integrating the bundles
-- Walk the issues in the plan, in order. For each: the controlling rule, the
-  elements against the facts, the strongest counter-reading, the conclusion.
+_CONDUCT = """# Conduct
+- Work a question through before you answer it. When the user disputes an
+  answer or proposes a different one, work the question again from the source
+  material before you reply: change your answer only when that work supports
+  the change, and say what changed; otherwise keep it and show why.
+- Ask a clarifying question only when a fact that changes the answer is
+  missing and neither a stated assumption nor a short answer for each reading
+  will do. Ask only for that fact.
+- Files: pick the tool its description says fits. For a workbook, inspect the
+  real cell coordinates before editing (`inspect_xlsx_range`), never row
+  numbers read off a markdown export. `read_format_recipe` holds the deeper
+  recipe for a format when you want it; it is not a required first step."""
+
+_INTEGRATION_RULES = """## Integrating a workflow's bundles
+- Walk the request's issues in the user's order. For each: the controlling
+  rule, the elements against the facts, the strongest counter-reading, the
+  conclusion.
 - Conflicting findings: reconcile them from the sources (higher authority, the
   version in force at the relevant date, the more specific rule — name which
   rule decides). If they cannot be reconciled, keep both and say how they sit
@@ -55,6 +52,45 @@ _INTEGRATION_RULES = """# Integrating the bundles
   angles this answer does not cover and must be re-run before reliance.
 - Commit to what a bundle verified with a pinpoint; hedge only what no bundle
   and no tool call could confirm. Never invent findings for failed coverage."""
+
+
+def workflow_guidance() -> str:
+    """When to delegate, and how to integrate what comes back."""
+    return (
+        "# Multi-agent workflow\n"
+        "`run_workflow` hands parts of a request to specialist sub-agents that "
+        "research in parallel and return bundles to you; its description says "
+        "when it pays. When the user asks for a workflow or for several agents — "
+        "in any language, in any phrasing — calling it is mandatory, sized to the "
+        "task. Otherwise most turns need no workflow: answer directly, with your "
+        "own tools.\n\n" + _INTEGRATION_RULES
+    )
+
+
+def methods_block() -> str:
+    """The method list: name and one line each; `load_skill` returns the body."""
+    from .skills import internal_skill_names, skill_manifest
+
+    lines = []
+    for name in internal_skill_names():
+        if name == "cite-check":
+            continue
+        try:
+            description = str(skill_manifest(name).get("description") or "")
+        except Exception:  # noqa: BLE001
+            description = ""
+        first = re.split(r"(?<=[.。])\s", description.strip(), maxsplit=1)[0]
+        lines.append(f"- `{name}` — {first[:240]}")
+    if not lines:
+        return ""
+    return (
+        "# Legal methods\n"
+        "When a legal request matches a method below, load it with "
+        "`load_skill` before you work the request and follow its steps; its "
+        "references open with `read_skill_file`. A request may need none, or "
+        "more than one. Never guess a name.\n"
+        + "\n".join(lines)
+    )
 
 
 def research_conduct() -> str:
@@ -138,65 +174,41 @@ def strip_bundle_sections(body: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
 
 
-def skill_method(skill_name: Optional[str], active_packs: Iterable[str] = ()) -> str:
-    """The chosen skill's method for the author, without its bundle contract."""
-    if not skill_name:
-        return ""
-    from .agent import _strip_inactive_pack_pointers
-    from .skills import internal_skill_names, load_skill_body
-
-    if skill_name not in internal_skill_names():
-        return ""
-    try:
-        body = load_skill_body(skill_name)
-    except Exception:  # noqa: BLE001
-        return ""
-    body = _strip_inactive_pack_pointers(strip_bundle_sections(body), set(active_packs))
-    if not body:
-        return ""
-    return (
-        f"# Method for this request (`{skill_name}`)\n\n"
-        "The planner routed this request to the method below. Follow its steps "
-        "and produce the artefacts it calls for (tables, matrices, timelines) in "
-        "the answer itself where they help the reader. Its `references/` and "
-        "`resources/` files open with `read_skill_reference`.\n\n"
-        f"{body}"
-    )
-
-
-def author_system_prompt(
-    settings: Settings,
-    *,
-    mode: str = "single_pass",
-    skill_name: Optional[str] = None,
-) -> str:
-    """System prompt for the author of a legal answer."""
+def author_system_prompt(settings: Settings) -> str:
+    """System prompt of the author — the same on every turn of a chat."""
     from .agent import _build_parent_addendum
 
-    if mode not in AUTHOR_MODES:
-        raise ValueError(f"unknown author mode: {mode}")
     blocks = [
-        _ROLE[mode],
+        _ROLE,
         _CONVERSATION,
+        _CONDUCT,
         research_conduct(),
+        author_rules(),
+        deliverable_rules(),
     ]
-    if mode == "integration":
-        blocks.append(_INTEGRATION_RULES)
-    blocks.append(author_rules())
     method = playbook_method()
     if method:
         blocks.append(method)
-    chosen = skill_method(skill_name, settings.active_domain_packs)
-    if chosen:
-        blocks.append(chosen)
-    return "\n\n".join(blocks) + _build_parent_addendum(settings, skill_name=skill_name)
+    methods = methods_block()
+    if methods:
+        blocks.append(methods)
+    from .tools.pack_tools import pack_catalog_block
+
+    packs = pack_catalog_block(settings)
+    if packs:
+        blocks.append(packs)
+    from .tool_exposure import on_demand_block
+
+    blocks.append(on_demand_block())
+    blocks.append(workflow_guidance())
+    return "\n\n".join(blocks) + _build_parent_addendum(settings)
 
 
 __all__ = [
-    "AUTHOR_MODES",
     "author_system_prompt",
+    "methods_block",
     "playbook_method",
     "research_conduct",
-    "skill_method",
     "strip_bundle_sections",
+    "workflow_guidance",
 ]

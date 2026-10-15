@@ -17,7 +17,8 @@ from anthropic.lib.tools._beta_functions import (
 
 from ..attachments import needs_anthropic_files_beta
 from ..config import Settings
-from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
+from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event, tool_call_id_var
+from ..tool_exposure import anthropic_tools, is_deferred
 from ..tool_budget import apply_result_budget, budget_log_fields
 from ..turn_compaction import (
     CONTEXT_MANAGEMENT_BETA,
@@ -35,7 +36,7 @@ from .tool_exec import run_tool_calls
 
 
 # The shared reasoning-effort dial mapped onto Anthropic's ``output_config.effort``.
-# Every offered Claude model (Opus 4.7+, Sonnet 5) rejects manual
+# Every offered Claude model (Opus 5.5, Sonnet 5) rejects manual
 # ``thinking: {type: "enabled", budget_tokens}`` with a 400, so depth is set by
 # adaptive thinking plus effort. "none" has no Anthropic equivalent — Opus 5.5
 # cannot disable thinking at all — so it maps to the lowest effort instead.
@@ -71,8 +72,6 @@ def _thinking_kwargs(effort: str) -> dict[str, Any]:
     }
 
 
-WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
-WEB_FETCH_TOOL = {"type": "web_fetch_20250910", "name": "web_fetch"}
 WEB_BETAS = ["web-search-2025-03-05", "web-fetch-2025-09-10"]
 FILES_API_BETA = "files-api-2025-04-14"
 CACHE_EPHEMERAL: dict[str, str] = {"type": "ephemeral"}
@@ -111,14 +110,19 @@ def _tools_with_cache_breakpoint(tools: list[Any]) -> list[Any]:
     if not tools:
         return tools
     out = list(tools)
-    last = out[-1]
+    # The last *loaded* definition: deferred tools trail the list and stay out
+    # of context until tool search loads them, so a marker there marks nothing.
+    at = max((i for i, t in enumerate(out) if not is_deferred(t)), default=None)
+    if at is None:
+        return out
+    last = out[at]
     if isinstance(last, dict):
         if "cache_control" not in last:
-            out[-1] = {**last, "cache_control": dict(STABLE_PREFIX_CACHE)}
+            out[at] = {**last, "cache_control": dict(STABLE_PREFIX_CACHE)}
     elif isinstance(last, BetaFunctionTool) and getattr(last, "_cache_control", None) is None:
         annotated = copy.copy(last)
         annotated._cache_control = dict(STABLE_PREFIX_CACHE)
-        out[-1] = annotated
+        out[at] = annotated
     return out
 
 
@@ -157,8 +161,8 @@ def _automatic_cache_kwarg(
     it, and an automatic entry may not outlive the explicit ones before it.
 
     Only where there is a next round to read it (``loops``): on a one-shot
-    call — router, planner, summary, title — it would land after content
-    unique to that call and bill the write premium on bytes never read back.
+    call — a summary, a title — it would land after content unique to that
+    call and bill the write premium on bytes never read back.
     Also skipped when the explicit breakpoints already fill the four slots.
     """
     if not loops or _cache_breakpoints(tools, system, messages) >= MAX_CACHE_BREAKPOINTS:
@@ -280,6 +284,7 @@ def _execute_tool_uses(
                 "provider": provider,
                 "model": model,
                 "tool_name": names[i],
+                "call_id": getattr(uses[i], "id", None),
                 "arguments": args if isinstance(args, dict) else {"input": args},
             },
         )
@@ -287,6 +292,7 @@ def _execute_tool_uses(
     def work(i: int) -> tuple[str, Any]:
         tool = runnable.get(names[i])
         started = time.monotonic()
+        token = tool_call_id_var.set(getattr(uses[i], "id", None))
         try:
             if tool is None:
                 return "missing", None
@@ -297,6 +303,7 @@ def _execute_tool_uses(
             except Exception as exc:  # noqa: BLE001 — returned to the model, as the SDK does
                 return "error", exc
         finally:
+            tool_call_id_var.reset(token)
             durations[i] = int((time.monotonic() - started) * 1000)
 
     def after(i: int, outcome: tuple[str, Any]) -> None:
@@ -341,6 +348,7 @@ def _execute_tool_uses(
                 "provider": provider,
                 "model": model,
                 "tool_name": name,
+                "call_id": getattr(uses[i], "id", None),
                 "output_preview": output_str[:1200],
                 "output_chars": len(output_str),
                 "duration_ms": durations[i],
@@ -500,7 +508,7 @@ def _collect_tool_blocks(
                     raw={"id": getattr(block, "id", None)},
                 )
             )
-        elif btype in {"server_tool_use", "web_search_tool_result", "web_fetch_tool_result"}:
+        elif btype in {"server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result"}:
             record = ToolCallRecord(
                 name=getattr(block, "name", btype),
                 arguments=getattr(block, "input", {}) or {},
@@ -518,15 +526,6 @@ def _collect_tool_blocks(
                     "raw_type": btype,
                 },
             )
-
-
-def _is_hosted_tool(tool: Any) -> bool:
-    if isinstance(tool, BetaBuiltinFunctionTool):
-        return True
-    if isinstance(tool, dict):
-        t = tool.get("type", "")
-        return t.startswith(("web_search_", "web_fetch_", "code_execution_", "computer_"))
-    return False
 
 
 def _needs_web_betas(tools: Iterable[Tool]) -> bool:
@@ -556,14 +555,6 @@ def _serialize_messages(messages: Iterable[Message]) -> list[dict[str, Any]]:
         except Exception:
             out.append({"role": getattr(m, "role", "?"), "content": str(m)})
     return out
-
-
-def _has_evidence_log(text: str) -> bool:
-    return any(marker in text for marker in ("Evidence Verification Log", "证据核验", "在线证据核验"))
-
-
-def _has_claim_check(text: str) -> bool:
-    return any(marker in text for marker in ("Claim-Level Sanity Check", "逐项核验", "逐项主张核验"))
 
 
 def _has_sources(text: str) -> bool:
@@ -614,18 +605,19 @@ class AnthropicProvider:
         max_iterations: Optional[int],
         stream: bool,
     ) -> tuple[dict[str, Any], list[str]]:
-        """Parameters for one tool loop; identical on the run and stream paths.
-
-        `tool_runner` used to send no thinking or effort at all, so Sonnet 5
-        sub-agents ran at its default `high`, a level above the dial.
+        """Parameters for one tool loop; identical on the run and stream paths,
+        so `tool_runner` carries the same thinking and effort as `stream`
+        (without them Sonnet 5 runs at its default `high`, above the dial).
         """
         betas: list[str] = []
         if _needs_web_betas(tools_list):
             betas.extend(WEB_BETAS)
         if needs_anthropic_files_beta(messages_list):
             betas.append(FILES_API_BETA)
+        # Capability-side tools arrive marked `defer_loading` and stay out of
+        # context until the native tool search finds them (tool_exposure.py).
         tools = _tools_with_cache_breakpoint(
-            _instrument_local_tools(tools_list, provider=self.name, model=self.model)
+            anthropic_tools(_instrument_local_tools(tools_list, provider=self.name, model=self.model))
         )
         system_param = _cached_system(system)
         limit = iteration_limit(max_iterations, self.settings)
@@ -810,10 +802,8 @@ class AnthropicProvider:
         record_usage(self.name, self.model, usage, state_dir=getattr(self.settings, "state_dir", None))
 
         structured_payload: Optional[dict[str, Any]] = None
-        # The SDK's parsed message exposes `parsed_output`; this read `.parsed`,
-        # which no longer exists, so every Anthropic structured call — the
-        # planner's included — came back with no payload.
-        parsed = getattr(final, "parsed_output", None) or getattr(final, "parsed", None)
+        # A schema-constrained call's parsed message carries `parsed_output`.
+        parsed = getattr(final, "parsed_output", None)
         if parsed is not None:
             try:
                 structured_payload = parsed.model_dump() if hasattr(parsed, "model_dump") else dict(parsed)
@@ -822,7 +812,7 @@ class AnthropicProvider:
 
         text = _extract_final_text(final) or ceiling_text
         if structured_payload is None and structured_output is not None and text:
-            # Same fallback as the OpenAI path: the schema-constrained text.
+            # JSON_OBJECT sends no schema, so its payload is the text itself.
             try:
                 loaded = json.loads(text)
                 structured_payload = loaded if isinstance(loaded, dict) else None
@@ -863,8 +853,6 @@ class AnthropicProvider:
                 "response_chars": len(text),
                 "local_tool_call_count": len(tool_calls),
                 "hosted_tool_call_count": len(hosted_calls),
-                "has_evidence_verification_log": _has_evidence_log(text),
-                "has_claim_level_sanity_check": _has_claim_check(text),
                 "has_sources": _has_sources(text),
                 "latency_ms": t.latency_ms,
                 "stop_reason": stop_reason,
@@ -983,11 +971,12 @@ class AnthropicProvider:
                                 "tool_call",
                                 {
                                     "name": record.name,
+                                    "call_id": getattr(block, "id", None),
                                     "arguments": record.arguments,
                                     "agent": agent_name_var.get(),
                                 },
                             )
-                        elif btype in {"server_tool_use", "web_search_tool_result", "web_fetch_tool_result"}:
+                        elif btype in {"server_tool_use", "web_search_tool_result", "web_fetch_tool_result", "tool_search_tool_result"}:
                             record = ToolCallRecord(
                                 name=getattr(block, "name", btype),
                                 arguments=getattr(block, "input", {}) or {},
@@ -1080,8 +1069,7 @@ class AnthropicProvider:
             notice = (
                 "\n\n> ⚠️ **Output truncated** at the model's `max_tokens` limit "
                 f"({self.settings.max_tokens} tokens). Increase `max_tokens` in "
-                "config.yaml (Opus 4.x supports up to 128000 with streaming) to "
-                "get the complete analysis."
+                "config.yaml to get the complete analysis."
             )
             text += notice
             yield StreamEvent("delta", {"text": notice})
@@ -1116,20 +1104,9 @@ class AnthropicProvider:
                 "response_chars": len(text),
                 "latency_ms": t.latency_ms,
                 "stream": True,
-                "has_evidence_verification_log": _has_evidence_log(text),
-                "has_claim_level_sanity_check": _has_claim_check(text),
                 "has_sources": _has_sources(text),
                 "stop_reason": stop_reason,
             },
         )
         yield StreamEvent("done", {"text": text, "usage": _with_last_request(usage, in_turn), "stop_reason": stop_reason})
 
-
-def aviation_hosted_search_tools(settings: Settings) -> list[dict[str, Any]]:
-    """Hosted web tools used by sub-agents for FAA/EASA/ICAO lookups."""
-    out: list[dict[str, Any]] = []
-    if settings.enable_web_search:
-        out.append(WEB_SEARCH_TOOL)
-    if settings.enable_web_fetch:
-        out.append(WEB_FETCH_TOOL)
-    return out

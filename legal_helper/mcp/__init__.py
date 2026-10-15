@@ -7,11 +7,9 @@ from .adapter import (
 )
 from .first_party import first_party_specs
 from .health import pkulaw_health
-from .manager import McpManager, McpServerSpec
-from .registry import filter_mcps, load_registry
+from .registry import McpServerSpec, filter_mcps, load_registry
 
 __all__ = [
-    "McpManager",
     "McpServerSpec",
     "filter_mcps",
     "first_party_specs",

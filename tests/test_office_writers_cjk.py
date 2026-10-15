@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import zipfile
-
 from legal_helper.documents.office import edit_pptx_text, extract_pptx_text
 from legal_helper.documents.writers import write_pdf_document
 from legal_helper.documents.writers.pdf import _detect_lang

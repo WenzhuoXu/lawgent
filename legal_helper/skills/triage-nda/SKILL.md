@@ -18,11 +18,11 @@ anything not GREEN.
 ## Output Contract (binding)
 
 As a specialist, emit the harness's bundle contract (Findings · Issues ·
-Artefacts · Out of scope · Sources), supplied with your task. As the author of
-a final answer, follow the author contract instead and put these artefacts in
-the answer where they help the reader.
+Artefacts · Out of scope · Sources), supplied with your task.
 
-Artefacts this skill produces: the classification line (GREEN / YELLOW / RED with the triggering clauses) and the carve-out checklist.
+## Artefacts
+
+The classification line (GREEN / YELLOW / RED with the triggering clauses) and the carve-out checklist.
 
 ## Classification rules
 

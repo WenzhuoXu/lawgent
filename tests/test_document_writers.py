@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from legal_helper.documents.writers import write_docx_document, write_pdf_document
 
 

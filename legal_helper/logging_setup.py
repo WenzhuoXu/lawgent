@@ -1,4 +1,4 @@
-"""Loguru text log + JSONL turn log shared by orchestrator and sub-agents."""
+"""Loguru text log + JSONL turn and event logs shared by the author and sub-agents."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ import json
 import re
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterator, Optional
 
 from loguru import logger
 
@@ -18,8 +19,8 @@ from .config import Settings, current_settings
 
 _CONFIGURED = False
 
-# Run-scoped context: orchestrator sets `run_id`; sub-agents inherit and set
-# their own `sub_run_id` while preserving `parent_run_id`.
+# Run-scoped context: the author's turn sets `run_id` (its agent name is
+# "orchestrator"); sub-agents set their own while preserving `parent_run_id`.
 run_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("run_id", default=None)
 parent_run_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "parent_run_id", default=None
@@ -30,9 +31,52 @@ agent_name_var: contextvars.ContextVar[str] = contextvars.ContextVar(
 workflow_event_sink_var: contextvars.ContextVar[Optional[Callable[[dict[str, Any]], None]]] = (
     contextvars.ContextVar("workflow_event_sink", default=None)
 )
+# Previews that reach a watching client but are never persisted: a
+# specialist's rolling output tail ticks up to four times a second, and a tool
+# running inside the author's loop cannot yield to the turn's generator.
+transient_event_sink_var: contextvars.ContextVar[Optional[Callable[[str, dict[str, Any]], None]]] = (
+    contextvars.ContextVar("transient_event_sink", default=None)
+)
+# The id of the tool call whose body is running (set by both providers), so a
+# tool that spawns work can name itself as the parent of that work.
+tool_call_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "tool_call_id", default=None
+)
+# Inside a workflow specialist: its task id and the `run_workflow` call that
+# started it. Every event the specialist emits carries both, which is how a
+# client nests a sub-agent's tool calls under the call that spawned it.
+task_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("task_id", default=None)
+parent_call_id_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "parent_call_id", default=None
+)
 
 
-_SECRET_KEY_RE = re.compile(r"(api[_-]?key|authorization|secret|token|bearer)", re.IGNORECASE)
+@contextmanager
+def sub_agent_scope(task_id: str) -> Iterator[None]:
+    """Tag what a tool's sub-agent emits with ``task_id`` and the running call.
+
+    A deck or procedure sub-agent runs inside one tool call; tagged, its tool
+    calls and progress nest under that call instead of reaching the client as
+    top-level calls of their own that finish while the tool is still running.
+    Inside a workflow specialist the specialist's own tags stay, so the work
+    still nests under the specialist that asked for it.
+    """
+    if task_id_var.get() is not None:
+        yield
+        return
+    task_token = task_id_var.set(task_id)
+    parent_token = parent_call_id_var.set(tool_call_id_var.get())
+    try:
+        yield
+    finally:
+        parent_call_id_var.reset(parent_token)
+        task_id_var.reset(task_token)
+
+
+# `token(?!s\b)`: an access token is a secret, a token *count* (input_tokens,
+# total_tokens) is telemetry — redacting the counts blanked every usage figure
+# in the event stream.
+_SECRET_KEY_RE = re.compile(r"(api[_-]?key|authorization|secret|token(?!s\b)|bearer)", re.IGNORECASE)
 
 
 def _redact(value: Any) -> Any:
@@ -91,12 +135,37 @@ def log_turn(record: dict[str, Any]) -> None:
         f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
+def _with_task_context(data: dict[str, Any]) -> dict[str, Any]:
+    """``data`` plus the specialist task it came from, when it came from one."""
+    task_id = task_id_var.get()
+    parent = parent_call_id_var.get()
+    if task_id is None and parent is None:
+        return data
+    out = dict(data)
+    if task_id is not None:
+        out.setdefault("task_id", task_id)
+    if parent is not None:
+        out.setdefault("parent_call_id", parent)
+    return out
+
+
+def emit_transient(kind: str, data: dict[str, Any]) -> None:
+    """Send a preview event to a watching client, if any. Never persisted."""
+    sink = transient_event_sink_var.get()
+    if sink is None:
+        return
+    try:
+        sink(kind, _with_task_context(data))
+    except Exception:  # noqa: BLE001 — a preview must never break a run
+        logger.exception("transient event sink failed")
+
+
 def log_workflow_event(event_type: str, data: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     """Append a small event record for UI/activity timelines and debugging.
 
     Turn logs capture the complete provider request/response after a turn
-    finishes. Event logs capture what is happening inside the workflow:
-    routing, skill lifecycle, local tool calls, hosted search calls, and
+    finishes. Event logs capture what is happening inside the turn: the
+    workflow and skill lifecycle, local tool calls, hosted search calls, and
     verification markers.
     """
     setup_logging()
@@ -106,7 +175,7 @@ def log_workflow_event(event_type: str, data: Optional[dict[str, Any]] = None) -
         "run_id": run_id_var.get(),
         "parent_run_id": parent_run_id_var.get(),
         "agent": agent_name_var.get(),
-        "data": data or {},
+        "data": _with_task_context(data or {}),
     }
     # Failure/degradation events carry their trajectory subclass so a run's
     # failure profile can be aggregated after the fact without re-parsing prose.

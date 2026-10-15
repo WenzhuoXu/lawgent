@@ -25,8 +25,9 @@ Two layers, following the paper's dual-layer design:
 
 * ``Layer.SUBSTANTIVE`` — the legal content is wrong (bad authority, bad
   grounding, unsupported claim).
-* ``Layer.PROCEDURAL`` — the *agent* misbehaved (plan malformed, specialist
-  dropped, tool path degraded), regardless of whether the content survived.
+* ``Layer.PROCEDURAL`` — the *agent* misbehaved (workflow task list rejected,
+  specialist failed, tool path degraded), regardless of whether the content
+  survived.
 
 A procedural failure with a correct-looking answer is precisely the
 Right-Answer-Wrong-Reason case, so ``profile()`` reports the layers separately
@@ -53,7 +54,7 @@ class Category(str, Enum):
     CITATION = "citation"            # authority missing, unverifiable, or wrong
     GROUNDING = "grounding"          # quote/claim not supported by its source
     # procedural
-    PLANNING = "planning"            # decomposition malformed or degraded
+    PLANNING = "planning"            # a workflow task list the harness rejected
     DELEGATION = "delegation"        # specialist work dropped, capped, or failed
     EXECUTION = "execution"          # tool/provider path degraded mid-run
     OUTPUT = "output"                # answer empty or structurally unusable
@@ -78,7 +79,7 @@ EVENT_SUBCLASSES: dict[str, Subclass] = {
     # ---- substantive · citation -------------------------------------------
     "citation_audit_failed": _s(
         "citation.audit_failed", Layer.SUBSTANTIVE, Category.CITATION,
-        "The citation audit rejected the answer.",
+        "The citation audit could not run: the cite-check sub-agent raised.",
     ),
     "citation_audit_auto_pass": _s(
         "citation.unaudited_pass", Layer.SUBSTANTIVE, Category.CITATION,
@@ -92,34 +93,11 @@ EVENT_SUBCLASSES: dict[str, Subclass] = {
         "citation.audit_skipped", Layer.SUBSTANTIVE, Category.CITATION,
         "Audit skipped as a non-legal turn.",
     ),
-    "workflow_cite_check_fast_fallback": _s(
-        "citation.degraded_checker", Layer.SUBSTANTIVE, Category.CITATION,
-        "Cite-check ran on the fast tier after the primary model was unavailable.",
-    ),
     # ---- procedural · planning --------------------------------------------
-    "workflow_plan_fallback": _s(
-        "planning.fallback", Layer.PROCEDURAL, Category.PLANNING,
-        "Planner failed; heuristic plan substituted.",
-    ),
-    "workflow_planner_fast_fallback": _s(
-        "planning.degraded_planner", Layer.PROCEDURAL, Category.PLANNING,
-        "Planning ran on the fast tier after the primary model was unavailable.",
-    ),
-    "workflow_plan_router_fallback": _s(
-        "planning.router_fallback", Layer.PROCEDURAL, Category.PLANNING,
-        "Complexity router failed; default complexity assumed.",
-    ),
-    "workflow_plan_router_low_quality": _s(
-        "planning.router_low_quality", Layer.PROCEDURAL, Category.PLANNING,
-        "Router returned a low-confidence route.",
-    ),
-    "workflow_plan_dependency_cycle_broken": _s(
-        "planning.dependency_cycle", Layer.PROCEDURAL, Category.PLANNING,
-        "Task graph contained a cycle that had to be broken.",
-    ),
-    "workflow_plan_agent_capped": _s(
-        "planning.scope_capped", Layer.PROCEDURAL, Category.PLANNING,
-        "Planned specialist count exceeded the cap and was truncated.",
+    "workflow_task_rejected": _s(
+        "planning.task_list_rejected", Layer.PROCEDURAL, Category.PLANNING,
+        "The author's run_workflow task list was rejected (too many tasks, an "
+        "unknown method, or a dependency cycle).",
     ),
     # ---- procedural · delegation ------------------------------------------
     "agent_task_failed": _s(
@@ -130,23 +108,19 @@ EVENT_SUBCLASSES: dict[str, Subclass] = {
         "delegation.rate_limited", Layer.PROCEDURAL, Category.DELEGATION,
         "A specialist task was rate limited.",
     ),
-    "workflow_degraded_missing_specialists": _s(
-        "delegation.specialist_dropped", Layer.PROCEDURAL, Category.DELEGATION,
-        "Synthesis ran without specialists the plan mandated — the mandate-drop "
-        "case, and the likeliest source of Right-Answer-Wrong-Reason.",
-    ),
     "workflow_degraded": _s(
         "delegation.degraded_run", Layer.PROCEDURAL, Category.DELEGATION,
-        "Run completed with reduced coverage.",
+        "A workflow finished with some specialists failed; the answer covers "
+        "only the completed bundles.",
     ),
     # ---- procedural · execution -------------------------------------------
     "workflow_agent_rate_limit_degraded": _s(
         "execution.rate_limit_degraded", Layer.PROCEDURAL, Category.EXECUTION,
         "Run degraded under provider rate limits.",
     ),
-    "workflow_integration_provider_fallback": _s(
+    "workflow_role_provider_fallback": _s(
         "execution.provider_fallback", Layer.PROCEDURAL, Category.EXECUTION,
-        "Integration turn fell back to the secondary provider.",
+        "A role's provider could not be built; the chat's own model served it.",
     ),
     "workflow_agent_concurrency_reduced": _s(
         "execution.concurrency_reduced", Layer.PROCEDURAL, Category.EXECUTION,

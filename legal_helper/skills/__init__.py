@@ -1,4 +1,4 @@
-"""Skill loader and lazy skill-resource helpers.
+"""Skill discovery and loading.
 
 A skill is a directory holding a ``SKILL.md``. Two kinds live side by side and
 the difference is where the directory is, not what it contains:
@@ -13,13 +13,13 @@ the difference is where the directory is, not what it contains:
   the resolved ``SKILL_DIR`` and reads its way in, exactly as the skill's own
   load order instructs.
 
-Roots come from ``LEGAL_HELPER_SKILL_ROOTS`` (``os.pathsep``-separated) when
-set, otherwise this package followed by ``~/.claude/skills``. Discovery runs at
-import because :data:`SKILL_NAMES` is consumed at import by the tool registry
-and the planner; set the variable before importing the package.
+Roots are this package followed by ``LEGAL_HELPER_SKILL_ROOTS``
+(``os.pathsep``-separated) when set, otherwise by ``~/.claude/skills``.
+:data:`SKILL_NAMES` is computed at import, so set the variable before
+importing the package; every other lookup scans the roots when called.
 
-Nothing here hardcodes a skill name: two hand-kept allowlists had drifted
-apart before, leaving skills on disk that nothing could dispatch.
+Nothing here hardcodes a skill name: a hand-kept allowlist drifts from what is
+on disk and leaves skills that nothing can reach.
 """
 
 from __future__ import annotations
@@ -156,12 +156,12 @@ def skill_path(name: str) -> Path:
     try:
         return skill_dir(name) / "SKILL.md"
     except FileNotFoundError:
-        # Preserve the historical shape: callers report the missing path.
+        # An unknown skill still gets a path, so callers can name the missing file.
         return _HERE / name / "SKILL.md"
 
 
 def load_skill_text(name: str) -> str:
-    """Return the raw SKILL.md content (used as the sub-agent system prompt)."""
+    """Return the raw SKILL.md content, frontmatter included."""
     path = skill_path(name)
     if not path.is_file():
         raise FileNotFoundError(f"Missing skill: {name} at {path}")

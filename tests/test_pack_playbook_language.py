@@ -7,8 +7,8 @@ Covers two behaviors owned by workflow.py/agent.py:
   §-heading index, so overlay references like ``playbook §4`` resolve instead of
   being guessed at. The playbook BODY stays out of the prompt (compactness
   guard mirrors test_provider_parity's "Aviation Playbook" assertion).
-- The language policy is relaxed per CLAUDE.md: internal work (planner task
-  bodies, sub-agent instructions and replies) may use whichever language fits
+- The language policy is relaxed per CLAUDE.md: internal work (specialist
+  tasks, sub-agent instructions and replies) may use whichever language fits
   the material; only the structural output headings stay English for harness
   parsing, and sources are still quoted in their original language.
 """
@@ -16,32 +16,9 @@ Covers two behaviors owned by workflow.py/agent.py:
 from __future__ import annotations
 
 from legal_helper.config import load_settings
-from legal_helper.providers import RunResult
 
 
 AVIATION_PLAYBOOK_REL = "legal_helper/domains/aviation/playbook.md"
-
-
-class _CapturingPlanner:
-    name = "mock"
-    model = "mock-advanced"
-    supports_hosted_web_search = False
-    supports_file_search = False
-    supports_structured_outputs = False
-
-    def __init__(self) -> None:
-        self.prompts: list[str] = []
-
-    def run(self, system=None, messages=None, *args, **kwargs):
-        if messages:
-            self.prompts.append(messages[-1]["content"])
-        return RunResult(text="{}", provider=self.name, model=self.model)
-
-    def stream(self, *args, **kwargs):
-        yield from ()
-
-    def tool_runner(self, *args, **kwargs):
-        return self.run(*args, **kwargs)
 
 
 def _settings(packs: list[str]):
@@ -142,51 +119,3 @@ def test_sub_agent_contract_relaxed_but_structurally_parseable():
     assert "verbatim in English" in p
     # Quotes-of-sources convention preserved.
     assert "original language" in p
-
-
-def test_decomposition_prompt_allows_material_fit_language(tmp_path):
-    from legal_helper.workflow import WorkflowExecutor
-
-    provider = _CapturingPlanner()
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    executor = WorkflowExecutor(settings=settings, provider=provider)
-    executor._agent_workflow_plan(
-        "Compare PRC and US cross-border data-transfer rules.", complexity="complex"
-    )
-    prompt = provider.prompts[0]
-    assert "ONLY working language" not in prompt
-    assert "whichever language fits the sources" in prompt
-    # Quotes-of-sources convention preserved.
-    assert "original language" in prompt
-
-
-def test_heuristic_plan_tasks_have_no_english_only_instruction():
-    from legal_helper.workflow import heuristic_plan
-
-    plan = heuristic_plan("What does the Chicago Convention require for overflight permits?")
-    assert plan.agent_tasks
-    for task in plan.agent_tasks:
-        assert "Work in English" not in task.task
-        assert "in English" not in task.task
-
-
-def test_skill_started_event_reports_free_task_language():
-    import legal_helper.agent as agent_mod
-
-    events: list[tuple[str, dict]] = []
-
-    class _Provider:
-        name = "mock"
-        model = "mock"
-
-        def tool_runner(self, *args, **kwargs):
-            return RunResult(text="## Findings\n- ok", provider="mock", model="mock")
-
-    orig = agent_mod.log_workflow_event
-    agent_mod.log_workflow_event = lambda name, payload: events.append((name, payload))
-    try:
-        agent_mod.SkillAgent("brief", _Provider(), _settings([])).execute("task body")
-    finally:
-        agent_mod.log_workflow_event = orig
-    started = [payload for name, payload in events if name == "skill_started"]
-    assert started and started[0]["task_language"] == "free per material"

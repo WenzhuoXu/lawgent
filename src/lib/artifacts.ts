@@ -1,7 +1,4 @@
-/**
- * Artifact/link helpers ported from main.jsx (rewriteSandboxHref:48-59,
- * artifactOrigin:455-459).
- */
+/** Artifact/link helpers. */
 
 /**
  * Models sometimes emit `sandbox:` links or raw filesystem paths for generated

@@ -1,8 +1,8 @@
 """Office file-format recipe tools.
 
 Read deeper how-to recipes for ``write_docx`` / ``write_xlsx`` / ``write_pdf``
-and for decks (``create_deck`` plus the existing-deck edit tools) on demand. Lives outside any specialist skill so the
-orchestrator, the general-answer direct-LLM path, and every specialist can
+and for decks (``create_deck`` plus the existing-deck edit tools) on demand.
+Lives outside any specialist skill so the author and every specialist can
 load them.
 """
 

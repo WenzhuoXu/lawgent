@@ -422,11 +422,11 @@ def test_redline_and_compare_are_on_every_authoring_surface_and_mutating():
     from legal_helper.tools import skill_tools_for_task
     from legal_helper.workflow import _document_io_tools
 
-    for surface in (_document_io_tools(), skill_tools_for_task("review-contract", "")):
+    for surface in (_document_io_tools(), skill_tools_for_task("review-contract")):
         names = {tool_name_of(t) for t in surface}
         assert {"redline_docx", "compare_docx"} <= names
     assert is_mutating("redline_docx") and is_mutating("compare_docx")
-    auditor = {tool_name_of(t) for t in skill_tools_for_task("cite-check", "")}
+    auditor = {tool_name_of(t) for t in skill_tools_for_task("cite-check")}
     assert "redline_docx" not in auditor and "compare_docx" not in auditor
     skill = (Path(__file__).resolve().parent.parent / "legal_helper/skills/docx-redline/SKILL.md").read_text(encoding="utf-8")
     assert "redline_docx(" in skill and "redline_docx_document" not in skill

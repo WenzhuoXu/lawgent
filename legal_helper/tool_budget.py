@@ -66,6 +66,7 @@ DEFAULT_BUDGET = ResultBudget(max_tokens=16_000, strategy="truncate", preview="h
 EXEMPT_TOOLS = frozenset(
     {
         "cite_check_report_tool",  # workflow parses the report markdown
+        "run_workflow",  # the specialists' bundles are the author's integration input
         "ground_answer_tool",  # grounding verdicts feed the verification table
         "quote_roundtrip_tool",
         "provenance_audit_tool",

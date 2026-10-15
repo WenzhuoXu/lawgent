@@ -1,12 +1,10 @@
-"""Mock the OpenAI Responses API to test function-tool loop + structured output."""
+"""Mock the OpenAI Responses API to test the function-tool loop and request shaping."""
 
 from __future__ import annotations
 
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
-
-import pytest
 
 from legal_helper.config import load_settings
 from legal_helper.providers.openai_provider import OpenAIProvider
@@ -199,19 +197,12 @@ def _capture_create(provider, responses):
 
 
 def test_verbosity_is_sent_only_where_the_model_takes_it():
-    from pydantic import BaseModel
-
-    class Answer(BaseModel):
-        answer: str
-
     for model in ("gpt-6.1-sol", "gpt-6-luna"):
         provider = _provider_for(model)
-        calls, patcher = _capture_create(provider, [_resp([_msg_item('{"answer": "x"}')])])
+        calls, patcher = _capture_create(provider, [_resp([_msg_item("x")])])
         with patcher:
-            provider.run("s", [{"role": "user", "content": "q"}], verbosity="low", structured_output=Answer)
-        # Merged into the existing text dict, next to a strict json_schema format.
-        assert calls[0]["text"]["verbosity"] == "low"
-        assert calls[0]["text"]["format"]["type"] == "json_schema"
+            provider.run("s", [{"role": "user", "content": "q"}], verbosity="low")
+        assert calls[0]["text"] == {"verbosity": "low"}
 
     provider = _provider_for("gpt-5.4")
     calls, patcher = _capture_create(provider, [_resp([_msg_item("x")])])
@@ -425,16 +416,3 @@ def test_stream_reports_argument_progress_and_hosted_search_progress(monkeypatch
     assert usage["cached_input_tokens"] == 600
     assert usage["cache_write_input_tokens"] == 250
     assert usage["last_request_input_tokens"] == 1_200
-
-
-def test_json_object_mode_asks_for_valid_json_without_a_schema():
-    """The planner's plain JSON ended in a trailing comma or a stray, unterminated
-    key in 3 of ~45 luna routing calls; JSON mode guarantees the syntax."""
-    from legal_helper.providers.base import JSON_OBJECT
-
-    provider = _provider_for("gpt-6-luna")
-    calls, patcher = _capture_create(provider, [_resp([_msg_item('{"complexity": "simple"}')])])
-    with patcher:
-        result = provider.run("s", [{"role": "user", "content": "JSON shape: {}"}], structured_output=JSON_OBJECT)
-    assert calls[0]["text"]["format"] == {"type": "json_object"}
-    assert result.structured_payload == {"complexity": "simple"}

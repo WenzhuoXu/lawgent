@@ -366,21 +366,14 @@ def test_the_host_contract_keeps_work_out_of_the_skill_and_asks_for_decisions(tm
     assert "environment variables" in prompt
 
 
-def test_the_planner_never_routes_a_deck_to_a_specialist():
-    """ppt-master is reached only through create_deck: the planner does not
-    offer it as a task, and a plan that names it becomes general work."""
-    from legal_helper.workflow import WorkflowExecutor, _routable_skills
+def test_a_workflow_never_hands_a_deck_to_a_specialist():
+    """ppt-master is reached only through create_deck: `run_workflow` does not
+    offer it as a method, and a task that names it is rejected."""
+    from legal_helper.multi_agent import WorkflowRejected, validate_tasks, workflow_methods
 
-    assert "ppt-master" not in {name for name, _ in _routable_skills()}
-
-    class _P:
-        name = "mock"
-        model = "mock"
-
-    plan = WorkflowExecutor(provider=_P())._parse_plan_data(
-        {"agent_tasks": [{"skill_name": "ppt-master", "title": "Deck", "task": "make slides"}]}
-    )
-    assert plan.agent_tasks[0].skill_name == "general-answer"
+    assert "ppt-master" not in workflow_methods()
+    with pytest.raises(WorkflowRejected, match="unknown method"):
+        validate_tasks([{"method": "ppt-master", "title": "Deck", "task": "make slides"}], max_tasks=3)
 
 
 def test_deck_docs_name_only_tools_the_reader_can_call():

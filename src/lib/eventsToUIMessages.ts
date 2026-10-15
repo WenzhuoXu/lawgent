@@ -4,7 +4,7 @@
  * live stream (api/sse.ts + foldChunks) so a reloaded turn is byte-identical to
  * what streaming produced — the live ≡ rehydrated invariant (enforced in tests).
  *
- * Attribution uses timestamp bucketing (Finding B): persisted WorkflowEvent
+ * Attribution uses timestamp bucketing: persisted WorkflowEvent
  * run_id is unreliable, but runs are strictly sequential per chat, so every
  * event belongs to the currently-open assistant message (the one following the
  * most recent user message). created_at is ASC from the server.
@@ -56,7 +56,7 @@ export type LegalUIMessage = {
  * shaped like the SSE frame's data for a `workflow_event` (has event_type +
  * nested data) OR like a direct event. We pass (event_type, row.data) and let
  * normalizeEvent() unwrap — but for direct-persisted events (tool_call,
- * workflow_plan, citation_audit) the payload is stored flat in `data`, so we
+ * citation_audit, turn_usage) the payload is stored flat in `data`, so we
  * pass the row itself shaped as a frame.
  */
 function replayEvent(
@@ -107,9 +107,8 @@ export function eventsToUIMessages(
     const myIdx = assistantMsgs.indexOf(msg);
     const nextAssistant = assistantMsgs[myIdx + 1];
     const windowEnd = nextAssistant ? nextAssistant.created_at : "￿";
-    // window starts at this assistant message's own created_at (events are
-    // logged during/after it) — but plan/route events can precede the assistant
-    // row by milliseconds, so start from the preceding user message instead.
+    // The window runs from the preceding user message to the next assistant
+    // message.
     const precedingUser = [...sortedMsgs]
       .filter((m) => m.role === "user" && m.created_at <= msg.created_at)
       .at(-1);
@@ -129,7 +128,6 @@ export function eventsToUIMessages(
     // The persisted final answer text is authoritative — deltas are not stored
     // individually, so replayed events yield no text part. Inject it.
     if (msg.content && !parts.some((p) => p.type === "text")) {
-      // place text after reasoning/plan but before/with tools is fine; append.
       parts.push({ type: "text", text: msg.content });
     } else if (msg.content) {
       const textPart = parts.find((p) => p.type === "text") as
@@ -137,10 +135,6 @@ export function eventsToUIMessages(
         | undefined;
       if (textPart && !textPart.text) textPart.text = msg.content;
     }
-
-    // Reasoning is transient; reconstruct a collapsed stub from the enriched
-    // provider_turn_finished if present (post backend-fix).
-    const meta = msg.metadata ?? {};
 
     // Attach artifacts belonging to this message.
     for (const a of artifactsByMessage.get(msg.id) ?? []) {
@@ -151,6 +145,7 @@ export function eventsToUIMessages(
       });
     }
 
+    const meta = msg.metadata ?? {};
     result.push({
       id: msg.id,
       role: "assistant",

@@ -141,4 +141,4 @@ is a Finding or an `Out of scope` line, never silence:
    effect on the outcome, not resolved silently.
 8. The eight-point consistency check (`references/issue_element_method.md`
    §7) has been run.
-9. Bundle ≤ 2000 characters; detail lives in the workbook / table.
+9. Detail lives in the workbook / table, not in the Findings.

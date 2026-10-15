@@ -1016,16 +1016,16 @@ class _Builder:
         inline.children = [Token("text", "", 0)]
         inline.children[0].content = text
         inline.content = text
-        self._heading(inline, level, box, raw_level=False)
+        self._heading(inline, level, box)
 
     def heading_tokens(self, inline, md_level: int, ctx: _Ctx, box) -> None:
         if not box.is_body:
             paragraph = box.add_paragraph()
             self.inline(paragraph, inline.children, box, _Fmt(bold=True))
             return
-        self._heading(inline, md_level + self.heading_shift, box, raw_level=True)
+        self._heading(inline, md_level + self.heading_shift, box)
 
-    def _heading(self, inline, level: int, box, *, raw_level: bool) -> None:
+    def _heading(self, inline, level: int, box) -> None:
         text = inline_text(inline.children)
         level = max(1, min(level, 9))
         if self.gbt:
@@ -1240,7 +1240,6 @@ class _Builder:
         container = paragraph._p
 
         def push(kind: str) -> None:
-            nonlocal fmt
             stack.append((kind, _Fmt(**vars(fmt))))
 
         def pop(kind: str) -> None:

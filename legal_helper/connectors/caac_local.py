@@ -197,10 +197,10 @@ def _extract_article(text: str, article: str) -> str:
 def _candidate_entries(identifier: str) -> list[dict[str, Any]]:
     """Return every entry matching ``identifier`` by file, stem, CCAR part, or title.
 
-    Unlike the legacy ``_find_entry`` this returns *all* matches so the caller
-    can rank them (stub vs full-text, current vs superseded, etc.). Order
-    within the returned list is: exact file/stem first, then ccar_part, then
-    title substring; ties keep manifest order.
+    All matches come back so the caller can rank them (stub vs full-text,
+    current vs superseded, etc.). Order within the returned list is: exact
+    file/stem first, then ccar_part, then title substring; ties keep manifest
+    order.
     """
     ident = identifier.strip()
     if not ident:
@@ -427,7 +427,6 @@ def caac_local_fetch(
     identifier: str,
     article: str = "",
     max_chars: int = 12000,
-    prefer_full_text: bool = True,
 ) -> str:
     """Fetch one local CAAC / CCAR document by file, title, or CCAR part.
 
@@ -447,9 +446,6 @@ def caac_local_fetch(
         article: Optional article label/number to extract, e.g. ``第十五条``
             or ``124``. Drives candidate selection — see above.
         max_chars: Maximum full-text characters to return (1000-40000).
-        prefer_full_text: When ``True`` (default), pick the entry whose
-            Markdown body has statute text over an otherwise-better stub
-            entry. Set ``False`` to honour the legacy validity-first ranking.
     """
     max_chars = max(1000, min(int(max_chars), 40000))
     candidates = _candidate_entries(identifier)
@@ -460,18 +456,6 @@ def caac_local_fetch(
         )
 
     ranked = _rank_candidates(candidates, article)
-    if not prefer_full_text:
-        # Legacy ordering: ignore stub status, keep article-presence + validity
-        # + publish_date as primary keys.
-        ranked.sort(
-            key=lambda x: (
-                int(bool(x[2])) if article else 0,
-                str(x[0].get("validity") or "") == "有效",
-                str(x[0].get("publish_date") or ""),
-            ),
-            reverse=True,
-        )
-
     primary_entry, primary_text, primary_article_text, primary_status = ranked[0]
     note: Optional[str] = None
     if primary_status["is_stub"]:

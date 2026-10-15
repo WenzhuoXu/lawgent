@@ -1,10 +1,11 @@
 # General Legal Playbook — Global Defaults
 
-Loaded by every skill before any domain pack overlay. This file owns
-jurisdiction policy, language policy, source-hierarchy defaults, and the
-universal sanity-check rules. Domain-specific positions live under
-`legal_helper/domains/<pack>/playbook.md` and are concatenated **after** this
-file when the corresponding pack is active.
+Standing context for the author of every legal answer and for every
+specialist, ahead of any domain pack. This file owns jurisdiction policy,
+language policy, source-hierarchy defaults, and the universal sanity-check
+rules. Domain-specific positions live under
+`legal_helper/domains/<pack>/playbook.md` and come **after** this file when
+the corresponding pack is active.
 
 > **Not legal advice.** Defaults below are general professional practice
 > orientation; they do not substitute for licensed counsel in the relevant
@@ -84,10 +85,10 @@ comparative law contextualises, never overrides.
 - **User-facing input/output language follows the user's language.** If the
   user writes in Chinese, answer in Chinese; if in English, answer in
   English. Mixed inputs follow the dominant language; ask if ambiguous.
-- **Internal reasoning, sub-agent tool calls, and planner-to-specialist
-  messages may use whichever language best fits the material** — 中文 is
-  encouraged when reasoning over PRC statutes, 案例, or other
-  Chinese-language sources; do not translate to English just to think.
+- **Internal reasoning, sub-agent tool calls, and the tasks the author
+  writes for specialists may use whichever language best fits the
+  material** — 中文 is encouraged when reasoning over PRC statutes, 案例, or
+  other Chinese-language sources; do not translate to English just to think.
 - **Quote primary sources in original language with translation** when
   precision matters: e.g. `"国家工作人员"（state functionary）`,
   `"reasonable royalty"（合理许可使用费）`. The original term must come

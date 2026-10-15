@@ -1,9 +1,9 @@
 """Compact dispatcher over aviation-specific connectors.
 
 Mirrors ``tools/legal_search.py``: a single ``@beta_tool`` entry point with
-a ``source`` discriminator so sub-agents that already use
-``legal_source_search`` can also reach the aviation-specific surface
-without learning every individual connector name.
+a ``source`` discriminator, so a model that already uses
+``legal_source_search`` can reach the aviation-specific surface without
+learning every individual connector name.
 """
 
 import json

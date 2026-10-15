@@ -23,8 +23,8 @@ for PKULaw / `flk.npc.gov.cn` patterns.
 ## Output Contract (binding)
 
 The deliverable is a tabular `verification-report.md` rendered by
-`cite_check_report_tool` — *not* a `## Findings` bullet list. The
-playbook ≤2000-char ceiling applies to legal *answers*, not audit output.
+`cite_check_report_tool` — *not* a `## Findings` bullet list. The bundle
+contract's length budget governs research bundles, not audit output.
 
 Shape (see [references/report-format.md](references/report-format.md)):
 
@@ -44,7 +44,7 @@ I flagged as potential miscitations; H flagged as misgrounded.
 ## MODEL-ONLY …
 ```
 
-End with the standard disclaimer; see `/playbook/general_playbook.md`.
+The renderer adds the not-legal-advice line; pinpoint rules: `/playbook/general_playbook.md` §2.
 
 ## Workflow
 

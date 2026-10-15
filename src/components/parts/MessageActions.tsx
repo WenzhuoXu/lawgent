@@ -30,13 +30,11 @@ export function MessageActions({
   messageId,
   parts,
   onRegenerate,
-  onArtifact,
 }: {
   chatId: string | null;
   messageId: string;
   parts: MessagePart[];
   onRegenerate?: () => void;
-  onArtifact?: (a: { id: string; name: string; url: string }) => void;
 }) {
   const [confirmFmt, setConfirmFmt] = useState<"pdf" | "docx" | null>(null);
   const audit = (parts.find((p) => p.type === "data-audit") as { data: AuditData } | undefined)?.data;
@@ -52,10 +50,9 @@ export function MessageActions({
 
   const doExport = async (fmt: "pdf" | "docx") => {
     if (!chatId || !messageId) return;
-    const artifact = await client
+    await client
       .exportMessage(chatId, messageId, fmt, doNotFile ? WATERMARK : undefined)
       .catch(() => null);
-    if (artifact) onArtifact?.(artifact);
   };
 
   const requestExport = (fmt: "pdf" | "docx") => {

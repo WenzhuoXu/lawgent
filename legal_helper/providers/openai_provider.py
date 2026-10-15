@@ -10,11 +10,12 @@ from openai import OpenAI
 
 from ..config import Settings
 from ..context import estimate_tokens
-from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event
+from ..logging_setup import TurnTimer, agent_name_var, log_turn, log_workflow_event, tool_call_id_var
+from ..tool_exposure import openai_tools as openai_tool_surface
 from ..tool_budget import apply_result_budget, budget_log_fields
 from ..turn_compaction import InTurnContext, iteration_limit
 from ..tools.multimodal import split_inline_images, to_openai_tool_content
-from ..usage import record_usage
+from ..usage import OPENAI_LONG_CONTEXT_THRESHOLD, record_usage
 from .base import JSON_OBJECT, VERBOSITY_LEVELS, Message, RunResult, StreamEvent, Tool, ToolCallRecord
 from .progress import ToolProgressThrottle, hosted_progress_event
 from .tool_exec import run_tool_calls
@@ -35,12 +36,12 @@ CEILING_SYNTHESIS_NUDGE = (
 
 # --- per-model request capabilities ------------------------------------------
 # Measured with live calls on 2026-10-07; a 400 names the values a model takes.
-# A model missing from a table keeps the conservative behaviour it had before.
+# A model missing from a table gets the conservative behaviour.
 
 # Reasoning effort each model accepts. gpt-6.1-sol rejects "none" and
 # "minimal"; gpt-6-luna takes "none" but not "minimal". Omitting the parameter
-# runs either model at "medium" — so the old rule of omitting it for "none"
-# made every "none" luna call (titles, routing) reason at medium.
+# runs either model at "medium", so "none" is sent, never omitted, where the
+# model takes it — omitting it made every "none" luna call reason at medium.
 _EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 OPENAI_REASONING_EFFORTS: dict[str, tuple[str, ...]] = {
     "gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max"),
@@ -57,8 +58,8 @@ OPENAI_VERBOSITY_MODELS = frozenset({"gpt-6.1-sol", "gpt-6-luna"})
 # applies — `prompt_cache_options.mode: "explicit"` would switch that one off
 # and with it the in-turn caching the tool loop relies on.
 OPENAI_EXPLICIT_CACHE_MODELS = frozenset({"gpt-6.1-sol", "gpt-6-luna"})
-# Shortest prefix the API will cache (GPT-5.6 and later). Below it a breakpoint
-# writes nothing, so the system text stays in `instructions`, as before.
+# Shortest prefix the API will cache. Below it a breakpoint writes nothing, so
+# the system text stays in `instructions`.
 OPENAI_MIN_CACHEABLE_TOKENS = 1_024
 _CACHE_BREAKPOINT = {"mode": "explicit"}
 
@@ -100,8 +101,8 @@ def _stable_prefix_tokens(system: str, openai_tools: list[dict[str, Any]]) -> in
 def _developer_prefix(system: str) -> dict[str, Any]:
     """The system text as a developer message carrying a cache breakpoint.
 
-    `instructions` cannot carry an explicit breakpoint, and one-shot calls
-    (planner, summariser) never reach the automatic one: the luna planner read
+    `instructions` cannot carry an explicit breakpoint, and a one-shot call
+    (summary, title) never reaches the automatic one: a one-shot luna call read
     0.7% of its input from cache in September. A breakpoint after the stable
     text makes it a read on the next call with the same prefix.
     """
@@ -116,8 +117,10 @@ def _accumulate_usage(usage_total: dict[str, Any], u: Any) -> None:
 
     Captures the cached-input subset (``input_tokens_details.cached_tokens``)
     alongside the headline counts so the cost center can price it at the
-    discounted cached rate, and the cache-write count the API now reports
-    (``cache_write_tokens``) as ``cache_write_input_tokens`` for telemetry.
+    discounted cached rate, and the cache-write count the API reports
+    (``cache_write_tokens``, also a subset of input) as
+    ``cache_write_input_tokens``, which the cost center prices at the
+    model's cache-write rate.
     """
     if u is None:
         return
@@ -132,6 +135,20 @@ def _accumulate_usage(usage_total: dict[str, Any], u: Any) -> None:
     written = getattr(details, "cache_write_tokens", None) if details is not None else None
     if written:
         usage_total["cache_write_input_tokens"] = usage_total.get("cache_write_input_tokens", 0) + written
+    # The long-context surcharge is decided per request, while the ledger
+    # records the turn's sum; keep the over-threshold requests' share apart.
+    usage_total["requests"] = usage_total.get("requests", 0) + 1
+    request_input = getattr(u, "input_tokens", None) or 0
+    if request_input > OPENAI_LONG_CONTEXT_THRESHOLD:
+        lc = usage_total.setdefault("long_context", {})
+        for k, v in (
+            ("requests", 1),
+            ("input_tokens", request_input),
+            ("output_tokens", getattr(u, "output_tokens", None) or 0),
+            ("cached_input_tokens", cached or 0),
+            ("cache_write_input_tokens", written or 0),
+        ):
+            lc[k] = lc.get(k, 0) + v
 
 
 def _with_last_request(usage_total: dict[str, Any], last_input: Optional[int]) -> dict[str, Any]:
@@ -178,12 +195,15 @@ def _tool_to_openai(tool: Any) -> dict[str, Any]:
         name = name or td.get("name")
         desc = desc or td.get("description", "")
         schema = td.get("input_schema")
-    return {
+    out = {
         "type": "function",
         "name": name,
         "description": desc or "",
         "parameters": schema or {"type": "object", "properties": {}},
     }
+    if getattr(tool, "_defer_loading", None):
+        out["defer_loading"] = True
+    return out
 
 
 def _parse_args(args: str) -> dict[str, Any]:
@@ -258,14 +278,6 @@ def _extract_text_from_response(resp: Any) -> str:
     return "\n".join(pieces).strip()
 
 
-def _has_evidence_log(text: str) -> bool:
-    return any(marker in text for marker in ("Evidence Verification Log", "证据核验", "在线证据核验"))
-
-
-def _has_claim_check(text: str) -> bool:
-    return any(marker in text for marker in ("Claim-Level Sanity Check", "逐项核验", "逐项主张核验"))
-
-
 def _has_sources(text: str) -> bool:
     return any(marker in text for marker in ("Sources", "资料来源", "来源与核验说明"))
 
@@ -299,7 +311,7 @@ def _stop_reason(resp: Any, *, truncated: bool) -> str:
     return "stop"
 
 
-_HOSTED_CALL_TYPES = {"web_search_call", "file_search_call", "code_interpreter_call"}
+_HOSTED_CALL_TYPES = {"web_search_call", "file_search_call", "code_interpreter_call", "tool_search_call"}
 _HOSTED_PROGRESS_NAMES = {"web_search_call": "web_search", "file_search_call": "file_search"}
 
 
@@ -309,6 +321,9 @@ def _hosted_arguments(item: Any) -> dict[str, Any]:
     The Anthropic path already carries the query on `hosted_tool_call`; the
     OpenAI path shipped `{}` and its chips had nothing to show.
     """
+    arguments = getattr(item, "arguments", None)  # tool_search_call
+    if isinstance(arguments, dict) and arguments.get("query"):
+        return {"query": str(arguments["query"])}
     action = getattr(item, "action", None)
     if action is not None:
         query = getattr(action, "query", None)
@@ -424,17 +439,20 @@ class OpenAIProvider:
                     "provider": self.name,
                     "model": self.model,
                     "tool_name": name,
+                    "call_id": call_id,
                     "arguments": _parse_args(args),
                     "iteration": iteration,
                 },
             )
 
         def work(i: int) -> str:
-            _, name, args = pending[i]
+            call_id, name, args = pending[i]
             started = time.monotonic()
+            token = tool_call_id_var.set(call_id or None)
             try:
                 return _call_local_tool(tools_by_name, name, args)
             finally:
+                tool_call_id_var.reset(token)
                 durations[i] = int((time.monotonic() - started) * 1000)
 
         def after(i: int, raw_output: str) -> None:
@@ -449,6 +467,7 @@ class OpenAIProvider:
                     "provider": self.name,
                     "model": self.model,
                     "tool_name": name,
+                    "call_id": call_id,
                     "output_preview": output_str[:1200],
                     "output_chars": len(output_str),
                     "iteration": iteration,
@@ -503,7 +522,8 @@ class OpenAIProvider:
         verbosity: Optional[str] = None,
     ) -> RunResult:
         tools_list = list(tools)
-        openai_tools = [_tool_to_openai(t) for t in tools_list]
+        # Deferred capability tools go into namespaces behind the hosted tool search.
+        openai_tools = openai_tool_surface([_tool_to_openai(t) for t in tools_list])
         tools_by_name: dict[str, Any] = {}
         for t in tools_list:
             n = getattr(t, "name", None)
@@ -671,8 +691,6 @@ class OpenAIProvider:
                 "response_chars": len(final_text),
                 "local_tool_call_count": len(all_tool_calls),
                 "hosted_tool_call_count": len(all_hosted_calls),
-                "has_evidence_verification_log": _has_evidence_log(final_text),
-                "has_claim_level_sanity_check": _has_claim_check(final_text),
                 "has_sources": _has_sources(final_text),
                 "latency_ms": t.latency_ms,
                 "iterations": iterations,
@@ -798,7 +816,8 @@ class OpenAIProvider:
         and then yield further deltas from the next request.
         """
         tools_list = list(tools)
-        openai_tools = [_tool_to_openai(t) for t in tools_list]
+        # Deferred capability tools go into namespaces behind the hosted tool search.
+        openai_tools = openai_tool_surface([_tool_to_openai(t) for t in tools_list])
         tools_by_name: dict[str, Any] = {n: t for t in tools_list if (n := getattr(t, "name", None))}
 
         kwargs_base, prefix_items = self._base_request(
@@ -937,11 +956,12 @@ class OpenAIProvider:
 
                 # The model asked for these together; announce them all, then
                 # run them (side by side where tool_policy allows it).
-                for _, name, args in pending:
+                for call_id, name, args in pending:
                     yield StreamEvent(
                         "tool_call",
                         {
                             "name": name,
+                            "call_id": call_id,
                             "arguments": _parse_args(args),
                             "agent": agent_name_var.get(),
                         },
@@ -1011,8 +1031,6 @@ class OpenAIProvider:
                 "latency_ms": t.latency_ms,
                 "iterations": iterations,
                 "stream": True,
-                "has_evidence_verification_log": _has_evidence_log(final_text),
-                "has_claim_level_sanity_check": _has_claim_check(final_text),
                 "has_sources": _has_sources(final_text),
                 "stop_reason": stop_reason,
             },
@@ -1026,17 +1044,3 @@ class OpenAIProvider:
             },
         )
 
-
-def aviation_openai_hosted_tools(settings: Settings) -> list[dict[str, Any]]:
-    """Hosted Responses-API tools used by sub-agents."""
-    out: list[dict[str, Any]] = []
-    if settings.enable_web_search:
-        out.append({"type": "web_search"})
-    if settings.openai_enable_file_search and settings.openai_file_search_vector_store_ids:
-        out.append(
-            {
-                "type": "file_search",
-                "vector_store_ids": settings.openai_file_search_vector_store_ids,
-            }
-        )
-    return out

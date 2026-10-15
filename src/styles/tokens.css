@@ -40,12 +40,8 @@
   /* app-specific surfaces / semantics (referenced by our components) */
   --panel: #f5f0e8;
   --tool-surface: #f1ece3;
-  --code-surface: #ece7dd;
-  --hairline-strong: #d3cabf;
   --text-secondary: #3d3d3a;
   --text-faint: #8f8c84;
-  --primary-hover: #b5583a;
-  --accent-tint: #f6e3da;
   --ok: #3e7d52;
   --ok-tint: #e4efe6;
   --review: #9a7410;
@@ -84,12 +80,8 @@
 
   --panel: #1f1e1b;
   --tool-surface: #211f1c;
-  --code-surface: #141311;
-  --hairline-strong: #4a463e;
   --text-secondary: #d6d3cc;
   --text-faint: #7a776f;
-  --primary-hover: #da7756;
-  --accent-tint: #3a2a23;
   --ok: #5db872;
   --ok-tint: #22301f;
   --review: #d4a017;
@@ -104,16 +96,7 @@
  * (#d97757) in both themes; semantic ok/review/dnf are untouched. */
 :root[data-persona="xiugou"] {
   --primary: #d97757;
-  --primary-hover: #c9663f;
   --ring: #d97757;
-  --accent-tint: #f8e7de;
-}
-.dark[data-persona="xiugou"],
-:root[data-persona="xiugou"].dark {
-  --primary: #d97757;
-  --primary-hover: #e08a6a;
-  --ring: #d97757;
-  --accent-tint: #3d2b23;
 }
 
 /* Map our variables into the Tailwind v4 theme so utilities (bg-background,
@@ -141,7 +124,6 @@
 
   --color-panel: var(--panel);
   --color-tool-surface: var(--tool-surface);
-  --color-code-surface: var(--code-surface);
   --color-ok: var(--ok);
   --color-review: var(--review);
   --color-dnf: var(--dnf);

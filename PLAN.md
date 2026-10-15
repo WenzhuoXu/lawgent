@@ -1,10 +1,12 @@
 # PLAN — Legal AI Helper architecture
 
 This document captures the working architecture as of the May 2026
-restructure, with model IDs and counts refreshed 2026-09-11. Historical
-aviation-only roots are preserved as a domain pack rather than as the core
-identity. For current runtime behaviour (context management, memory,
-grounding, cost) see `README.md`; this file is the architectural intent.
+restructure, with model IDs and counts refreshed 2026-09-11 and the turn
+architecture updated for the one author loop of 2026-10-14
+(`docs/plans/2026-10-14-single-agent-loop.md`). Historical aviation-only
+roots are preserved as a domain pack rather than as the core identity. For
+current runtime behaviour (context management, memory, grounding, cost) see
+`README.md`; this file is the architectural intent.
 
 ## Goal
 
@@ -36,17 +38,21 @@ usable interface to:
 3. **Provider parity.** Anthropic Claude (`claude-opus-5-5`) and OpenAI
    GPT (`gpt-6.1-sol`) are first-class peers behind one `Provider` protocol.
    All tools — connectors, MCP-discovered, RAG, citations — surface as
-   plain function tools to both SDKs; no provider-native MCP path.
-4. **One author per answer, specialists only when the work splits.** A
-   router plans each turn; simple and standard turns are answered by one
-   tool-armed author holding the playbook and the routed skill's method;
-   complex turns are decomposed into issues and 2-3 parallel specialists whose
-   bundles one integrator turns into the answer.
+   plain function tools to both SDKs; no provider-native MCP path. Only the
+   operational tools are loaded on every request; every functional tool is
+   deferred behind each provider's native tool search.
+4. **One author per answer, specialists only when the work splits.** The
+   chat's own model answers every turn in one tool loop; nothing routes the
+   turn first. It loads a method (`load_skill`) or a domain pack
+   (`load_pack`) when the request needs one. When the work splits into
+   issues that each need sustained research, or the user asks for a
+   workflow, it calls `run_workflow`: up to 3 parallel specialists whose
+   bundles come back to it as the tool result. Depth is one.
 5. **Grounded answers.** Three source-of-truth tiers:
    - **RAG** (local bge-m3 + Qdrant) for indexed corpora.
    - **Connectors / MCPs** for live primary sources (eCFR, Federal
      Register, GovInfo, CourtListener, EUR-Lex, flk.npc.gov.cn,
-     caac.gov.cn, hosted PKULaw).
+     hosted PKULaw) and the staged local CAAC corpus.
    - **Hosted web_search / web_fetch** as the last-resort fallback.
 6. **Citations are first-class.** `legal_helper/citations` extracts +
    validates US (eyecite + reporters-db) and PRC (regex for 案号, 法释,
@@ -59,28 +65,25 @@ usable interface to:
                  user request (+ chat digest, files, generated deliverables)
                               │
                               ▼
-         router (fast tier) ── newest-first view of the chat
-         mode · complexity · one task · must-cover points · fact conflicts
+   author loop — the chat's model and effort, one tool loop per turn
+   (playbook · method list · pack list · tool-search groups · workflow guidance)
+     always loaded: read_document · load_skill · read_skill_file · load_pack ·
+                    run_workflow · project memory · hosted web search
+     tool search:   connectors · legal_source_search · retrieve_legal ·
+                    document tools · create_deck → ppt-master · pack sources
                               │
-          ┌───────────────────┴────────────────────┐
-     simple / standard                          complex
-          │                                        │
-          ▼                                        ▼
-   single-pass author                     decomposer (fast tier)
-   (playbook + routed skill method,       issues + 2-3 specialists
-    research + document tools,                     │
-    create_deck → ppt-master)                      ▼
-          │                            SkillAgent × N (parallel, forked
-          │                            context, chat digest as cache prefix)
-          │                            Findings · Issues · Artefacts ·
-          │                            Out of scope · Sources
-          │                                        │
-          │                                        ▼
-          │                              integrator (author prompt,
-          │                              conflict rule, open gaps)
-          └───────────────────┬────────────────────┘
+                              ├── run_workflow(objective, tasks ≤ 3)
+                              │     SkillAgent × N (parallel, forked context,
+                              │     chat digest as cache prefix, depth 1)
+                              │     Findings · Issues · Artefacts ·
+                              │     Out of scope · Sources
+                              │     → bundles + open gaps as the tool result;
+                              │       the author integrates them in the loop
                               ▼
              answer contract + answer lint → (optional) citation audit
+                              │
+                              ▼
+          fast tier, after `done`: rolling summary · chat title
 ```
 
 ## Repository layout
@@ -93,12 +96,16 @@ legal_helper/
 ├── CLAUDE.md            # Claude-Code project guidance
 ├── .mcp.json            # external MCP registry
 ├── config.yaml          # provider + jurisdiction + packs + citation style
-├── requirements.txt     # source-of-truth deps (no pyproject.toml today)
+├── requirements.txt     # source-of-truth deps
+├── pyproject.toml       # package metadata + the `legal-helper` script
 ├── legal_helper/
 │   ├── cli.py / __main__.py
-│   ├── server.py        # FastAPI; /domains, /jurisdictions, /chat/*
-│   ├── workflow.py      # router, planner, single-pass author, specialists, integrator
-│   ├── authoring.py     # the answer author's system prompt
+│   ├── server.py        # FastAPI; /domains, /jurisdictions, /api/chats/*
+│   ├── workflow.py      # the author loop, audit-then-reveal, answer export
+│   ├── multi_agent.py   # run_workflow: parallel specialists, bundles as the result
+│   ├── tool_exposure.py # always-loaded tools vs. those behind tool search
+│   ├── turn_context.py  # per-turn state the author's tools read
+│   ├── authoring.py     # the author's system prompt
 │   ├── answer_contract.py  # the one output contract (author + specialist)
 │   ├── answer_lint.py   # deterministic answer clean-up (stream filter)
 │   ├── agent.py         # SkillAgent (pack-aware specialists, external skills)
@@ -108,12 +115,11 @@ legal_helper/
 │   ├── mcp/             # external MCP boundary + in-tree ccar_aviation
 │   ├── citations/       # audit + extract + validate + format + prc
 │   ├── rag/             # bge-m3 + Qdrant + hierarchical chunker
-│   ├── tools/           # function-tool registrations
+│   ├── tools/           # function tools (incl. load_skill, load_pack)
 │   ├── skills/          # 15 generic SKILL.md files (<100 lines each)
 │   ├── playbook/        # general_playbook.md (PRC-first)
 │   ├── domains/         # domain packs (aviation populated; others future)
 │   ├── documents/       # read / edit / redline / write / render / lint
-│   ├── webui/           # static fallback UI
 │   └── webui_dist/      # vite build output
 ├── src/                 # React + Vite source
 ├── examples/
@@ -127,14 +133,17 @@ legal_helper/
 A pack is a directory under `legal_helper/domains/<name>/` with:
 
 ```
-pack.yaml          # metadata (name, jurisdictions, mcp_servers, skill_overlays)
+pack.yaml          # name, jurisdictions, mcp_servers, allowed_connectors, rag_collections, skill_overlays
 playbook.md        # pack-specific playbook (loaded after general_playbook.md)
 references/        # long-form prose pulled on demand (optional)
 overlays/<skill>.md # per-skill deltas
 ```
 
-Activation: `active_domain_packs: [aviation]` in `config.yaml`, or
-`--domain-pack aviation` on the CLI.
+Activation: pinned by `active_domain_packs: [aviation]` in `config.yaml`, a
+project, or `--domain-pack aviation` on the CLI, which puts the pack's
+playbook in the author's prompt from the start. Otherwise the author sees the
+pack's name and loads it with `load_pack` when it judges the request falls in
+the domain; there is no keyword detection.
 
 Currently populated: `aviation`. Empty / future: healthcare, fintech,
 employment, IP, etc.
@@ -150,6 +159,9 @@ Documented in `CLAUDE.md`. Summary:
   `mcp` field). The runtime is *structured* for a future native fast
   path but does not use it.
 - Hosted `web_search` / `web_fetch` remain at parity.
+- Deferred tools are found by each provider's native tool search (OpenAI
+  `tool_search` with namespaces, Anthropic `tool_search_tool_bm25_20251119`);
+  there is no fallback path, so a new model must pass the same probe.
 - RAG is fully local (bge-m3 + Qdrant); no provider API in the retrieval
   hot path.
 - `tests/test_provider_parity.py`, `test_mcp_adapter.py`, and

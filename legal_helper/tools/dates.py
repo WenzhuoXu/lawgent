@@ -227,29 +227,16 @@ def compute_period(
     rule: str = "prc_civil_procedure",
     start_event: str = "",
 ) -> str:
-    """Compute the last day of a legal period (期间计算) deterministically.
-
-    Use this for every deadline, limitation expiry or 期限 stated in an
-    answer instead of counting dates yourself. It excludes the start day,
-    applies the 对应日 / month-end rule for months and years, and moves a
-    last day that falls on a 法定休假日 to the next working day using the
-    official holiday and 调休 calendar (a 调休 Saturday is a working day).
-    The result lists each step with its legal basis and the facts the
-    arithmetic cannot know (proof of the service date, 公告送达, whether the
-    period applies at all).
+    """Compute the last day of a legal period (期间计算) — use it for every
+    deadline or limitation date instead of counting. Excludes the start day,
+    applies the month-end rule, and rolls a 法定休假日 to the next working day
+    on the official holiday/调休 calendar; returns each step with its basis.
 
     Args:
-        start: The day the triggering event occurred, YYYY-MM-DD — e.g. the
-            date the judgment was served (送达之日). This day is not counted.
-        period: Length such as "15日", "十日", "3个月", "2年", "15 days",
-            "1 month", "2 years" (weeks are converted to days; hour-based
-            periods are not supported).
-        rule: "prc_civil_procedure" (民事诉讼法 第八十五条 — court and
-            procedural periods), "prc_civil_code" (民法典 第二百零一条至第二百零四条
-            — limitation and other civil periods), or "calendar" (plain
-            arithmetic, no holiday roll — e.g. foreign or contractual periods).
-        start_event: Optional label for what happened on the start date
-            (e.g. "判决书送达"), echoed back with the result.
+        start: Triggering date, YYYY-MM-DD (e.g. 送达之日); not counted.
+        period: "15日", "3个月", "2年", "15 days", "1 month" (no hours).
+        rule: "prc_civil_procedure" (民诉法 第八十五条), "prc_civil_code" (民法典 第二百零一至二百零四条) or "calendar" (no holiday roll).
+        start_event: Optional label for the start date, e.g. "判决书送达".
     """
     rule_key = (rule or "").strip().lower()
     if rule_key not in RULES:

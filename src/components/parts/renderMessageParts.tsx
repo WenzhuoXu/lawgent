@@ -1,106 +1,32 @@
 /**
- * Renders an assistant message's ordered `parts` using Vercel AI Elements.
- * Three visual registers: reasoning (dimmed) · tool/action (cards) · answer
- * (markdown). Structural data-* parts render via Task/Plan, ChainOfThought,
- * Sources, and our bespoke AuditCard.
+ * Renders an assistant message's ordered `parts`: the activity chain (the
+ * author's thinking, with the tool calls each step made under it and any
+ * sub-agent as a step of its own), then the answer; the citation audit and
+ * artifacts pin below the answer.
  */
 
-import { useState, type ReactNode } from "react";
-import {
-  CheckCircle2,
-  ChevronRight,
-  Circle,
-  Download,
-  FileText,
-  Loader2,
-  type LucideIcon,
-} from "lucide-react";
+import type { ReactNode } from "react";
+import { Download, FileText } from "lucide-react";
 import { MessageResponse as Response } from "@/components/ai-elements/message";
-import {
-  Reasoning,
-  ReasoningContent,
-  ReasoningTrigger,
-} from "@/components/ai-elements/reasoning";
-import {
-  Tool,
-  ToolContent,
-  ToolHeader,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
-import { Task, TaskContent, TaskItem, TaskTrigger } from "@/components/ai-elements/task";
-import {
-  ChainOfThought,
-  ChainOfThoughtContent,
-  ChainOfThoughtHeader,
-  ChainOfThoughtSearchResult,
-  ChainOfThoughtSearchResults,
-  ChainOfThoughtStep,
-} from "@/components/ai-elements/chain-of-thought";
 import { AuditCard } from "@/components/parts/AuditCard";
+import {
+  ActivityChain,
+  thoughtSections,
+  toolName,
+  type ChainStep,
+  type ToolPart,
+} from "@/components/parts/ActivityChain";
+import { ProcedureCard } from "@/components/parts/ProcedureCard";
+import { WorkflowCard } from "@/components/parts/WorkflowCard";
 import { SourcesList, splitSources, parseSourcesTable } from "@/components/parts/SourcesList";
-import { displayToolName } from "@/lib/toolLabels";
 import { rewriteSandboxHref, artifactOrigin } from "@/lib/artifacts";
-import { cn, formatDuration } from "@/lib/utils";
 import type { MessagePart } from "@/lib/foldChunks";
-import type { AuditData, CiteCheckData, PhaseData, PlanData, PlanTask } from "@/lib/dataParts";
+import type { AuditData, CiteCheckData, PhaseData, SpecialistTask, WorkflowData } from "@/lib/dataParts";
 
-type ToolPart = Extract<MessagePart, { type: `tool-${string}` }>;
 type DataPart = Extract<MessagePart, { type: `data-${string}` }>;
 
-function toolName(p: ToolPart): string {
-  return p.type.replace(/^tool-/, "");
-}
-
-const STATUS_ICON: Record<PlanTask["status"], ReactNode> = {
-  pending: <Circle className="size-3.5 text-muted-foreground/50" />,
-  running: <Loader2 className="size-3.5 animate-spin text-primary" />,
-  complete: <CheckCircle2 className="size-3.5 text-[var(--ok)]" />,
-  error: <Circle className="size-3.5 text-[var(--dnf)]" />,
-};
-
-const COT_STATUS: Record<PlanTask["status"], "pending" | "active" | "complete"> = {
-  pending: "pending",
-  running: "active",
-  complete: "complete",
-  error: "complete",
-};
-
-// Per-status colored step dots (FIG1): running → spinner, complete → ok green,
-// error → dnf red, pending → hollow. Overrides ChainOfThoughtStep's flat DotIcon.
-// ChainOfThoughtStep's `icon` prop is typed as LucideIcon and rendered as
-// `<Icon className="size-4" />`; these stable module-level components accept
-// that className and add their own color, cast to LucideIcon at the type level.
-type IconLike = (props: { className?: string }) => ReactNode;
-const DotRunning: IconLike = ({ className }) => (
-  <Loader2 className={cn(className, "animate-spin text-primary")} />
-);
-const DotComplete: IconLike = ({ className }) => (
-  <CheckCircle2 className={cn(className, "text-[var(--ok)]")} />
-);
-const DotError: IconLike = ({ className }) => <Circle className={cn(className, "text-[var(--dnf)]")} />;
-const DotPending: IconLike = ({ className }) => (
-  <Circle className={cn(className, "text-muted-foreground/40")} />
-);
-function stepIcon(status: PlanTask["status"]): LucideIcon {
-  const c =
-    status === "running"
-      ? DotRunning
-      : status === "complete"
-        ? DotComplete
-        : status === "error"
-          ? DotError
-          : DotPending;
-  return c as unknown as LucideIcon;
-}
-
-// F8: bilingual reasoning label — localized at the call site so the primitive
-// stays generic. "思考中…" while streaming, "已思考 N 秒" once settled.
-function thinkingMessage(isStreaming: boolean, duration?: number): ReactNode {
-  if (isStreaming || duration === 0) return <span>思考中… / Thinking…</span>;
-  if (duration === undefined) return <span>已思考片刻 / Thought for a moment</span>;
-  return <span>已思考 {duration} 秒 / Thought for {duration}s</span>;
-}
+/** Tools whose work is a sub-agent: each is a step of the chain, not a row. */
+const PROCEDURE_TOOLS = new Set(["create_deck", "run_procedure"]);
 
 export function RenderMessageParts({
   parts,
@@ -109,84 +35,80 @@ export function RenderMessageParts({
   parts: MessagePart[];
   isStreaming: boolean;
 }) {
-  // Aggregate widgets (plan/agent-task checklist + audit) pin to fixed slots;
-  // everything else renders INLINE in stream order with STABLE keys so React
-  // never remounts mid-stream (that was the source of the flicker/choppiness).
-  // Agent tasks come ONLY from real agent_task_started/finished events, so each
-  // one has a genuine completion signal — no heuristic status coercion needed.
+  // Everything renders in stream order with STABLE keys so React never
+  // remounts mid-stream. A sub-agent's rows render inside the tool part that
+  // started it (matched by tool part id), not as parts of their own.
   const agentTasks = parts
     .filter((p) => p.type === "data-agentTask")
-    .map((p) => (p as DataPart).data as PlanTask);
+    .map((p) => (p as DataPart).data as SpecialistTask);
+  const tasksByParent = new Map<string, SpecialistTask[]>();
+  for (const t of agentTasks) {
+    tasksByParent.set(t.parentCallId, [...(tasksByParent.get(t.parentCallId) ?? []), t]);
+  }
+  const workflows = new Map<string, WorkflowData>();
+  for (const p of parts) {
+    if (p.type === "data-workflow") {
+      const wf = (p as DataPart).data as WorkflowData;
+      workflows.set(wf.partId, wf);
+    }
+  }
   const auditPart = parts.find((p) => p.type === "data-audit") as DataPart | undefined;
   const citeCheckPart = parts.find((p) => p.type === "data-citeCheck") as DataPart | undefined;
   const artifactParts = parts.filter((p) => p.type === "data-artifact") as DataPart[];
   const phasePart = parts.find((p) => p.type === "data-phase") as DataPart | undefined;
   const phase = (phasePart?.data as PhaseData | null) ?? null;
-  const planData = (parts.find((p) => p.type === "data-plan") as DataPart | undefined)?.data as
-    | PlanData
-    | undefined;
   const usageData = (parts.find((p) => p.type === "data-usage") as DataPart | undefined)?.data as
     | { durationMs?: number }
     | undefined;
-  const hasPlan = agentTasks.length > 0;
   const toolParts = parts.filter((p) => p.type.startsWith("tool-")) as ToolPart[];
 
-  // Track whether we've already emitted the aggregated plan/timeline widget, so
-  // it renders exactly once (at the position of the first plan/agentTask part).
-  let planEmitted = false;
-
-  // The activity trajectory (reasoning · plan/CoT · tool cards) renders inline
-  // in stream order while streaming, then collapses behind a one-line run header
-  // once complete (FIG2). Answer text / audit / artifacts always render below.
-  const trajectory: ReactNode[] = [];
+  // The chain: each reasoning section opens a step, and the plain tool calls
+  // that follow it hang under that step; a sub-agent call is a step itself.
+  const steps: ChainStep[] = [];
   const body: ReactNode[] = [];
+  const openStep = (): Extract<ChainStep, { kind: "thought" }> => {
+    const last = steps.at(-1);
+    if (last && last.kind === "thought") return last;
+    const step: ChainStep = { key: `step-${steps.length}`, kind: "thought", body: "", tools: [] };
+    steps.push(step);
+    return step;
+  };
   for (let i = 0; i < parts.length; i++) {
     const p = parts[i];
     if (p.type === "reasoning") {
       const text = (p as Extract<MessagePart, { type: "reasoning" }>).text;
-      if (!text) continue;
-      trajectory.push(
-        <Reasoning key={`rsn-${i}`} isStreaming={isStreaming} className="w-full">
-          <ReasoningTrigger getThinkingMessage={thinkingMessage} />
-          <ReasoningContent>{text}</ReasoningContent>
-        </Reasoning>,
-      );
-    } else if (p.type === "data-plan" || p.type === "data-agentTask") {
-      if (planEmitted || !hasPlan) continue;
-      planEmitted = true;
-      trajectory.push(
-        <div key="plan-timeline" className="flex flex-col gap-2">
-          <PlanChecklist tasks={agentTasks} />
-          <ChainOfThought defaultOpen>
-            <ChainOfThoughtHeader>
-              研究过程 / Chain of thought
-              <CotSubtitle plan={planData} taskCount={agentTasks.length} />
-            </ChainOfThoughtHeader>
-            <ChainOfThoughtContent>
-              {agentTasks.map((t) => (
-                <ChainOfThoughtStep
-                  key={t.id}
-                  icon={stepIcon(t.status)}
-                  status={COT_STATUS[t.status]}
-                  label={t.title || t.skillName || t.id}
-                  description={stepDescription(t, isStreaming)}
-                >
-                  {t.sources && t.sources.length ? (
-                    <ChainOfThoughtSearchResults>
-                      {t.sources.map((s, si) => (
-                        <ChainOfThoughtSearchResult key={si}>{s.label}</ChainOfThoughtSearchResult>
-                      ))}
-                    </ChainOfThoughtSearchResults>
-                  ) : null}
-                </ChainOfThoughtStep>
-              ))}
-            </ChainOfThoughtContent>
-          </ChainOfThought>
-        </div>,
-      );
+      thoughtSections(text || "").forEach((sec, j) => {
+        steps.push({ key: `rsn-${i}-${j}`, kind: "thought", title: sec.title, body: sec.body, tools: [] });
+      });
     } else if (p.type.startsWith("tool-")) {
       const tp = p as ToolPart;
-      trajectory.push(<ToolCard key={tp.toolCallId} part={tp} />);
+      const name = toolName(tp);
+      const running = tp.state === "input-available";
+      if (name === "run_workflow") {
+        steps.push({
+          key: tp.toolCallId,
+          kind: "agent",
+          running: running && isStreaming,
+          node: (
+            <WorkflowCard
+              workflow={workflows.get(tp.toolCallId)}
+              tasks={tasksByParent.get(tp.toolCallId) ?? []}
+              running={running}
+              streaming={isStreaming}
+              errorText={tp.errorText}
+            />
+          ),
+        });
+      } else if (PROCEDURE_TOOLS.has(name)) {
+        steps.push({
+          key: tp.toolCallId,
+          kind: "agent",
+          running: running && isStreaming,
+          node: <ProcedureCard part={tp} task={tasksByParent.get(tp.toolCallId)?.[0]} streaming={isStreaming} />,
+        });
+      } else {
+        openStep().tools.push(tp);
+      }
     } else if (p.type === "text") {
       const text = (p as Extract<MessagePart, { type: "text" }>).text;
       if (!text) continue;
@@ -207,29 +129,18 @@ export function RenderMessageParts({
     // citeCheck/audit/artifact handled below as pinned slots.
   }
 
-  const hasTrajectory = trajectory.length > 0;
-  const sourceCount = agentTasks.reduce((n, t) => n + (t.sources?.length ?? 0), 0);
-
   return (
     <div className="flex flex-col gap-2">
-      {/* Live status line — shows what the model is doing during the planning
-          phase, BEFORE any text/tool output, so the bubble is never blank. */}
-      {isStreaming && phase ? <StatusLine phase={phase} /> : null}
-
-      {hasTrajectory ? (
-        isStreaming ? (
-          <div className="flex flex-col gap-2">{trajectory}</div>
-        ) : (
-          <RunHeader
-            durationMs={usageData?.durationMs}
-            taskCount={agentTasks.length}
-            toolCount={toolParts.length}
-            sourceCount={sourceCount}
-          >
-            {trajectory}
-          </RunHeader>
-        )
-      ) : null}
+      {/* The live status line sits at the chain's foot, where the work is, so
+          the bubble is never blank before the answer begins. */}
+      <ActivityChain
+        steps={steps}
+        streaming={isStreaming}
+        status={isStreaming && phase ? <StatusLine phase={phase} /> : undefined}
+        durationMs={usageData?.durationMs}
+        toolCount={toolParts.length}
+        taskCount={agentTasks.length}
+      />
 
       {body}
 
@@ -269,130 +180,19 @@ export function RenderMessageParts({
 }
 
 const PHASE_LABEL: Record<PhaseData["phase"], string> = {
-  routing: "分析问题 / Routing",
-  planning: "制定研究计划 / Planning",
+  thinking: "思考中 / Thinking",
   gathering: "检索与研究 / Researching",
-  integrating: "撰写答复 / Writing",
+  workflow: "多智能体工作流 / Running workflow",
   drafting: "生成文件 / Producing the file",
   auditing: "核验引证 / Verifying citations",
 };
 
 function StatusLine({ phase }: { phase: PhaseData }) {
   return (
-    <div className="flex items-center gap-2 rounded-lg bg-tool-surface px-3 py-2 font-mono text-xs text-content-secondary">
-      <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-      <span>{PHASE_LABEL[phase.phase] ?? phase.phase}…</span>
-      {phase.detail ? (
-        <span className="truncate text-content-faint">· {phase.detail}</span>
-      ) : null}
+    <div className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] leading-5 text-content-secondary">
+      <span className="shrink-0">{PHASE_LABEL[phase.phase] ?? phase.phase}…</span>
+      {phase.detail ? <span className="truncate text-content-faint">· {phase.detail}</span> : null}
     </div>
-  );
-}
-
-const COMPLEXITY_LABEL: Record<string, string> = {
-  simple: "简单",
-  standard: "标准",
-  complex: "复杂",
-};
-
-/** CoT header subtitle "· {complexity} · N 专家" (FIG1). */
-function CotSubtitle({ plan, taskCount }: { plan?: PlanData; taskCount: number }) {
-  const bits: string[] = [];
-  if (plan?.complexity) bits.push(COMPLEXITY_LABEL[plan.complexity] ?? plan.complexity);
-  if (taskCount > 0) bits.push(`${taskCount} 专家`);
-  if (!bits.length) return null;
-  return <span className="ml-1 font-normal text-content-faint">· {bits.join(" · ")}</span>;
-}
-
-/** Per-step meta line "{skill} · N 次工具 · {duration|运行中}" (FIG1 cot-desc). */
-function stepDescription(t: PlanTask, isStreaming: boolean): ReactNode {
-  if (t.status === "running") {
-    return t.tail ?? [t.skillName, "运行中…"].filter(Boolean).join(" · ");
-  }
-  const bits: string[] = [];
-  if (t.skillName) bits.push(t.skillName);
-  if (t.toolCount) bits.push(`${t.toolCount} 次工具`);
-  if (t.durationMs != null) bits.push(formatDuration(t.durationMs));
-  else if (t.responseChars) bits.push(`${t.responseChars} chars`);
-  const meta = bits.filter(Boolean).join(" · ");
-  return meta || (isStreaming ? t.tail : undefined);
-}
-
-/** Collapsed one-line run summary (FIG2) that expands the full trajectory. */
-function RunHeader({
-  durationMs,
-  taskCount,
-  toolCount,
-  sourceCount,
-  children,
-}: {
-  durationMs?: number;
-  taskCount: number;
-  toolCount: number;
-  sourceCount: number;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(false);
-  const bits: string[] = [];
-  const dur = formatDuration(durationMs);
-  if (dur) bits.push(`用时 ${dur}`);
-  if (taskCount > 0) bits.push(`${taskCount} 项任务`);
-  if (toolCount > 0) bits.push(`${toolCount} 次工具调用`);
-  if (sourceCount > 0) bits.push(`${sourceCount} 个来源`);
-  return (
-    <div className="not-prose flex flex-col gap-2">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 rounded-xl border bg-tool-surface px-3 py-2 text-left text-[13px] text-content-secondary transition-colors hover:border-primary/40"
-      >
-        <span className="text-[var(--ok)]">✓</span>
-        <span className="truncate">{bits.join(" · ") || "运行轨迹 / Trajectory"}</span>
-        <span className="ml-auto flex items-center gap-1 text-content-faint">
-          {open ? "收起轨迹" : "展开轨迹"}
-          <ChevronRight
-            className={cn("size-3.5 transition-transform", open ? "rotate-90" : "rotate-0")}
-          />
-        </span>
-      </button>
-      {open ? <div className="flex flex-col gap-2">{children}</div> : null}
-    </div>
-  );
-}
-
-function PlanChecklist({ tasks }: { tasks: PlanTask[] }) {
-  const done = tasks.filter((t) => t.status === "complete").length;
-  return (
-    <Task defaultOpen>
-      <TaskTrigger title={`研究计划 / Plan · ${done}/${tasks.length}`} />
-      <TaskContent>
-        {tasks.map((t) => (
-          <TaskItem key={t.id}>
-            <span className="mr-2 inline-flex align-middle">{STATUS_ICON[t.status]}</span>
-            {t.title || t.skillName || t.id}
-          </TaskItem>
-        ))}
-      </TaskContent>
-    </Task>
-  );
-}
-
-function ToolCard({ part }: { part: ToolPart }) {
-  const name = toolName(part);
-  return (
-    <Tool>
-      <ToolHeader
-        type={`tool-${name}` as `tool-${string}`}
-        state={part.state}
-        title={displayToolName(name, part.state === "input-available" ? "running" : "complete")}
-      />
-      <ToolContent>
-        {part.input != null ? <ToolInput input={part.input} /> : null}
-        {part.output != null || part.errorText ? (
-          <ToolOutput output={part.output as ReactNode} errorText={part.errorText} />
-        ) : null}
-      </ToolContent>
-    </Tool>
   );
 }
 

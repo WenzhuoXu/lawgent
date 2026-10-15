@@ -96,10 +96,10 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     # gpt-5.5 publishes no cache-write charge.
     "gpt-5.5": {"input": 5.00, "output": 30.00, "cached_input": 0.50},
     # gpt-5.6 family. Unlike gpt-5.5 the 5.6 family BILLS CACHE WRITES at 1.25x
-    # input; the Responses API usage object does not yet report a cache-write
-    # token count (input_tokens_details carries only cached_tokens), so the rate
-    # sits here unused until the SDK exposes one — see the openai branch of
-    # _cost_usd. Bare "gpt-5.6" routes to Sol; only named variants are used.
+    # input. The Responses API reports them as
+    # input_tokens_details.cache_write_tokens, a subset of input_tokens — see
+    # the openai branch of _cost_usd. Bare "gpt-5.6" routes to Sol; only named
+    # variants are used.
     "gpt-5.6-terra": {"input": 2.00, "output": 12.00, "cached_input": 0.20, "cache_write": 2.50},
     "gpt-5.6-sol": {"input": 4.00, "output": 20.00, "cached_input": 0.40, "cache_write": 5.00},
     "gpt-5.6-luna": {"input": 0.20, "output": 1.20, "cached_input": 0.02, "cache_write": 0.25},
@@ -122,11 +122,36 @@ OPENAI_LONG_CONTEXT_INPUT_MULT = 2.0
 OPENAI_LONG_CONTEXT_OUTPUT_MULT = 1.5
 
 
-def is_long_context(rec: dict[str, Any]) -> bool:
-    """True when an OpenAI record crosses the long-context surcharge threshold."""
+_TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+
+
+def _long_context_share(rec: dict[str, Any]) -> dict[str, int]:
+    """Tokens of an OpenAI record that were billed at the surcharge.
+
+    A row that counts its requests carries the over-threshold share itself.
+    Rows written before that (no ``requests`` key) only have the sum over a
+    turn's requests, so the whole row is treated as surcharged when the sum
+    crosses the threshold — an upper bound for multi-request turns.
+    """
+    zero = {k: 0 for k in (*_TOKEN_KEYS, "requests")}
     if rec.get("provider") != "openai":
-        return False
-    return int(rec.get("input_tokens") or 0) > OPENAI_LONG_CONTEXT_THRESHOLD
+        return zero
+    if "requests" in rec:
+        lc = rec.get("long_context") or {}
+        return {k: int(lc.get(k) or 0) for k in zero}
+    if int(rec.get("input_tokens") or 0) > OPENAI_LONG_CONTEXT_THRESHOLD:
+        return {**{k: int(rec.get(k) or 0) for k in _TOKEN_KEYS}, "requests": 1}
+    return zero
+
+
+def long_context_requests(rec: dict[str, Any]) -> int:
+    """How many of a record's requests crossed the surcharge threshold."""
+    return _long_context_share(rec)["requests"]
+
+
+def is_long_context(rec: dict[str, Any]) -> bool:
+    """True when any request of an OpenAI record crossed the surcharge threshold."""
+    return long_context_requests(rec) > 0
 
 # Used when a model has no pricing entry, so the estimate stays an estimate
 # instead of silently reading as zero spend.
@@ -190,8 +215,28 @@ def record_usage(
             "cache_read_tokens": int(
                 usage.get("cache_read_input_tokens") or usage.get("cached_input_tokens") or 0
             ),
-            "cache_write_tokens": int(usage.get("cache_creation_input_tokens") or 0),
+            # Anthropic: cache_creation_input_tokens (its own bucket).
+            # OpenAI: cache_write_input_tokens (a subset of input_tokens).
+            "cache_write_tokens": int(
+                usage.get("cache_creation_input_tokens")
+                or usage.get("cache_write_input_tokens")
+                or 0
+            ),
         }
+        # One row is one provider turn, summed over every request of its tool
+        # loop, but OpenAI's surcharge is decided per request. A provider that
+        # counts its requests also reports the share of the turn that came from
+        # requests over the threshold, and only that share is surcharged.
+        if "requests" in usage:
+            record["requests"] = int(usage.get("requests") or 0)
+            lc = usage.get("long_context") or {}
+            record["long_context"] = {
+                "requests": int(lc.get("requests") or 0),
+                "input_tokens": int(lc.get("input_tokens") or 0),
+                "output_tokens": int(lc.get("output_tokens") or 0),
+                "cache_read_tokens": int(lc.get("cached_input_tokens") or 0),
+                "cache_write_tokens": int(lc.get("cache_write_input_tokens") or 0),
+            }
         ctx = _ambient_context()
         if context:
             ctx.update(context)
@@ -208,6 +253,29 @@ def record_usage(
         pass
 
 
+def _openai_cost(
+    part: dict[str, int], rates: dict[str, float], in_mult: float, out_mult: float
+) -> float:
+    """Cost of OpenAI tokens (per 1M-token rates, not yet divided).
+
+    Cached reads and cache writes are both subsets of input_tokens, so each
+    input token is priced once: ordinary, cached, or written. A model without
+    a cache-write rate bills its writes as ordinary input.
+    """
+    inp = part["input_tokens"]
+    cread = min(part["cache_read_tokens"], inp)
+    cwrite = min(part["cache_write_tokens"], inp - cread)
+    input_rate = rates["input"] * in_mult
+    cached_rate = rates.get("cached_input", rates["input"] * 0.1) * in_mult
+    cwrite_rate = (rates.get("cache_write") or rates["input"]) * in_mult
+    return (
+        (inp - cread - cwrite) * input_rate
+        + cread * cached_rate
+        + cwrite * cwrite_rate
+        + part["output_tokens"] * rates["output"] * out_mult
+    )
+
+
 def _cost_usd(rec: dict[str, Any], pricing: dict[str, dict[str, float]]) -> float:
     rates = pricing.get(rec.get("model", "")) or PROVIDER_FALLBACK_PRICING.get(
         rec.get("provider", ""), {}
@@ -219,27 +287,16 @@ def _cost_usd(rec: dict[str, Any], pricing: dict[str, dict[str, float]]) -> floa
     cread = rec.get("cache_read_tokens", 0)
     cwrite = rec.get("cache_write_tokens", 0)
     if rec.get("provider") == "openai":
-        # cached tokens are a discounted subset of input_tokens
-        cached_rate = rates.get("cached_input", rates["input"] * 0.1)
-        input_rate = rates["input"]
-        output_rate = rates["output"]
-        cwrite_rate = rates.get("cache_write")
-        if is_long_context(rec):
-            input_rate *= OPENAI_LONG_CONTEXT_INPUT_MULT
-            cached_rate *= OPENAI_LONG_CONTEXT_INPUT_MULT
-            output_rate *= OPENAI_LONG_CONTEXT_OUTPUT_MULT
-            if cwrite_rate:
-                cwrite_rate *= OPENAI_LONG_CONTEXT_INPUT_MULT
-        cost = (
-            max(inp - cread, 0) * input_rate
-            + cread * cached_rate
-            + out * output_rate
+        lc = _long_context_share(rec)
+        base = {
+            "input_tokens": max(inp - lc["input_tokens"], 0),
+            "output_tokens": max(out - lc["output_tokens"], 0),
+            "cache_read_tokens": max(cread - lc["cache_read_tokens"], 0),
+            "cache_write_tokens": max(cwrite - lc["cache_write_tokens"], 0),
+        }
+        cost = _openai_cost(base, rates, 1.0, 1.0) + _openai_cost(
+            lc, rates, OPENAI_LONG_CONTEXT_INPUT_MULT, OPENAI_LONG_CONTEXT_OUTPUT_MULT
         )
-        # gpt-5.6 family bills cache writes (1.25x input). The Responses API
-        # does not report cache-write tokens yet, so cwrite stays 0 in
-        # practice; once the SDK exposes the detail field the term activates.
-        if cwrite_rate and cwrite:
-            cost += cwrite * cwrite_rate
     else:
         cost = (
             inp * rates["input"]
@@ -307,11 +364,14 @@ def month_summary(
                     v = int(rec.get(k) or 0)
                     bucket[k] += v
                     totals[k] += v
-                bucket["requests"] += 1
-                totals["requests"] += 1
-                if is_long_context(rec):
-                    bucket["long_context_requests"] += 1
-                    totals["long_context_requests"] += 1
+                # A turn row counts each API request of its tool loop when the
+                # provider reported them; older rows count as one.
+                n_req = int(rec.get("requests") or 1)
+                bucket["requests"] += n_req
+                totals["requests"] += n_req
+                n_long = long_context_requests(rec)
+                bucket["long_context_requests"] += n_long
+                totals["long_context_requests"] += n_long
                 rec_cost = _cost_usd(rec, pricing)
                 bucket["estimated_cost_usd"] += rec_cost
                 cost += rec_cost

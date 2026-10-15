@@ -1,4 +1,4 @@
-"""Pydantic models for persistent web chat sessions and workflow plans."""
+"""Pydantic models for persistent web chat sessions, projects and workflow tasks."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ class ChatSettings(BaseModel):
     provider: Literal["anthropic", "openai"]
     model: str
     reasoning_effort: str = "medium"
-    # "auto" sizes the answer from the router's complexity; a chat can pin one.
+    # "auto" lets the author size each answer; a chat can pin one.
     answer_length: Literal["auto", "brief", "focused", "full"] = "auto"
     skill_hint: Optional[str] = None
     enable_web_search: bool = True
@@ -87,8 +87,8 @@ class Project(BaseModel):
     """A durable container grouping chats + long-running work under shared context.
 
     The ``brief`` is the CLAUDE.md-equivalent — stable, hand-authored context
-    and instructions re-injected into the orchestrator every turn (it survives
-    chat compaction). ``summary`` is the rolling, model-distilled digest of work
+    and instructions re-injected into the author's context every turn (it
+    survives chat compaction). ``summary`` is the rolling, model-distilled digest of work
     done across the project's chats. ``jurisdiction`` / ``domain_packs`` let a
     project pin a working jurisdiction + pack set (e.g. ET + aviation for
     Ethiopian route work).
@@ -113,7 +113,7 @@ class ProjectMemory(BaseModel):
     Mirrors the structured-memory model used by long-running agents: each entry
     is a single load-bearing fact / decision / task / glossary item, scored by
     ``salience`` (1-5) so the context builder can rank the most important ones
-    into the orchestrator's window and compaction can prune the rest.
+    into the author's context and compaction can prune the rest.
     """
 
     id: str
@@ -136,57 +136,6 @@ class AgentTask(BaseModel):
     title: str
     task: str
     depends_on: list[str] = Field(default_factory=list)
-    # The plan issues this specialist owns (complex turns).
-    issue_ids: list[str] = Field(default_factory=list)
-
-
-class PlanIssue(BaseModel):
-    """One legal issue (争点) of a complex request, as the planner frames it.
-
-    Specialists work it element by element and the author walks the issues in
-    order. The issue list used to be overwritten with task titles during
-    normalisation, so the author never saw the issues at all.
-    """
-
-    id: str
-    issue: str
-    claim_basis: str = ""
-    elements: list[str] = Field(default_factory=list)
-    facts_needed: list[str] = Field(default_factory=list)
-    facts_assumed: list[str] = Field(default_factory=list)
-    jurisdiction: str = ""
-    evidence_surface: str = ""
-
-
-class WorkflowPlan(BaseModel):
-    title: str
-    user_language: str = "English"
-    execution_mode: Literal["agent_workflow", "direct_answer", "clarify"] = "agent_workflow"
-    # Complexity sizes the machinery: "simple" and "standard" are answered by
-    # one author in one tool-armed pass; "complex" is decomposed into issues and
-    # 2-3 parallel specialists, then integrated. It also sets the answer's
-    # default length tier.
-    complexity: Literal["simple", "standard", "complex"] = "standard"
-    direct_response: str = ""
-    routing_reason: str = ""
-    # Router's confidence that it has the facts needed to do the work, 0-1.
-    # At or above `CLARIFY_CONFIDENCE_THRESHOLD` a `clarify` routing is treated
-    # as a hedge and the turn proceeds. None means the router did not report a
-    # number — the heuristic planner and any model that ignores the field — and
-    # an unreported confidence must not be read as a confident one, so the gate
-    # simply does not apply.
-    intake_confidence: Optional[float] = None
-    issue_decomposition: list[str] = Field(default_factory=list)
-    issues: list[PlanIssue] = Field(default_factory=list)
-    agent_tasks: list[AgentTask] = Field(default_factory=list)
-    integration_instructions: str = ""
-    # Facts the user gave that contradict each other. Models compute straight
-    # through contradictory facts most of the time; naming them makes the
-    # answer say which reading it adopts.
-    fact_conflicts: list[str] = Field(default_factory=list)
-    # The answer's citation format comes from `answer_contract`; this carries
-    # only a planner's request-specific note, if any.
-    citation_requirements: str = ""
 
 
 class CitationAuditResult(BaseModel):

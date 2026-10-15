@@ -1,4 +1,4 @@
-"""Durable record of one workflow run: phase artifacts and a resumable snapshot.
+"""Durable record of one chat turn: phase artifacts and a resumable snapshot.
 
 A run used to exist only in memory and in the event log. A crash, a cancel or a
 provider outage discarded everything — including research that had already been
@@ -7,13 +7,14 @@ of work, which is the expensive part of the turn.
 
 Two things are written under ``state/runs/<run_id>/``:
 
-- ``artifacts/NN-<phase>.md`` — the output of each phase as it completes: the
-  plan, each specialist's research bundle, the synthesised draft, the citation
-  audit, any repair pass. Inspectable while the run is still going, and the
-  audit trail the PRC AI-agent rules require is the same file set.
-- ``snapshot.json`` — plan, per-task status and output, failures, the current
-  phase, and why the run stopped. ``resumable_outputs`` reads the completed
-  task outputs back so a retry skips the research it already has.
+- ``artifacts/NN-<phase>.md`` — the output of each phase as it completes: a
+  workflow's task list, each specialist's research bundle, the draft answer,
+  the citation audit, any repair pass. Inspectable while the run is still
+  going, and the audit trail the PRC AI-agent rules require is the same file
+  set.
+- ``snapshot.json`` — the task list, per-task status and output, failures, the
+  current phase, and why the run stopped. ``resumable_outputs`` reads the
+  completed task outputs back so a retry skips the research it already has.
 
 The snapshot is rewritten on every transition rather than appended, so a
 half-written file can only ever cost the newest transition; ``events.jsonl``
@@ -65,7 +66,7 @@ class RunSnapshot:
     run_id: str
     chat_id: Optional[str] = None
     status: RunStatus = "running"
-    phase: str = "routing"
+    phase: str = "answer"
     title: str = ""
     created_at: str = field(default_factory=_now)
     updated_at: str = field(default_factory=_now)
@@ -182,22 +183,20 @@ class RunStore:
         self.append_event("phase", {"phase": phase})
         self.save()
 
-    def record_plan(self, plan: Any) -> None:
-        try:
-            self.snapshot.plan = plan.model_dump() if hasattr(plan, "model_dump") else dict(plan)
-        except Exception:  # noqa: BLE001
-            self.snapshot.plan = None
-        self.snapshot.title = getattr(plan, "title", "") or self.snapshot.title
-        for task in getattr(plan, "agent_tasks", []) or []:
-            self.snapshot.tasks[task.id] = TaskRecord(
-                id=task.id, skill_name=task.skill_name, title=task.title
+    def record_plan(self, plan: dict[str, Any]) -> None:
+        """Record a workflow's task list, as `run_workflow` passes it:
+        ``{"title", "objective", "agent_tasks": [AgentTask dumps]}``."""
+        self.snapshot.plan = dict(plan)
+        self.snapshot.title = str(plan.get("title") or "") or self.snapshot.title
+        for task in plan.get("agent_tasks") or []:
+            self.snapshot.tasks[task["id"]] = TaskRecord(
+                id=task["id"], skill_name=task.get("skill_name", ""), title=task.get("title", "")
             )
-        if self.snapshot.plan is not None:
-            self.write_artifact(
-                "plan",
-                json.dumps(self.snapshot.plan, ensure_ascii=False, indent=2, default=str),
-                title=f"Plan — {self.snapshot.title}",
-            )
+        self.write_artifact(
+            "plan",
+            json.dumps(self.snapshot.plan, ensure_ascii=False, indent=2, default=str),
+            title=f"Plan — {self.snapshot.title}",
+        )
         self.append_event("plan_recorded", {"task_count": len(self.snapshot.tasks)})
         self.save()
 
@@ -252,6 +251,19 @@ class RunStore:
         self.save()
 
     # --- reads ----------------------------------------------------------
+    def resumable_tasks(self) -> dict[str, dict[str, str]]:
+        """Completed specialist bundles with the method and title they ran under."""
+        outputs = self.resumable_outputs()
+        return {
+            task_id: {
+                "skill_name": self.snapshot.tasks[task_id].skill_name,
+                "title": self.snapshot.tasks[task_id].title,
+                "text": text,
+            }
+            for task_id, text in outputs.items()
+            if task_id in self.snapshot.tasks
+        }
+
     def resumable_outputs(self) -> dict[str, str]:
         """Completed task outputs from this run's artifacts, by task id."""
         out: dict[str, str] = {}

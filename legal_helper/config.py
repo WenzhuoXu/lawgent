@@ -44,41 +44,33 @@ RETIRED_MODELS: dict[str, str] = {
 }
 
 
-#: Reasoning-effort levels in increasing order. "none" omits the parameter (the
-#: model's own default), so it is never raised or lowered by a cap.
+#: Reasoning-effort levels in increasing order. "none" is never raised or
+#: lowered by a cap; each provider maps it to the lowest level its model takes.
 EFFORT_LEVELS = ("none", "low", "medium", "high", "xhigh", "max")
 
-#: Which model tier and reasoning effort each role in a turn runs at.
-#:
-#: One table instead of three helper functions (``_planner_settings``,
-#: ``_research_settings``, ``_integration_settings``) whose comments had drifted
-#: from the code — two stated the role→model mapping backwards — whose effort
-#: caps covered {high, xhigh} but not ``max``, and which had no Anthropic branch,
-#: so Anthropic routing ran at the user's full effort.
+#: Which model tier and reasoning effort each role in a turn runs at, for both
+#: providers (the effort dial is shared).
 #:
 #: ``tier`` is ``fast`` or ``main``. ``effort`` is a level from EFFORT_LEVELS,
 #: ``user`` (the chat's own setting) or ``cap:<level>`` (the chat's setting, but
 #: no higher). ``config.yaml``'s ``role_profiles`` overrides entries by role.
 DEFAULT_ROLE_PROFILES: dict[str, dict[str, str]] = {
-    # One cheap classification call per turn.
-    "router": {"tier": "fast", "effort": "low"},
-    # Runs only for complex turns; the plan shape matters more than its depth.
-    "decomposer": {"tier": "fast", "effort": "low"},
-    # The single-pass author writes ~94% of legal answers.
+    # The author answers every turn, on the chat's own model and effort.
     "author": {"tier": "main", "effort": "user"},
-    # Specialists are tool-orchestration loops; N of them run at once, so a
-    # high tier multiplies latency for little research gain.
+    # Workflow specialists (`run_workflow`) are tool-orchestration loops; N of
+    # them run at once, so a high tier multiplies latency for little research
+    # gain.
     "specialist": {"tier": "main", "effort": "cap:medium"},
-    # Integration authors from finished research bundles.
-    "integrator": {"tier": "main", "effort": "cap:medium"},
     "cite_check": {"tier": "fast", "effort": "user"},
     # The two housekeeping calls after every turn run in the background once
     # the user is released, but they still bill: a delta summary needs a
     # little reasoning, a title none (Anthropic maps "none" to its lowest).
     "summariser": {"tier": "fast", "effort": "low"},
     "title": {"tier": "fast", "effort": "none"},
-    # ppt-master is a long procedure that authors every page itself.
-    "deck": {"tier": "main", "effort": "user"},
+    # ppt-master follows its own written procedure for ~60 rounds; reasoning
+    # was three quarters of its output and most of the wall time (a 3-page
+    # deck: 774 s, 80K output tokens of which ~20K were the files).
+    "deck": {"tier": "main", "effort": "low"},
 }
 
 
@@ -184,8 +176,11 @@ class Settings(BaseModel):
     sub_agent_max_iterations: int = 0
     external_skill_max_iterations: int = 0
     max_concurrent_agents: int | Literal["auto"] = "auto"
+    # Specialists one `run_workflow` call may start (Codex's default for
+    # parallel children).
+    max_workflow_tasks: int = 3
     # Per-turn within-chat context digest (rolling summary + recent transcript)
-    # fed to the planner/answer. The effective budget is
+    # fed to the author and its specialists. The effective budget is
     # ``chat_context_window_fraction × model window``, floored at
     # ``chat_context_token_budget`` — so the digest scales with the model
     # actually serving the turn instead of handing a 1M-window model the same
@@ -200,8 +195,8 @@ class Settings(BaseModel):
     chat_compaction_threshold: float = 0.0
     # Output ceiling per turn. 8192 truncated long legal memos mid-analysis
     # (stop_reason="max_tokens" → the "incomplete chunk" symptom). 32000 gives
-    # comprehensive multi-jurisdiction analyses room to finish; Opus 4.x allows
-    # up to 128000 with the streaming path. Override in config.yaml as needed.
+    # comprehensive multi-jurisdiction analyses room to finish. Override in
+    # config.yaml as needed.
     max_tokens: int = 32000
 
     project_root: Path = _PROJECT_ROOT
@@ -213,8 +208,8 @@ class Settings(BaseModel):
 
     enable_web_search: bool = True
     enable_web_fetch: bool = True
-    # Post-synthesis citation audit (the /cite-check skill). Disable to skip it
-    # on every run (faster iteration; the orchestrator still cites inline).
+    # Citation audit of the author's answer (the /cite-check skill). Disable to
+    # skip it on every run (faster iteration; the author still cites inline).
     enable_cite_check: bool = True
     # Audit a substantive legal answer before the reader sees it, rather than
     # streaming it and labelling the problems afterwards. The answer is
@@ -226,10 +221,10 @@ class Settings(BaseModel):
     # synthesis turn plus one re-audit, so this is a cost dial as much as a
     # quality one; 0 disables repair and keeps the audit advisory.
     max_repair_rounds: int = 1
-    # Default answer length. "auto" derives it from the router's complexity
-    # (simple → brief, standard → focused, complex → full); a chat can pin one.
-    # It sets only the provider's verbosity and one instruction sentence — never
-    # an output-token limit, a tool-round limit or a tool budget.
+    # Default answer length. "auto" lets the author size each answer from the
+    # request; a chat can pin brief / focused / full. It sets only the
+    # provider's verbosity and one instruction sentence — never an output-token
+    # limit, a tool-round limit or a tool budget.
     answer_length: Literal["auto", "brief", "focused", "full"] = "auto"
     role_profiles: dict[str, dict[str, str]] = Field(
         default_factory=lambda: {k: dict(v) for k, v in DEFAULT_ROLE_PROFILES.items()}
@@ -296,11 +291,7 @@ class Settings(BaseModel):
     def effective_max_concurrent_agents(self) -> int:
         if self.max_concurrent_agents != "auto":
             return max(1, int(self.max_concurrent_agents))
-        if self.provider == "anthropic":
-            return 2
-        if self.provider == "openai":
-            return 4
-        return 2
+        return 2 if self.provider == "anthropic" else 4
 
 
 _CACHED: Optional[Settings] = None
@@ -384,6 +375,9 @@ def load_settings(*, refresh: bool = False) -> Settings:
                 "LEGAL_HELPER_MAX_CONCURRENT_AGENTS",
                 cfg.get("max_concurrent_agents", "auto"),
             )
+        ),
+        max_workflow_tasks=int(
+            os.getenv("LEGAL_HELPER_MAX_WORKFLOW_TASKS", cfg.get("max_workflow_tasks", 3))
         ),
         max_tokens=int(cfg.get("max_tokens", 32000)),
         chat_context_token_budget=int(cfg.get("chat_context_token_budget", 16000)),

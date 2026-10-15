@@ -39,18 +39,10 @@ def render_flowchart_image(
     theme: Literal["default", "neutral", "dark", "forest"] = "default",
     background: str = "white",
 ) -> str:
-    """Draw a diagram as a picture under outputs/. Returns the path.
-
-    For a diagram going into a Word document, sent as an image, or shown in
-    the chat. A diagram that belongs on a slide or in a deck is made with
-    ``create_deck`` instead, which draws it as editable shapes on the slide.
-
-    ``mermaid`` (default): ``flowchart`` / ``graph`` sources — process maps,
-    decision trees, swimlanes as ``subgraph`` blocks — and ``mindmap`` sources
-    (思维导图) are laid out and drawn by Graphviz with a CJK font, so labels
-    fit their boxes. Other Mermaid types (sequence, class, state, ER, gantt,
-    pie) are drawn by mermaid-cli. ``d2``: diagrams of nested containers —
-    an organisation or system 结构图 where boxes sit inside boxes.
+    """Draw a diagram as a picture (for a Word document, an image or the chat;
+    on a slide use ``create_deck``). Mermaid flowcharts, swimlanes (subgraphs)
+    and mind maps are drawn by Graphviz with CJK fonts; other Mermaid types by
+    mermaid-cli; ``d2`` for nested-container 结构图. Returns the path.
 
     Args:
         filename: Desired filename (with or without extension).

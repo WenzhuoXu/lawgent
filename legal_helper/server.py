@@ -15,7 +15,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ from .chat_store import ChatStore
 from .config import current_settings, load_settings, override_current_settings
 from .domains import available_packs, load_pack
 from .errors import OUT_OF_MONEY_MESSAGE, is_out_of_money_error
-from .logging_setup import setup_logging, workflow_event_sink_var
+from .logging_setup import setup_logging, transient_event_sink_var, workflow_event_sink_var
 from .memory import summarize_title_with_fast_model, summarize_with_fast_model
 from .projects import ProjectStore, active_project
 from .skills import list_skills
@@ -73,13 +73,10 @@ async def get_jurisdictions() -> dict:
         "supported": ["CN", "US", "EU", "UK", "HK", "ET", "ICAO"],
     }
 
-_PKG_DIR = Path(__file__).parent
-_WEBUI_DIR = _PKG_DIR / "webui"
-_WEBUI_DIST = _PKG_DIR / "webui_dist"
+_WEBUI_DIST = Path(__file__).parent / "webui_dist"
 
 if (_WEBUI_DIST / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=str(_WEBUI_DIST / "assets")), name="assets")
-app.mount("/static", StaticFiles(directory=str(_WEBUI_DIR)), name="static")
 
 _RUN_SUBSCRIBERS: dict[str, set[queue.Queue[Optional[tuple[str, Any]]]]] = {}
 _RUN_CANCEL_EVENTS: dict[str, threading.Event] = {}
@@ -89,14 +86,6 @@ _RUN_LOCK = threading.Lock()
 # The context bound is the token budget in `workflow._build_context_block`,
 # which scales with the serving model's window.
 _RECENT_MESSAGE_LOOKBACK = 400
-
-
-class ChatRequest(BaseModel):
-    message: str
-    attachments: list[str] = []
-    skill_hint: Optional[str] = None
-    chat_id: Optional[str] = None
-    settings: Optional[ChatSettings] = None
 
 
 class ChatCreateRequest(BaseModel):
@@ -151,7 +140,6 @@ class ChatProjectAssignRequest(BaseModel):
 
 class ExportRequest(BaseModel):
     title: Optional[str] = None
-    filename: Optional[str] = None
     format: Optional[str] = None
     # When the citation audit returned a DO-NOT-FILE verdict, the UI passes the
     # watermark text so the exported PDF/DOCX is stamped and cannot be mistaken
@@ -200,46 +188,6 @@ def _artifact_payload(artifact: ArtifactRecord) -> dict[str, Any]:
     payload = artifact.model_dump()
     payload["url"] = _artifact_url(artifact.chat_id, artifact.id)
     return payload
-
-
-def _best_export_source_message(store: ChatStore, chat_id: str, current_assistant_id: Optional[str] = None) -> Optional[ChatMessage]:
-    messages = [
-        m
-        for m in store.list_messages(chat_id)
-        if m.role == "assistant" and m.id != current_assistant_id and m.content.strip()
-    ]
-    if not messages:
-        return None
-
-    def is_export_ack(text: str) -> bool:
-        lower = text.lower().strip()
-        return (
-            lower.startswith("已生成 pdf")
-            or lower.startswith("已生成 docx")
-            or lower.startswith("generated pdf")
-            or lower.startswith("generated docx")
-            or "(/api/chats/" in lower and ("pdf" in lower or "docx" in lower)
-        )
-
-    def is_clarification_or_router_reply(text: str) -> bool:
-        lower = " ".join(text.lower().split())
-        return (
-            "what findings should i include" in lower
-            or "please paste or summarize" in lower
-            or "i can route it" in lower
-            or "please share the message" in lower
-            or lower.startswith("which agreement or clause")
-        )
-
-    substantive = [
-        m
-        for m in messages
-        if len(m.content.strip()) >= 300 and not is_export_ack(m.content) and not is_clarification_or_router_reply(m.content)
-    ]
-    if substantive:
-        return substantive[-1]
-    usable = [m for m in messages if not is_export_ack(m.content) and not is_clarification_or_router_reply(m.content)]
-    return usable[-1] if usable else messages[-1]
 
 
 def _write_followup_artifact(
@@ -481,9 +429,7 @@ def chat_housekeeping_pending(chat_id: str) -> bool:
 def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Optional[str] = None):
     base = current_settings()
     updates: dict[str, Any] = {}
-    if chat_settings is None:
-        pass
-    else:
+    if chat_settings is not None:
         updates.update(
             {
                 "provider": chat_settings.provider,
@@ -504,12 +450,12 @@ def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Option
         # it too); it used to be applied for OpenAI chats only, so an Anthropic
         # chat ran at the config default whatever the user picked.
         updates["openai_reasoning_effort"] = chat_settings.reasoning_effort
-        updates["answer_length"] = getattr(chat_settings, "answer_length", "auto") or "auto"
+        updates["answer_length"] = chat_settings.answer_length
     if chat_id:
         updates["outputs_dir"] = _chat_outputs_dir(chat_id)
         # A project pins jurisdiction + packs for every chat under it, so the
         # right connectors (e.g. ET/aviation for Ethiopian route work) surface and
-        # the orchestrator inherits the project's standing context.
+        # the author inherits the project's standing context.
         project = _project_for_chat(chat_id)
         if project is not None:
             if project.jurisdiction:
@@ -704,7 +650,12 @@ def index() -> HTMLResponse:
     built_index = _WEBUI_DIST / "index.html"
     if built_index.is_file():
         return HTMLResponse(built_index.read_text(encoding="utf-8"))
-    return HTMLResponse((_WEBUI_DIR / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'><title>Legal AI Helper</title>"
+        "<p>The web UI is not built. Run <code>npm run build</code> in the "
+        "repository root, then reload.</p>",
+        status_code=503,
+    )
 
 
 @app.get("/api/runs")
@@ -803,13 +754,6 @@ async def upload_chat_file(chat_id: str, file: UploadFile = File(...)) -> dict[s
     return await _save_chat_upload(chat_id, file)
 
 
-@app.post("/api/upload")
-async def upload(file: UploadFile = File(...), chat_id: Optional[str] = Form(None)) -> dict[str, str]:
-    if not chat_id:
-        raise HTTPException(status_code=400, detail="Uploads must be associated with a chat")
-    return await _save_chat_upload(chat_id, file)
-
-
 def _artifact_file_response(store: ChatStore, chat_id: str, artifact_id: str) -> FileResponse:
     try:
         artifact = store.get_artifact(artifact_id)
@@ -827,7 +771,8 @@ def download_chat_artifact(chat_id: str, artifact_id: str) -> FileResponse:
 
 @app.get("/api/artifacts/{name:path}")
 def download_artifact(name: str) -> FileResponse:
-    # Legacy compatibility: only chat-scoped artifacts may be resolved here.
+    # A file addressed by name, the form the answer lint and the UI rewrite
+    # artifact paths to. Only chat-scoped artifacts resolve here.
     parts = Path(name).parts
     if len(parts) == 3 and parts[0] == "chat_artifacts":
         chat_id, filename = parts[1], parts[2]
@@ -1193,8 +1138,13 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
             }
         emit("workflow_event", payload)
 
+    def transient(kind: str, data: dict[str, Any]) -> None:
+        # A specialist's live preview: forwarded, never persisted.
+        emit(kind, data)
+
     def produce() -> None:
         token = workflow_event_sink_var.set(sink)
+        transient_token = transient_event_sink_var.set(transient)
         assistant_text = ""
         run_finished = False
         # Provider-reported context fill for the last turn; 0 until a usage
@@ -1244,7 +1194,6 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     memory_summary=chat.memory_summary,
                     skill_hint=settings_model.skill_hint,
                     cancel_event=cancel_event,
-                    clarify_rounds_used=store.consecutive_clarify_rounds(chat_id),
                     resume_run_id=req.resume_run_id,
                 ):
                     if is_cancelled():
@@ -1303,8 +1252,8 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                                 "cache_write_tokens": cache_write,
                                 "context_tokens": context_tokens,
                                 "duration_ms": duration_ms,
-                                "provider": run_settings.provider,
-                                "model": run_settings.model_for_provider(),
+                                "provider": ev.data.get("provider") or run_settings.provider,
+                                "model": ev.data.get("model") or run_settings.model_for_provider(),
                             }
                             store.add_event(chat_id, "turn_usage", turn_usage_payload)
                             emit("turn_usage", turn_usage_payload)
@@ -1312,8 +1261,10 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                             assistant_text,
                             {
                                 "citation_audit": ev.data.get("citation_audit"),
-                                "provider": run_settings.provider,
-                                "model": run_settings.model_for_provider(),
+                                # Who actually wrote it: the author role's
+                                # provider and model, from the done event.
+                                "provider": ev.data.get("provider") or run_settings.provider,
+                                "model": ev.data.get("model") or run_settings.model_for_provider(),
                                 "usage": usage or None,
                                 "duration_ms": duration_ms,
                                 "run_status": "complete",
@@ -1385,9 +1336,6 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                                 workflow_event_sink_var.reset(sink_token)
 
                         _submit_chat_housekeeping(chat_id, housekeeping)
-                    elif ev.kind == "workflow_plan":
-                        store.add_event(chat_id, "workflow_plan", ev.data)
-                        emit("workflow_plan", ev.data)
                     elif ev.kind == "citation_audit":
                         store.add_event(chat_id, "citation_audit", ev.data)
                         emit("citation_audit", ev.data)
@@ -1427,6 +1375,7 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
             if not run_finished:
                 persist_assistant(assistant_text, {"run_status": "error"})
                 store.update_run(run.id, status="error", error="Workflow ended before completion.", finished=True)
+            transient_event_sink_var.reset(transient_token)
             workflow_event_sink_var.reset(token)
             _finish_run_streams(run.id)
             _unregister_run_cancel_event(run.id)
@@ -1460,20 +1409,3 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
 @app.post("/api/chats/{chat_id}/messages/stream")
 def stream_chat_message(chat_id: str, req: ChatStreamRequest) -> StreamingResponse:
     return _stream_chat_turn(chat_id, req)
-
-
-@app.post("/api/chat")
-def chat(req: ChatRequest) -> StreamingResponse:
-    store = _store()
-    chat_id = req.chat_id
-    if chat_id is None:
-        chat_id = store.create_chat(settings=req.settings).id
-    return _stream_chat_turn(
-        chat_id,
-        ChatStreamRequest(
-            message=req.message,
-            attachments=req.attachments,
-            skill_hint=req.skill_hint,
-            settings=req.settings,
-        ),
-    )

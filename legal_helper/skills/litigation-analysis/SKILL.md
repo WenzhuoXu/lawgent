@@ -16,11 +16,11 @@ table, evidence chronology, 诉讼时效 position, verified authorities.
 ## Output Contract (binding)
 
 As a specialist, emit the harness's bundle contract (Findings · Issues ·
-Artefacts · Out of scope · Sources), supplied with your task. As the author of
-a final answer, follow the author contract instead and put these artefacts in
-the answer where they help the reader.
+Artefacts · Out of scope · Sources), supplied with your task.
 
-Artefacts this skill produces: the analysis header (matter · side · elements mapped / unsupported · chronology path or inline count · limitation ok / at-risk / expired / n/a with operative dates · authorities cited / verified) and the element table.
+## Artefacts
+
+The analysis header (matter · side · elements mapped / unsupported · chronology path or inline count · limitation ok / at-risk / expired / n/a with operative dates · authorities cited / verified) and the element table.
 
 ## Authority-verification contract (binding)
 

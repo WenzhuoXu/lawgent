@@ -1,16 +1,14 @@
 """create_deck: the one way any agent in this harness makes a slide deck.
 
 Decks are made by ppt-master, an external procedural skill (MIT, maintained
-upstream), never by an in-tree writer. The two in-tree paths this replaced — a
-ten-layout pptxgenjs template and an HTML→PPTX converter — were each a
-narrower reimplementation of what ppt-master already does with its own
-planning, its own native-shape authoring and its own blocking quality gate;
-the HTML one was the documented default and was never called once.
+upstream), never by an in-tree writer: it brings its own planning, its own
+native-shape authoring and its own blocking quality gate, and an in-tree
+writer could only be a narrower reimplementation of them.
 
-A generic skill dispatcher could already drive the skill, but nothing a deck
-needs was in it: where the project goes, what to pass in, how to tell a
-delivered deck from a sub-agent that stopped half way, and what the user sees
-during a run that takes many minutes. This tool owns exactly that:
+Driving the skill takes more than running it: where the project goes, what to
+pass in, how to tell a delivered deck from a sub-agent that stopped half way,
+and what the user sees during a run that takes many minutes. This tool owns
+exactly that:
 
 - **A workspace the user's file list never shows.** A ppt-master project is
   dozens of files (one SVG per page twice over, validation reports, a backup,
@@ -46,7 +44,7 @@ from typing import Any, Callable, Optional
 from anthropic import beta_tool
 
 from ..config import Settings, current_settings, override_current_settings
-from ..logging_setup import log_workflow_event, workflow_event_sink_var
+from ..logging_setup import log_workflow_event, sub_agent_scope, workflow_event_sink_var
 
 #: The external skill that makes every deck.
 DECK_SKILL = "ppt-master"
@@ -165,6 +163,9 @@ def compose_deck_task(
             if page_count > 0
             else "- Length: not fixed by the user; decide it from the content."
         ),
+        "- Confirmation: delegated. The user sees only the finished deck; this request is "
+        "their explicit delegation of every confirmation stage. Decide each one, record it "
+        "where the procedure keeps it, and report it under `## Decisions under delegation`.",
     ]
     if quick:
         lines.append(
@@ -247,6 +248,8 @@ def classify_deck_call(tool: str, args: dict[str, Any]) -> tuple[str, str]:
         if path.endswith(".svg") and "/svg_output/" in f"/{path}":
             return "page_authored", name
         return "plan_written", name
+    if tool == "edit_text_file":
+        return "file_edited", Path(str(args.get("path") or "")).name
     if tool == "run_skill_script":
         script = Path(str(args.get("script") or "")).name
         argv = [str(a) for a in (args.get("args") or [])]
@@ -284,7 +287,7 @@ class DeckProgress:
     ) -> None:
         self._forward = forward
         self._agent = agent
-        self._target = target_pages if target_pages > 0 else None
+        self.target = target_pages if target_pages > 0 else None
         self._lock = threading.Lock()
         self._pending: dict[str, list[dict[str, Any]]] = {}
         self._started = time.monotonic()
@@ -336,7 +339,7 @@ class DeckProgress:
                 "ok": ok,
                 "exit_code": exit_code,
                 "current": pages,
-                "total": self._target,
+                "total": self.target,
                 "calls": calls,
                 "elapsed_s": round(time.monotonic() - self._started, 1),
             },
@@ -515,35 +518,22 @@ def create_deck(
 ) -> str:
     """Make a slide deck — PPT / PPTX / presentation / slides / 幻灯片 / 演示文稿 / 汇报材料 / 课件. Returns JSON.
 
-    This is THE way to produce a presentation here, whatever its size: a full
-    deck, a single slide, or one diagram on a slide (流程图 / 结构图 / 思维导图 /
-    timeline). It drives ppt-master in a sub-agent that plans the deck, draws
-    every page as editable native PowerPoint shapes, runs ppt-master's own
-    quality gate and exports one .pptx; this tool then opens, counts and lints
-    the export before reporting it. A deck takes several minutes.
-
-    The sub-agent does not see this conversation. ``brief`` must carry
-    everything the slides say — the finished analysis or outline, the facts,
-    figures, dates, parties, and every citation with its pinpoint — because
-    nothing absent from the brief or the source files will appear on a slide.
-
-    For a deck the user already has: edit_pptx_text / reshape_pptx change it,
-    render_pptx_slides shows it. To restyle or refill the user's own template,
-    pass it as ``template_path``.
+    The only way to make a presentation here — a full deck, one slide, or a
+    diagram on a slide. ppt-master builds it in a sub-agent (several minutes)
+    that does not see this chat: ``brief`` must carry everything the slides
+    say, with every citation's pinpoint. Existing decks: edit_pptx_text /
+    reshape_pptx / render_pptx_slides.
 
     Args:
-        brief: The complete content of the deck, in the deck's language:
-            analysis, outline, figures and sources with pinpoints.
+        brief: The deck's complete content, in its language, with sources and pinpoints.
         title: Deck title.
-        language: BCP-47 tag for the slide text, e.g. "zh-CN" or "en".
-            Default: the language of the brief.
-        audience: Who it is for, e.g. 管理层, the client's board, new hires.
-        purpose: What it is for, e.g. 汇报 / 宣贯培训 / pitch / seminar talk.
-        page_count: Target number of slides; 0 lets the procedure decide.
-        source_paths: Absolute paths of uploaded files the deck draws on.
-        template_path: Absolute path of an uploaded .pptx/.potx whose design
-            the deck must follow or fill.
-        quick: True when the user asked for speed over the full planning pass.
+        language: BCP-47 tag, e.g. "zh-CN"; default: the brief's language.
+        audience: Who it is for, e.g. 管理层.
+        purpose: e.g. 汇报 / 宣贯培训 / pitch.
+        page_count: Target slides; 0 = the procedure decides.
+        source_paths: Uploaded files the deck draws on.
+        template_path: Uploaded .pptx/.potx whose design the deck follows or fills.
+        quick: True when the user asked for speed over planning.
     """
     started = time.monotonic()
     settings = current_settings()
@@ -613,19 +603,20 @@ def create_deck(
     # of files out of the chat's artifact list.
     deck_settings = settings.model_copy(update={"outputs_dir": workspace})
     progress = DeckProgress(workflow_event_sink_var.get(), target_pages=max(int(page_count or 0), 0))
-    log_workflow_event(
-        "deck_started",
-        {"title": title, "language": lang, "quick": bool(quick), "workspace": str(workspace),
-         "sources": len(sources), "template": bool(template)},
-    )
-    sink_token = workflow_event_sink_var.set(progress)
     report, error = "", ""
-    try:
-        report = run_deck_agent(task, deck_settings) or ""
-    except Exception as exc:  # noqa: BLE001 — a failed run is reported, not raised
-        error = f"{type(exc).__name__}: {exc}"
-    finally:
-        workflow_event_sink_var.reset(sink_token)
+    with sub_agent_scope(DECK_SKILL):
+        log_workflow_event(
+            "deck_started",
+            {"title": title, "language": lang, "quick": bool(quick), "workspace": str(workspace),
+             "sources": len(sources), "template": bool(template), "total": progress.target},
+        )
+        sink_token = workflow_event_sink_var.set(progress)
+        try:
+            report = run_deck_agent(task, deck_settings) or ""
+        except Exception as exc:  # noqa: BLE001 — a failed run is reported, not raised
+            error = f"{type(exc).__name__}: {exc}"
+        finally:
+            workflow_event_sink_var.reset(sink_token)
 
     elapsed = round(time.monotonic() - started, 1)
     exclude = {p.resolve() for p in sources} | ({template.resolve()} if template else set())

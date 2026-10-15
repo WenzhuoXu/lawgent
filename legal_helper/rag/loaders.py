@@ -37,10 +37,9 @@ def load_pdf(path: Path) -> str:
     layer (a scan) contributes nothing; the caller can detect a short total
     and flag it for OCR (``documents.pdf.read_pdf_text`` OCRs such pages).
 
-    This used PyMuPDF, which is AGPL — not shippable in this MIT tree or its
-    public mirror. PDFium's text order follows the content stream, which for
-    the two-column statute layouts the old block-sorting fallback handled is
-    already column order.
+    Not PyMuPDF, which is AGPL — not shippable in this MIT tree or its public
+    mirror. PDFium's text order follows the content stream, which for
+    two-column statute layouts is already column order.
     """
     if not _is_valid_pdf(path):
         raise RuntimeError(

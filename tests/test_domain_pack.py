@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from legal_helper.domains import available_packs, load_pack
@@ -56,8 +54,7 @@ def test_connectors_filter_by_pack() -> None:
 
     assert "flk_npc_search" in cn_only
     # Aviation pack flips on the aviation-tagged connectors that match the
-    # active jurisdiction set. Live ``ccar_search`` / ``ccar_fetch`` remain
-    # disabled, but the local CAAC corpus connector is available.
+    # active jurisdiction set; CAAC rules come from the local corpus connector.
     assert "caac_local_search" in multi_aviation
     assert "caac_local_fetch" in multi_aviation
     assert "faa_title14_search" in multi_aviation
@@ -75,13 +72,11 @@ def test_tool_registry_responds_to_active_packs() -> None:
 
     generic = skill_tools_for_task(
         "review-contract",
-        "attachments to read; deliverable docx",
         jurisdictions=["CN", "US"],
         active_packs=[],
     )
     aviation = skill_tools_for_task(
         "review-contract",
-        "attachments to read; deliverable docx",
         jurisdictions=["CN", "US"],
         active_packs=["aviation"],
     )

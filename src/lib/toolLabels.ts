@@ -1,6 +1,6 @@
 /**
- * Human-readable tool labels (bilingual) ported verbatim from main.jsx:320-453.
- * The UI never shows raw snake_case tool names.
+ * Human-readable tool labels (bilingual). The UI never shows raw snake_case
+ * tool names; an unlisted tool falls back to its name in title case.
  */
 
 type LabelEntry = { verb: string; running: string };
@@ -11,6 +11,13 @@ export const TOOL_LABELS: Record<string, LabelEntry> = {
   write_pdf: { verb: "Generated PDF", running: "Generating PDF…" },
   write_docx: { verb: "Generated DOCX", running: "Generating DOCX…" },
   create_deck: { verb: "Built presentation (ppt-master)", running: "Building presentation (ppt-master)…" },
+  run_workflow: { verb: "多智能体工作流 / Multi-agent workflow", running: "多智能体工作流运行中… / Running workflow…" },
+  load_skill: { verb: "Loaded method", running: "Loading method…" },
+  read_skill_file: { verb: "Read method reference", running: "Reading method reference…" },
+  load_pack: { verb: "Loaded domain pack", running: "Loading domain pack…" },
+  tool_search_call: { verb: "Searched tools", running: "Searching tools…" },
+  tool_search_tool_bm25: { verb: "Searched tools", running: "Searching tools…" },
+  tool_search_tool_result: { verb: "Tool search results", running: "Reading tool search results…" },
   run_procedure: { verb: "Ran document procedure", running: "Running document procedure…" },
   redline_docx: { verb: "Wrote tracked changes", running: "Writing tracked changes…" },
   compare_docx: { verb: "Compared documents", running: "Comparing documents…" },
@@ -25,9 +32,6 @@ export const TOOL_LABELS: Record<string, LabelEntry> = {
   extract_clauses: { verb: "Extracted clauses", running: "Extracting clauses…" },
   extract_citations: { verb: "Extracted citations", running: "Extracting citations…" },
   validate_citations: { verb: "Validated citations", running: "Validating citations…" },
-  list_skill_sections: { verb: "Indexed skill", running: "Indexing skill…" },
-  read_skill_section: { verb: "Read skill section", running: "Reading skill section…" },
-  read_playbook_section: { verb: "Read playbook", running: "Reading playbook…" },
   retrieve_legal: { verb: "Retrieved from corpus", running: "Retrieving from corpus…" },
   drs_search: { verb: "Searched FAA DRS", running: "Searching FAA DRS…" },
   drs_fetch: { verb: "Fetched DRS document", running: "Fetching DRS document…" },
@@ -48,6 +52,18 @@ export const TOOL_LABELS: Record<string, LabelEntry> = {
   caac_local_search: { verb: "Searched local CAAC corpus", running: "Searching local CAAC corpus…" },
   caac_local_fetch: { verb: "Fetched local CAAC document", running: "Fetching local CAAC document…" },
   legal_source_search: { verb: "Legal source lookup", running: "Legal source lookup…" },
+  courtlistener_fetch: { verb: "Read court opinion", running: "Reading court opinion…" },
+  ecfr_fetch: { verb: "Read eCFR section", running: "Reading eCFR section…" },
+  federal_register_fetch: { verb: "Read Federal Register document", running: "Reading Federal Register document…" },
+  govinfo_fetch: { verb: "Read GovInfo document", running: "Reading GovInfo document…" },
+  eurlex_fetch: { verb: "Read EUR-Lex document", running: "Reading EUR-Lex document…" },
+  ecaa_fetch: { verb: "Read ECAA document", running: "Reading ECAA document…" },
+  ecaa_index: { verb: "Indexed ECAA documents", running: "Indexing ECAA documents…" },
+  ethiopia_law_search: { verb: "Searched Ethiopian law", running: "Searching Ethiopian law…" },
+  ethiopia_law_fetch: { verb: "Read Ethiopian law", running: "Reading Ethiopian law…" },
+  run_skill_script: { verb: "Ran procedure script", running: "Running procedure script…" },
+  write_text_file: { verb: "Wrote file", running: "Writing file…" },
+  list_skill_dir: { verb: "Listed procedure files", running: "Listing procedure files…" },
   pkulaw_law_search__search_article: { verb: "北大法宝-法律法规检索（语义）", running: "北大法宝-法律法规检索（语义）…" },
   pkulaw_law_search__get_article: { verb: "北大法宝-法律法规取条文", running: "北大法宝-法律法规取条文…" },
   pkulaw_fatiao__get_law_item_content: { verb: "北大法宝-法条精读", running: "北大法宝-法条精读…" },
@@ -67,7 +83,9 @@ export const SOURCE_TOOL_NAMES = new Set<string>([
   "easa_ad_search", "easa_ad_fetch", "easa_ear_index", "faa_title14_search",
   "ecfr_search", "federal_register_search", "govinfo_search", "courtlistener_search",
   "eurlex_search", "flk_npc_search", "flk_npc_fetch", "ccar_search", "ccar_fetch",
-  "caac_local_search", "caac_local_fetch",
+  "caac_local_search", "caac_local_fetch", "courtlistener_fetch", "ecfr_fetch",
+  "federal_register_fetch", "govinfo_fetch", "eurlex_fetch", "ecaa_fetch", "ecaa_index",
+  "ethiopia_law_search", "ethiopia_law_fetch",
   "pkulaw_law_search__search_article", "pkulaw_law_search__get_article",
   "pkulaw_fatiao__get_law_item_content", "pkulaw_case_search__search_case",
   "pkulaw_case_list__get_case_list", "pkulaw_doc_link__get_linked_content",

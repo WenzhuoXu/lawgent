@@ -1,4 +1,5 @@
-"""Document tools: write_docx, write_pdf, read_document."""
+"""Document tools: write, read, inspect, edit and render Word, PDF,
+spreadsheet and slide files."""
 
 import json
 import re
@@ -20,16 +21,12 @@ from ..documents import (
     edit_xlsx_workbook,
     diff_xlsx_workbooks,
     extract_pdf_tables_document,
-    extract_docx_text,
-    extract_pptx_text,
-    extract_xlsx_text,
     inspect_docx_document,
     inspect_pdf_document,
     inspect_pptx_deck,
     inspect_xlsx_range_workbook,
     inspect_xlsx_workbook,
     merge_pdf_files,
-    read_pdf_text,
     render_pdf_to_images,
     reshape_docx_document,
     reshape_pptx_deck,
@@ -55,14 +52,9 @@ class Section(BaseModel):
     body_markdown: str = Field(
         ...,
         description=(
-            "Section body in CommonMark + GFM. Rendered: # to ###### headings (nested "
-            "under the section heading), **bold**, *italic*, ~~strike~~, `code`, fenced "
-            "code, > quotes, [text](https://…) as live hyperlinks, [^1] footnotes as real "
-            "Word footnotes, ordered and bullet lists nested by indentation (each list "
-            "numbers from its own first item), pipe tables with :--: alignment (header "
-            "row repeats on every page), <br> line breaks, and ![alt](image.png) for an "
-            "image already under outputs/. A single newline starts a new paragraph; "
-            "other raw HTML is printed as text."
+            "Section body in Markdown (GFM): headings, emphasis, lists nested by indent, "
+            "pipe tables, [text](url) links, [^1] footnotes, <br>, ![alt](file under outputs/). "
+            "A single newline starts a new paragraph."
         ),
     )
 
@@ -296,31 +288,21 @@ def write_docx(
     reference_docx: str = "",
     subtitle: str = "",
 ) -> str:
-    """Write a .docx document under outputs/. Returns the absolute path.
+    """Write a Word (.docx) document under outputs/; returns its path.
 
-    A Chinese document (most of its words Chinese, or lang='zh') is A4 with
-    宋体 body, 黑体 headings, 首行缩进 and a "第 X 页 共 Y 页" footer; an English
-    one is Letter with "Page X of Y". The not-legal-advice notice goes into the
-    file's properties in the document's language, never into the text. When
-    the written file fails a file check (e.g. literal Markdown left in the
-    text), the result is ``{"path", "lint"}`` instead of the bare path.
+    Chinese is A4 with PRC typography and "第 X 页 共 Y 页"; English is Letter.
+    The not-legal-advice notice goes in the file's properties, never the text.
 
     Args:
-        filename: Desired filename (with or without .docx extension).
-        title: Document title rendered on the first page.
-        sections: Ordered list of {heading, body_markdown} sections.
-        lang: Typography and footer language; 'auto' decides by the share of Han characters.
-        layout: 'memo' (default) or 'gbt9704' for a 公文: A4, GB/T 9704 margins and
-            22x28 grid, 3号仿宋 body, 一、（一）1.（1） headings in 黑体/楷体/仿宋,
-            2号小标宋 title, "— n —" page numbers.
-        page_size: 'auto' (A4 for Chinese, Letter for English), 'A4' or 'Letter'.
-        disclaimer: 'properties' (default) writes the AI notice into document
-            properties; 'none' omits it — use for court filings (起诉状、答辩状、上诉状),
-            律师函 and anything to be signed, and give disclaimer_reason.
-        disclaimer_reason: Required with disclaimer='none': why the notice is omitted.
-        reference_docx: Optional path of a firm or court template (.docx/.dotx). Its body
-            is cleared and the content is written in its own styles, page setup, headers
-            and footers.
+        filename: File name (.docx optional).
+        title: Title on the first page.
+        sections: Ordered {heading, body_markdown} sections.
+        lang: auto | zh | en (auto: by share of Han characters).
+        layout: memo | gbt9704 (GB/T 9704 公文 page, fonts and numbering).
+        page_size: auto | A4 | Letter.
+        disclaimer: properties | none (filings, 律师函, documents to be signed; give disclaimer_reason).
+        disclaimer_reason: Why the notice is omitted (with disclaimer='none').
+        reference_docx: Optional firm/court template (.docx/.dotx) to write into.
         subtitle: Optional line under the title.
     """
     effective_lang = "zh" if layout == "gbt9704" and lang == "auto" else resolve_lang(
@@ -375,25 +357,20 @@ def write_pdf(
     disclaimer_reason: str = "",
     subtitle: str = "",
 ) -> str:
-    """Render Markdown into a .pdf document under outputs/. Returns the absolute path.
+    """Write a PDF from Markdown under outputs/; returns its path.
 
-    Same Markdown as write_docx (headings, lists nested by indentation, tables whose
-    header repeats on every page, [text](https://…) links, [^1] footnotes at the page
-    foot, ~~strike~~, <br>). Chinese content is A4 with "第 X 页 共 Y 页"; English is
-    Letter with "Page X of Y". The not-legal-advice notice is the PDF's Subject
-    metadata in the document's language, never page content. When the written
-    text still contains literal Markdown, the result is ``{"path", "lint"}``.
+    Same Markdown and page rules as write_docx; the not-legal-advice notice is
+    the PDF's Subject metadata, never page content.
 
     Args:
-        filename: Desired filename (with or without .pdf extension).
-        title: Document title rendered at the top of the first page.
-        body_markdown: Document body in Markdown.
-        lang: Typography and footer language; 'auto' decides by the share of Han characters.
-        layout: 'memo' (default) or 'gbt9704' (GB/T 9704 公文 page, fonts and "— n —" numbers).
-        page_size: 'auto' (A4 for Chinese, Letter for English), 'A4' or 'Letter'.
-        disclaimer: 'properties' (default) or 'none' for filings and signed letters,
-            with disclaimer_reason.
-        disclaimer_reason: Required with disclaimer='none': why the notice is omitted.
+        filename: File name (.pdf optional).
+        title: Title at the top of the first page.
+        body_markdown: Body in Markdown.
+        lang: auto | zh | en.
+        layout: memo | gbt9704.
+        page_size: auto | A4 | Letter.
+        disclaimer: properties | none (filings and signed letters; give disclaimer_reason).
+        disclaimer_reason: Why the notice is omitted.
         subtitle: Optional line under the title.
     """
     effective_lang = "zh" if layout == "gbt9704" and lang == "auto" else resolve_lang(
@@ -694,10 +671,9 @@ def _visual_result(
     matters.
 
     For a file the model authored, the pages are also *measured*
-    (:mod:`legal_helper.documents.quality`) and the findings travel with them.
-    The prose this replaced asked the model to check for overflow, blank pages,
-    overlaps and inconsistent margins — every one of which is now arithmetic,
-    and none of which an instruction could guarantee was actually performed.
+    (:mod:`legal_helper.documents.quality`) and the findings travel with them:
+    overflow, blank pages, overlaps and inconsistent margins are arithmetic,
+    not an instruction nobody can tell was followed.
     ``pdf`` is the render the pages came from; the DOCX page checks (a table
     running onto a page without its header row) read it.
     """
@@ -754,10 +730,9 @@ def _review_dir(settings: Any, prefix: str, source: Path) -> Path:
 def _derived_output(source: Path, filename: str, extension: str) -> tuple[Path, str]:
     """The output path for an edit of ``source`` — never ``source`` itself.
 
-    7 of 121 recorded edit calls named their own source as the output and
-    overwrote it, so the original could no longer be diffed, integrity-checked
-    or re-edited. The edit now goes to the next free ``<stem>_vN`` name and
-    the result says so.
+    7 of 121 recorded edit calls named their own source as the output, which
+    would leave nothing to diff, integrity-check or re-edit. Such an edit goes
+    to the next free ``<stem>_vN`` name and the result says so.
     """
     out = _output_path(filename, extension)
     try:
@@ -1058,8 +1033,8 @@ def edit_pptx_text(source_path: str, filename: str, replacements: list[SlideText
         result = edit_pptx_text_in_package(source, out, [r.model_dump() for r in replacements])
     except Exception as e:
         return f"ERROR editing {source}: {e}"
-    # The counts were computed and dropped: a find that matched nothing came
-    # back as a bare path, indistinguishable from a successful edit.
+    # Report the counts: a find that matched nothing must not read as a
+    # successful edit.
     counts = result.get("replacements") or {}
     payload: dict[str, Any] = {"path": str(out.resolve()), "replacements": counts}
     missed = [key for key, n in counts.items() if not n]
@@ -1652,25 +1627,18 @@ def read_document(
     section: str = "",
     member: str = "",
 ) -> str:
-    """Read a document as text: Word (.docx .doc .rtf .odt .wps), spreadsheets
-    (.xlsx .xls .ods .et), presentations (.pptx .ppt .odp), PDF (scanned pages
-    are OCR'd), OFD, EPUB, images (OCR), text files, and .zip archives.
-
-    Word files show tracked changes as {++inserted++} / {--deleted--} under a
-    one-line summary of who changed what, headers and footers as [Header] /
-    [Footer], and auto-numbering as Word renders it (第一条, not 第1条). PDF
-    and OFD text is marked [page N]; OCR'd pages say so. A .zip lists its
-    members — read one with ``member`` or ``path="archive.zip::inner.docx"``.
-    A binary format that cannot be read returns an error naming what can.
+    """Read any document as text: Word, spreadsheets, presentations, PDF and
+    OFD (scans OCR'd), EPUB, images (OCR), text, and .zip archives (members
+    listed). Word tracked changes read as {++ins++} / {--del--}; PDF/OFD text
+    is marked [page N].
 
     Args:
-        path: Absolute or project-relative path to the file; ``archive.zip::member`` reads a zip member.
-        offset: First line to return (0-based). Use to page through a long file.
-        limit: Maximum number of lines to return; 0 returns the rest of the file.
-        pages: PDF/OFD pages or presentation slides to read, 1-based, e.g. "3-5,8"; empty reads all.
-        section: Return one clause or section: its label as the document shows it ("第三条",
-            "3.2", "Article 5", "（二）") or words of its heading.
-        member: A member of a .zip archive to read instead of listing the archive.
+        path: File path; ``archive.zip::member`` reads a zip member.
+        offset: First line to return (0-based), to page a long file.
+        limit: Lines to return; 0 = the rest.
+        pages: PDF/OFD pages or slides, 1-based, e.g. "3-5,8".
+        section: One clause or section by its label ("第三条", "3.2", "Article 5") or heading words.
+        member: A .zip member to read.
     """
     import zipfile
 

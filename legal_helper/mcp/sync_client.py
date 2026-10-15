@@ -1,10 +1,7 @@
 """Synchronous JSON-RPC client over MCP streamable-HTTP.
 
-The async :class:`McpManager` keeps a long-lived pool that is the right fit
-for the Claude Desktop / OpenAI MCP client use case. Inside our agent runtime
-the model calls one tool at a time and the surrounding plumbing is sync, so a
-small blocking client is simpler and avoids needing an event loop inside
-``BetaFunctionTool.call``.
+Tool calls run inside a synchronous ``BetaFunctionTool.call``, so a small
+blocking client avoids needing an event loop there.
 
 Used by ``tools/mcp_tools.py`` to fetch each MCP server's ``tools/list`` and
 to dispatch ``tools/call`` invocations triggered by the model.

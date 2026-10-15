@@ -8,6 +8,7 @@ hash embedder, so nothing here downloads or loads model weights.
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -209,6 +210,124 @@ def test_rerank_order_degrades_gracefully() -> None:
         assert order == [(0, None), (1, None)]
     finally:
         rerank_mod.set_reranker(None)
+
+
+class ReleaseTracker:
+    """Records every score and release, in order."""
+
+    name = "release-tracker"
+
+    def __init__(self) -> None:
+        self.log: list[str] = []
+
+    def score(self, query: str, texts) -> list[float]:
+        self.log.append("score")
+        return [float(len(t)) for t in texts]
+
+    def release(self) -> bool:
+        self.log.append("release")
+        return True
+
+
+def test_retrieve_releases_the_models_when_the_search_finishes(tmp_path: Path, monkeypatch) -> None:
+    import importlib
+
+    retrieve_mod = importlib.import_module("legal_helper.rag.retrieve")
+    monkeypatch.setattr("legal_helper.rag.store.default_embedder", FakeEmbedder)
+    embedder = ReleaseTracker()
+    monkeypatch.setattr("legal_helper.rag.embeddings._DEFAULT_EMBEDDER", embedder)
+    path = tmp_path / "qdrant"
+    _seed(retrieve_mod._store(path))
+
+    reranker = ReleaseTracker()
+    rerank_mod.set_reranker(reranker)
+    try:
+        assert retrieve_mod.retrieve("航路", collection="statutes", k=3, store_path=path, rerank=True)
+    finally:
+        rerank_mod.set_reranker(None)
+    assert reranker.log == ["score", "release"]
+    assert embedder.log == ["release"]
+
+
+def test_overlapping_holds_release_only_when_the_last_one_exits(monkeypatch) -> None:
+    from legal_helper.rag.retrieve import models_held
+
+    reranker = ReleaseTracker()
+    rerank_mod.set_reranker(reranker)
+    try:
+        # Two chats searching at once, the first finishing first.
+        first, second = models_held(), models_held()
+        first.__enter__()
+        second.__enter__()
+        first.__exit__(None, None, None)
+        assert reranker.log == [], "a search still running must keep its model"
+        second.__exit__(None, None, None)
+        assert reranker.log == ["release"]
+
+        with models_held():
+            with models_held():
+                pass
+            assert reranker.log == ["release"]
+        assert reranker.log == ["release", "release"]
+    finally:
+        rerank_mod.set_reranker(None)
+
+
+def test_retrieve_legal_loads_once_across_the_collections_it_searches(monkeypatch) -> None:
+    import importlib
+
+    from legal_helper.tools.rag_tools import retrieve_legal
+
+    retrieve_mod = importlib.import_module("legal_helper.rag.retrieve")
+    monkeypatch.setattr("legal_helper.rag.store.default_embedder", FakeEmbedder)
+    store = retrieve_mod._store()
+    _seed(store, "aviation_treaties")
+    _seed(store, "icao_doc")
+
+    reranker = ReleaseTracker()
+    rerank_mod.set_reranker(reranker)
+    try:
+        payload = json.loads(retrieve_legal.call({"query": "航路", "collection": "aviation", "k": 3}))
+    finally:
+        rerank_mod.set_reranker(None)
+    assert payload["resolved_collections"] == ["aviation_treaties", "icao_doc"]
+    assert reranker.log == ["score", "score", "release"]
+
+
+def test_released_models_reload_on_next_use(monkeypatch) -> None:
+    import sys
+    import types
+
+    from legal_helper.rag.embeddings import BgeM3Embedder
+
+    loads: list[str] = []
+
+    class FakeModel:
+        def __init__(self, name: str) -> None:
+            loads.append(name)
+
+        def encode(self, texts, **_kwargs):
+            return [[0.0] for _ in texts]
+
+        def predict(self, pairs):
+            return [0.0 for _ in pairs]
+
+    fake = types.ModuleType("sentence_transformers")
+    fake.SentenceTransformer = fake.CrossEncoder = FakeModel
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+
+    for model, use in (
+        (BgeM3Embedder(), lambda m: m.encode(["x"])),
+        (rerank_mod.CrossEncoderReranker("fake/reranker"), lambda m: m.score("q", ["x"])),
+    ):
+        loads.clear()
+        use(model)
+        use(model)
+        assert len(loads) == 1
+        assert model.release() is True
+        assert model.release() is False, "nothing left to release"
+        use(model)
+        assert len(loads) == 2
 
 
 def test_recall_at_3_exact_article_golden_set(store: QdrantStore) -> None:

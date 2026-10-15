@@ -12,12 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .aviation import ccar_fetch, ccar_search, faa_title14_search
+from .aviation import faa_title14_search
 from .caac_local import caac_local_fetch, caac_local_search
 from .easa_safety import easa_ad_fetch, easa_ad_search, easa_ear_index
 from .ethiopia import ecaa_fetch, ecaa_index, ethiopia_law_fetch, ethiopia_law_search
 from .eu import eurlex_fetch, eurlex_search
-from .faa_drs import drs_fetch, drs_search
+from .faa_drs import drs_search
 from .prc import flk_npc_fetch, flk_npc_search
 from .us_courts import courtlistener_fetch, courtlistener_search
 from .us_federal import (
@@ -56,18 +56,7 @@ REGISTRY: tuple[ConnectorEntry, ...] = (
     ConnectorEntry("faa_title14_search", faa_title14_search, ("US", "ICAO"), ("aviation",)),
     ConnectorEntry("caac_local_search", caac_local_search, ("CN", "ICAO"), ("aviation",)),
     ConnectorEntry("caac_local_fetch", caac_local_fetch, ("CN", "ICAO"), ("aviation",)),
-    # ccar_search / ccar_fetch disabled — CAAC search endpoint moved to
-    # api.so-gov.cn behind a JS-rendered form; current scraper returns 404.
-    # Re-enable once a working scraper is wired (or replace with PKULaw).
-    # ConnectorEntry("ccar_search", ccar_search, ("CN", "ICAO"), ("aviation",)),
-    # ConnectorEntry("ccar_fetch", ccar_fetch, ("CN", "ICAO"), ("aviation",)),
     ConnectorEntry("drs_search", drs_search, ("US",), ("aviation",)),
-    # drs_fetch disabled — drs.faa.gov is a pure SPA; both browse and
-    # document-detail URLs return only the JS shell (~25 chars of text)
-    # to a non-browser client. Agents should follow the html_url field
-    # in drs_search results (federalregister.gov links are static HTML)
-    # or use fetch_url_to_artifact on a known FAA PDF URL.
-    # ConnectorEntry("drs_fetch", drs_fetch, ("US",), ("aviation",)),
     ConnectorEntry("easa_ad_search", easa_ad_search, ("EU",), ("aviation",)),
     ConnectorEntry("easa_ad_fetch", easa_ad_fetch, ("EU",), ("aviation",)),
     ConnectorEntry("easa_ear_index", easa_ear_index, ("EU",), ("aviation",)),
@@ -97,13 +86,10 @@ __all__ = [
     "ConnectorEntry",
     "REGISTRY",
     "filter_for",
-    "ccar_fetch",
-    "ccar_search",
     "caac_local_fetch",
     "caac_local_search",
     "courtlistener_fetch",
     "courtlistener_search",
-    "drs_fetch",
     "drs_search",
     "easa_ad_fetch",
     "easa_ad_search",

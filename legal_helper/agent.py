@@ -1,12 +1,13 @@
 """Specialist sub-agents.
 
-The workflow executor (``workflow.py``) plans a turn and, for a multi-issue
-request, runs several specialists in parallel; each is a ``SkillAgent`` with a
-forked context. An in-tree skill gets its SKILL.md method, the general
-playbook, the research conduct and the specialist bundle contract inlined; an
-external procedural skill (ppt-master) gets the host runtime contract instead.
-Only a specialist's bundle returns to the author — its internal turns stay in
-the JSONL log under the same parent run_id.
+When the author calls ``run_workflow`` (``multi_agent.py``), each specialist
+that runs a method is a ``SkillAgent`` with a forked context; the deck and
+procedure tools and the citation audit drive one the same way. An in-tree
+skill gets its SKILL.md method, the general playbook, the research conduct
+and the specialist bundle contract inlined; an external procedural skill
+(ppt-master) gets the host runtime contract instead. Only a specialist's
+bundle returns to its caller — its internal turns stay in the JSONL log under
+the same parent run_id.
 """
 
 from __future__ import annotations
@@ -170,8 +171,8 @@ def _inline_pack_playbooks(active_packs: list[DomainPack]) -> str:
 
 def _inline_pack_research_sources(active_packs: list[DomainPack]) -> str:
     """Each active pack's source routing — the domain's regulators, connectors
-    and collections. It used to sit in the generic specialist contract, which
-    put one domain's tool routing in front of every specialist on every run."""
+    and collections. Kept out of the generic specialist contract, so one
+    domain's tool routing reaches only the runs that have its pack active."""
     blocks: list[str] = []
     for pack in active_packs:
         path = pack.research_sources_path
@@ -186,25 +187,7 @@ def _inline_pack_research_sources(active_packs: list[DomainPack]) -> str:
     return "".join(blocks)
 
 
-def _inline_pack_overlays(active_packs: list[DomainPack], skill_name: Optional[str]) -> str:
-    """The active packs' overlay for the chosen skill, inlined for the author."""
-    if not skill_name:
-        return ""
-    blocks: list[str] = []
-    for pack in active_packs:
-        overlay = pack.overlay_for(skill_name)
-        if overlay is None:
-            continue
-        try:
-            body = overlay.read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if body:
-            blocks.append(f"\n# `{pack.name}` pack overlay for `{skill_name}`\n\n{body}\n")
-    return "".join(blocks)
-
-
-def _build_parent_addendum(settings: Settings, *, skill_name: Optional[str] = None) -> str:
+def _build_parent_addendum(settings: Settings) -> str:
     """Per-run jurisdiction + active-pack block appended to an author's prompt.
 
     The project's brief and memory are not here: they open the chat digest the
@@ -228,7 +211,6 @@ def _build_parent_addendum(settings: Settings, *, skill_name: Optional[str] = No
         # month, each a full tool iteration re-billed on every later one.
         parts.append(_inline_pack_playbooks(active_packs))
         parts.append(_inline_pack_research_sources(active_packs))
-        parts.append(_inline_pack_overlays(active_packs, skill_name))
     try:
         from .projects import active_project_id
 
@@ -256,38 +238,12 @@ def _has_out_of_scope(text: str) -> bool:
     return "## Out of scope" in text
 
 
-def _has_legacy_scaffold(text: str) -> bool:
-    """True when the sub-agent leaked the deprecated polished-output sections."""
-    return any(marker in text for marker in (
-        "Evidence Verification Log",
-        "Claim-Level Sanity Check",
-        "Reporting / Escalation Map",
-        "在线证据核验记录",
-        "逐项主张核验",
-    ))
-
-
 def _section_preview(text: str, markers: tuple[str, ...], *, limit: int = 1600) -> str:
     starts = [idx for marker in markers if (idx := text.find(marker)) >= 0]
     if not starts:
         return ""
     start = min(starts)
     return text[start : start + limit].strip()
-
-
-def _build_user_message(task: str, attachments: Iterable[Path]) -> str:
-    """Plain-text rendering of the user turn used by the cheap planner.
-
-    Filenames are appended as a hint so the planner can route based on
-    what is attached. The provider only sees actual file bytes via
-    `build_user_content` at the sub-agent / integration-step boundary.
-    """
-    parts = [task.strip()]
-    paths = [str(Path(p)) for p in (attachments or [])]
-    if paths:
-        parts.append("\nAttachments (the model will see file contents at execution time):")
-        parts.extend(f"- {p}" for p in paths)
-    return "\n".join(parts)
 
 
 def _external_skill_prompt(skill_name: str, outputs_dir: Path) -> str:
@@ -353,6 +309,7 @@ authoritative for *how* to act in this harness.
 | read a file (any absolute path) | `read_document(path=...)` |
 | list a directory inside the skill | `list_skill_dir(skill="{skill_name}", subpath="...")` |
 | write/author a text file (.svg, .md, .json, .css) | `write_text_file(path=..., content=...)` |
+| change part of a file you wrote (a fix, a repair) | `edit_text_file(path=..., old_string=..., new_string=...)` — not a full rewrite |
 | run one of its scripts (`python3 ${{SKILL_DIR}}/scripts/x.py a b`) | `run_skill_script(skill="{skill_name}", script="scripts/x.py", args=["a", "b"])` |
 | look at a rendered page | `render_pptx_slides` / `render_pdf_pages` / `view_image` |
 
@@ -367,7 +324,7 @@ most {MAX_TIMEOUT_S}); give a long export or conversion a larger one.
 {read_paging}
 ## Where work goes
 
-The work directory is `{outputs_dir}`; `write_text_file` writes only under it
+The work directory is `{outputs_dir}`; `write_text_file` and `edit_text_file` write only under it
 and scripts run with it as their current directory. Put the project under a
 named subdirectory of it — `<project-name>/` — and pass absolute paths under it
 to the skill's scripts.
@@ -493,8 +450,8 @@ class SkillAgent:
         )
         # Inlined rather than fetched: withholding this content made a
         # section-fetch handshake open every dispatch, and 51.9% of specialist
-        # tool calls were instruction fetches. The section readers are gone;
-        # `read_skill_reference` remains for the long `references/` tail.
+        # tool calls were instruction fetches. `read_skill_reference` serves
+        # the long `references/` tail.
         prompt += _inline_skill_methodology(
             self.skill_name, self.settings.active_domain_packs
         )
@@ -530,10 +487,9 @@ class SkillAgent:
             return self.settings.external_skill_max_iterations
         return self.settings.sub_agent_max_iterations
 
-    def _tools(self, task: str = "") -> list:
+    def _tools(self) -> list:
         tools = skill_tools_for_task(
             self.skill_name,
-            task,
             jurisdictions=[self.settings.default_jurisdiction, *self.settings.secondary_jurisdictions],
             active_packs=self.settings.active_domain_packs,
         )
@@ -573,7 +529,7 @@ class SkillAgent:
                     "attachment_count": len(attachment_paths),
                 },
             )
-            tools = self._tools(task)
+            tools = self._tools()
             result = self.provider.tool_runner(
                 system=self._system_prompt(tools),
                 messages=[
@@ -594,7 +550,6 @@ class SkillAgent:
                     "has_findings": _has_findings(text),
                     "has_out_of_scope": _has_out_of_scope(text),
                     "has_sources": _has_sources(text),
-                    "has_legacy_scaffold_leak": _has_legacy_scaffold(text),
                     "findings_preview": _section_preview(text, ("## Findings",)),
                     "sources_preview": _section_preview(text, ("## Sources",)),
                 },
@@ -615,9 +570,9 @@ class SkillAgent:
         """Stream a specialist turn while preserving parent/sub-run logging context.
 
         ``cache_prefix`` is the chat digest (project, files, transcript,
-        summary). Specialists used to get only their task text, so files
-        uploaded in an earlier turn were unreachable and the facts the user
-        had already given had to be re-derived from a 700-character task.
+        summary). Without it a specialist sees only its task text: files
+        uploaded in an earlier turn are unreachable and the facts the user
+        already gave must be re-derived from a 700-character task.
         """
         parent_run_id = run_id_var.get()
         sub_run_id = new_run_id()
@@ -637,7 +592,7 @@ class SkillAgent:
                     "attachment_count": len(attachment_paths),
                 },
             )
-            tools = self._tools(task)
+            tools = self._tools()
             for ev in self.provider.stream(
                 system=self._system_prompt(tools),
                 messages=[
@@ -660,7 +615,6 @@ class SkillAgent:
                     "has_findings": _has_findings(text),
                     "has_out_of_scope": _has_out_of_scope(text),
                     "has_sources": _has_sources(text),
-                    "has_legacy_scaffold_leak": _has_legacy_scaffold(text),
                     "findings_preview": _section_preview(text, ("## Findings",)),
                     "sources_preview": _section_preview(text, ("## Sources",)),
                     "stream": True,

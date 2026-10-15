@@ -1,10 +1,8 @@
 """One output contract for every author and specialist.
 
-The contract used to live in six places that disagreed: the single-pass system
-prompt, the integration prompt, the orchestrator prompt, the specialist
-contract, the repair prompt and the heuristic plan — plus a flat "≤ 2000
-characters" in twelve SKILL.md files against "~700 per coverage token" here,
-three different label sets, and English status words (`pinpoint unavailable`)
+The contract used to live in several places that disagreed — different label
+sets, a flat "≤ 2000 characters" in twelve SKILL.md files against "~700 per
+coverage token" here, and English status words (`pinpoint unavailable`)
 hard-coded into answers written in Chinese (95% of September's Chinese answers
 carried the English token). Everything an answer must look like is rendered
 from this module, and ``tests/test_answer_contract.py`` fails when a prompt
@@ -12,10 +10,10 @@ grows its own copy.
 
 Two contracts:
 
-- **Author** — the single-pass author and the integrator write the answer the
-  user reads. One sources list, one line per source, status words in the
-  answer's language; no claim column (it restated the body: 28.5% of an
-  answer's length); no disclaimer (the interface and exports show it once).
+- **Author** — the chat's model writes the answer the user reads. One sources
+  list, one line per source, status words in the answer's language; no claim
+  column (it restated the body: 28.5% of an answer's length); no disclaimer
+  (the interface and exports show it once).
 - **Specialist** — research sub-agents write internal bundles the author reads.
 """
 
@@ -23,7 +21,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Optional
+from typing import Optional
 
 # --- language -----------------------------------------------------------------
 
@@ -35,11 +33,9 @@ _URL_RE = re.compile(r"https?://\S+|\S+@\S+|`[^`]*`")
 def detect_language(text: str, default: str = "Chinese") -> str:
     """The answer language for ``text``, from its script share.
 
-    The planner used to supply this and the parser defaulted to English when it
-    did not, so a 241-character Chinese request got a 10,309-character English
-    memo. URLs, e-mail addresses and code spans are ignored; a Latin word
-    counts like one Han character, since a Chinese request routinely names
-    English instruments.
+    URLs, e-mail addresses and code spans are ignored; a Latin word counts like
+    one Han character, since a Chinese request routinely names English
+    instruments.
     """
     cleaned = _URL_RE.sub(" ", text or "")
     han = len(_HAN_RE.findall(cleaned))
@@ -83,14 +79,18 @@ STATUS = {
 
 LENGTH_TIERS = ("brief", "focused", "full")
 
-_TIER_FOR_COMPLEXITY = {"simple": "brief", "standard": "focused", "complex": "full"}
-
-#: OpenAI ``text.verbosity`` per tier. Only the brief tier moves off the
+#: OpenAI ``text.verbosity`` per pinned tier. Only the brief tier moves off the
 #: default: simple questions were answered at a median of 4,457 characters and
-#: a quarter of them ran longer than the 8.5k gold memo.
-VERBOSITY = {"brief": "low", "focused": "medium", "full": "medium"}
+#: a quarter of them ran longer than the 8.5k gold memo. ``auto`` — no pinned
+#: tier, the author sizes the answer — sends none.
+VERBOSITY = {"brief": "low", "focused": "medium", "full": "medium", "auto": None}
 
 _LENGTH_SENTENCE = {
+    "auto": (
+        "Length: fit the request — a narrow question gets the conclusion and the "
+        "reasoning that supports it; a request with several issues covers each, "
+        "in the order asked, at the depth it needs."
+    ),
     "brief": (
         "Length: brief — give the conclusion and the controlling rule with its "
         "pinpoint, then only the reasoning needed to support it."
@@ -106,17 +106,18 @@ _LENGTH_SENTENCE = {
 }
 
 
-def length_tier(complexity: Optional[str], override: Optional[str] = None) -> str:
-    """The answer's length tier: a pinned chat setting wins, else complexity."""
+def length_tier(override: Optional[str] = None) -> str:
+    """The answer's length tier: the chat's pinned tier, else ``auto`` — the
+    author sizes each answer from the request."""
     if override in LENGTH_TIERS:
         return override  # type: ignore[return-value]
-    return _TIER_FOR_COMPLEXITY.get((complexity or "").strip().lower(), "focused")
+    return "auto"
 
 
 def length_instruction(tier: str) -> str:
     """One sentence. An explicit length or deliverable request always wins."""
     return (
-        _LENGTH_SENTENCE.get(tier, _LENGTH_SENTENCE["focused"])
+        _LENGTH_SENTENCE.get(tier, _LENGTH_SENTENCE["auto"])
         + " If the user asked for a particular length or deliverable, that request "
         "wins. Mention adjacent issues worth a follow-up in one line each at the "
         "end instead of analysing them."
@@ -143,8 +144,10 @@ def today_line(now: Optional[datetime] = None) -> str:
 def _sources_rule() -> str:
     zh, en = STATUS["zh"], STATUS["en"]
     return (
-        f"- End with exactly one sources section: `## {SOURCES_HEADING['zh']}` in "
-        f"a Chinese answer, `## {SOURCES_HEADING['en']}` in an English one. One "
+        f"- An answer that states law ends with exactly one sources section: "
+        f"`## {SOURCES_HEADING['zh']}` in a Chinese answer, `## {SOURCES_HEADING['en']}` "
+        "in an English one (a reply that states no law — a translation, a reasoning "
+        "question, a greeting — needs none). One "
         "numbered line per source the answer relies on — no table, no claim "
         "column (the body already states the claims):\n"
         "  `1. Source name, pinpoint — status`\n"
@@ -183,35 +186,46 @@ def author_rules() -> str:
             _sources_rule(),
             "- Do not add a not-legal-advice line; the interface and every export "
             "already carry one.",
-            "- When the user asks for a file (Word, PDF, spreadsheet, deck), make "
-            "it with the matching tool and give its path; do not paste the "
-            "document body into the chat instead.",
         ]
     )
 
 
-def author_tail(
-    *,
-    user_language: str,
-    tier: str,
-    must_cover: str = "",
-    fact_conflicts: Iterable[str] = (),
-    assumptions: str = "",
-) -> str:
+def deliverable_rules() -> str:
+    """How a file written for other people is written, on every authoring path.
+
+    The author writes as the requester, for the file's readers. What only the
+    requester needs travels in the reply, the way the not-legal-advice notice
+    travels in the file's properties: never in the instrument. Without this,
+    the reply rule ("give the path, do not paste the body") left the author no
+    place for its notes to the requester, and they went into the file — an
+    opinion to a reviewed department carried the reviewer's own score-sheet
+    corrections and the author's evidence caveats, at 3.6–4.5× the length of
+    the model opinion the user had supplied.
+    """
+    return "\n".join(
+        [
+            "# Files written for other people",
+            "- When the user asks for a file (Word, PDF, spreadsheet, deck), make "
+            "it with the matching tool and give its path; do not paste the "
+            "document body into the chat instead.",
+            "- The file is read by the people it is addressed to, not by the "
+            "person who asked for it. Write it in the requester's voice, for those "
+            "readers, at the length and in the register they expect. When the "
+            "user points to an example or a template, its length, structure and "
+            "register are your best evidence of what they expect.",
+            "- What only the requester needs — what you assumed, what the "
+            "materials did not let you confirm, what to check before sending, "
+            "where you disagree with their own inputs — goes in your reply next "
+            "to the file's link, not into the file.",
+        ]
+    )
+
+
+def author_tail(*, user_language: str, tier: str) -> str:
     """The volatile part of an author's request: everything that changes per turn."""
-    parts = [today_line(), f"Answer language: {user_language}.", length_instruction(tier)]
-    if must_cover.strip():
-        parts.append("What the answer must cover:\n" + must_cover.strip())
-    conflicts = [c.strip() for c in fact_conflicts if c and c.strip()]
-    if conflicts:
-        parts.append(
-            "The facts as given contradict each other — do not compute through "
-            "this. Say which reading you adopt and how the answer changes on the "
-            "other:\n" + "\n".join(f"- {c}" for c in conflicts)
-        )
-    if assumptions.strip():
-        parts.append(assumptions.strip())
-    return "\n\n".join(parts)
+    return "\n\n".join(
+        [today_line(), f"Answer language: {user_language}.", length_instruction(tier)]
+    )
 
 
 # --- specialist contract --------------------------------------------------------
@@ -270,8 +284,8 @@ the material.
 - No bullet restates another; merge propositions that share an authority.
 - A pinpoint you could not confirm is written `pinpoint unavailable` and the
   claim is softened; never invent article numbers, dates, agencies or forms.
-- Length: about 700 characters of Findings per `coverage:` token in your task
-  (floor ~1,800, ceiling ~6,000). Every coverage token gets at least one
+- Length: about 700 characters of Findings per point your task asks you to
+  cover (floor ~1,800, ceiling ~6,000). Every such point gets at least one
   pinpointed bullet. Issues and Artefacts are outside this budget.
 - Do not write an introduction, summary, recap, scenario walkthrough or a
   separate verification log; the author owns presentation.

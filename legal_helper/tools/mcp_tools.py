@@ -6,10 +6,9 @@ wrapped as ``BetaFunctionTool`` instances with namespaced names of the form
 the same way as any in-tree connector, satisfying the provider-parity
 contract.
 
-Only HTTP MCPs are wired this way (the JSON-RPC body is small enough to do
-synchronously per call). The stdio path stays in :class:`McpManager` for
-clients that want to host MCP servers as subprocesses outside the agent
-runtime.
+Only HTTP MCPs are wired this way: the JSON-RPC body is small enough to send
+synchronously per call. The stdio servers in ``.mcp.json`` serve external
+clients; the harness reaches their sources through in-tree connectors.
 """
 
 from __future__ import annotations
@@ -95,8 +94,7 @@ def _cached_tools_list(spec_key: tuple[str, str, tuple[tuple[str, str], ...]]) -
     return result
 
 
-# Back-compat with the previous ``functools.lru_cache`` surface (tests and
-# callers reset the cache through this attribute).
+# Tests reset the cache through this attribute.
 _cached_tools_list.cache_clear = _TOOLS_LIST_CACHE.clear  # type: ignore[attr-defined]
 
 
@@ -151,9 +149,8 @@ def visible_mcp_function_tools(
     """Return ``BetaFunctionTool`` wrappers for every tool on every visible
     HTTP MCP server. Empty list if no MCP is visible / reachable.
     """
-    # stdio MCPs are reachable via :class:`McpManager` for clients that host
-    # them as subprocesses; the in-process tool surface only exposes HTTP MCPs
-    # to keep ``BetaFunctionTool.call`` sync.
+    # HTTP only: a stdio server would need a subprocess and an event loop
+    # behind a synchronous ``BetaFunctionTool.call``.
     specs = [s for s in visible_mcp_specs(jurisdictions, active_packs) if s.transport == "http"]
     keys = [_spec_key(spec) for spec in specs]
     if len(keys) > 1:

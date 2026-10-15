@@ -19,8 +19,6 @@ import type { ChatSettings } from "@/types/chat";
 type TransportDeps = {
   getSettings: () => ChatSettings;
   getSkillHint?: () => string | null;
-  /** notified when the server assigns/echoes the persisted assistant message id */
-  onServerAssistantId?: (chatId: string, id: string) => void;
   /** notified for chat-level side-channel events (chat_updated etc.) */
   onSideChannel?: (chatId: string, eventName: string, data: unknown) => void;
 };
@@ -75,10 +73,6 @@ export function createLegalHelperTransport(deps: TransportDeps): ChatTransport<U
       async start(controller) {
         let buffer = "";
         const emit = (name: string, data: unknown) => {
-          if (name === "message_saved") {
-            const d = data as { role?: string; id?: string };
-            if (d.role === "assistant" && d.id) deps.onServerAssistantId?.(chatId, d.id);
-          }
           handleSideChannel(chatId, name, data, deps);
           for (const c of sseEventToChunks(state, name, data)) controller.enqueue(c);
         };

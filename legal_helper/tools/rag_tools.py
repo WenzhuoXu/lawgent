@@ -6,7 +6,7 @@ from typing import Optional
 from anthropic import beta_tool
 
 from ..rag import retrieve
-from ..rag.retrieve import _store
+from ..rag.retrieve import _store, models_held
 
 
 # Common label aliases. Each key fans out to one or more real Qdrant
@@ -46,20 +46,14 @@ def retrieve_legal(
     k: int = 6,
     filters_json: Optional[str] = None,
 ) -> str:
-    """Semantic retrieval over the local RAG store.
-
-    Prefer this when the user's question is about content that should be in
-    your indexed corpora (statutes, playbooks, prior memos, treaty texts).
-    Returns the top ``k`` chunks with their source path / URL and score.
+    """Semantic search over the local legal corpus (statutes, treaties,
+    playbooks, prior memos). Returns the top chunks with source and score.
 
     Args:
-        query: Free-text query, in any supported language.
-        collection: Collection name. Use ``aviation`` for the aviation pack;
-            other ingested collections appear in the ``available_collections``
-            field of error responses.
-        k: Top-k hits to return (1-12).
-        filters_json: Optional JSON string of {metadata_key: value} filters
-            (e.g. ``{"jurisdiction": "CN"}``).
+        query: Free-text query, any language.
+        collection: Collection name; an unknown one lists the available ones.
+        k: Hits to return, 1-12.
+        filters_json: Optional JSON metadata filter, e.g. {"jurisdiction": "CN"}.
     """
     k = max(1, min(int(k), 12))
     filters = None
@@ -89,9 +83,11 @@ def retrieve_legal(
 
     all_hits = []
     try:
-        for target in targets:
-            for h in retrieve(query=query, collection=target, k=k, filters=filters):
-                all_hits.append((target, h))
+        # One load for every collection searched, released when done.
+        with models_held():
+            for target in targets:
+                for h in retrieve(query=query, collection=target, k=k, filters=filters):
+                    all_hits.append((target, h))
     except Exception as e:  # noqa: BLE001
         return json.dumps(
             {"error": f"retrieve failed: {e!s}", "collection": collection, "query": query}

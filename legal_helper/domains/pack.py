@@ -10,8 +10,9 @@ Each pack is a directory under ``legal_helper/domains/<name>/`` containing:
     references/        — long-form domain prose pulled on demand
     overlays/<skill>.md — per-skill aviation deltas concatenated after SKILL.md
 
-A pack is active when its name appears in ``settings.active_domain_packs`` (or
-is passed via the ``--domain-pack`` flag / ``ChatSettings.domain_pack``).
+A pack is active when its name appears in ``settings.active_domain_packs`` —
+pinned in config, by a project or by the ``--domain-pack`` flag, or added for a
+turn when the author calls ``load_pack`` (``tools/pack_tools.py``).
 """
 
 from __future__ import annotations
@@ -36,10 +37,6 @@ class DomainPack:
     playbook_path: Path
     references_dir: Path
     overlay_dir: Path
-    # Marker bundles used by domains.detect.detect_packs for auto-activation.
-    # ``english`` matches are word-boundary aware; ``chinese`` is substring.
-    markers_english: tuple[str, ...] = ()
-    markers_chinese: tuple[str, ...] = ()
     default_language: str = "en"
     description: str = ""
     research_sources_path: Path | None = None
@@ -65,7 +62,6 @@ def load_pack(name: str) -> DomainPack:
     if not pack_yaml.is_file():
         raise FileNotFoundError(f"domain pack '{name}' not found at {root}")
     meta = _load_yaml(pack_yaml)
-    markers = meta.get("markers") or {}
     return DomainPack(
         name=meta.get("name", name),
         display_name=meta.get("display_name", name.title()),
@@ -76,8 +72,6 @@ def load_pack(name: str) -> DomainPack:
         playbook_path=root / meta.get("playbook_path", "playbook.md"),
         references_dir=root / meta.get("references_dir", "references"),
         overlay_dir=root / meta.get("overlay_dir", "overlays"),
-        markers_english=tuple(m.lower() for m in (markers.get("english") or ())),
-        markers_chinese=tuple(markers.get("chinese") or ()),
         default_language=meta.get("default_language", "en"),
         description=meta.get("description", ""),
         research_sources_path=(

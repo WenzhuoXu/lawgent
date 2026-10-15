@@ -309,16 +309,4 @@ def known_tools_for(server_name: str) -> list[dict[str, Any]]:
     return list(_KNOWN_TOOLS.get(server_name, ()))
 
 
-def has_known_tools(server_name: str) -> bool:
-    return server_name in _KNOWN_TOOLS
-
-
-def known_server_names() -> list[str]:
-    return list(_KNOWN_TOOLS.keys())
-
-
-__all__ = [
-    "has_known_tools",
-    "known_server_names",
-    "known_tools_for",
-]
+__all__ = ["known_tools_for"]

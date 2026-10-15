@@ -18,7 +18,7 @@ import shutil
 import pytest
 from docx import Document
 from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls, qn
+from docx.oxml.ns import nsdecls
 from openpyxl import Workbook
 
 from legal_helper.documents.quality import (

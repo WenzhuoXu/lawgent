@@ -1,11 +1,9 @@
 """Provider-neutral protocol for tool results that carry images.
 
-The ``render_*`` tools used to return a JSON blob of file paths. Tool results
-reach the model as *text*, so the model never saw a single pixel of what it
-had just produced — while ``playbook/format_recipes/pptx.md`` instructed it to
-"render and look for overlapping elements, clipped text". That instruction was
-structurally impossible to follow, which is why layout defects survived to the
-user.
+A tool result reaches the model as text, so a render that returned only file
+paths left the model unable to see a single pixel of what it had produced —
+and layout defects survived to the user. The ``render_*`` tools hand back the
+pages themselves.
 
 Both SDKs do accept images inside a tool result:
 
@@ -20,7 +18,7 @@ Tools stay provider-agnostic: they return a JSON string carrying an
 ``__inline_images__`` key, and each provider's tool-execution wrapper calls
 :func:`to_anthropic_tool_content` / :func:`to_openai_tool_content` to expand it
 into that provider's block shape. A tool result without the key is passed
-through as a plain string exactly as before, so nothing else changes.
+through as a plain string.
 """
 
 from __future__ import annotations

@@ -31,8 +31,8 @@ if TYPE_CHECKING:  # avoid an import cycle (chat_models has no heavy deps, but k
     from .config import Settings
 
 # Model context windows (input tokens). Conservative; unknown models fall back
-# to ``_DEFAULT_WINDOW``. Opus/Sonnet 4.x are 1M; Haiku 200K; gpt-5.x treated
-# conservatively. These bound the *compaction trigger*, not the per-turn digest.
+# to ``_DEFAULT_WINDOW``. Retired models stay listed so historical usage still
+# replays. These bound the *compaction trigger*, not the per-turn digest.
 _WINDOWS = {
     "claude-opus-5-5": 1_000_000,
     "claude-opus-5": 1_000_000,
@@ -56,7 +56,7 @@ _WINDOWS = {
     "gpt-5.4-mini": 400_000,
 }
 _DEFAULT_WINDOW = 200_000
-# Floor for the per-turn context digest fed to planner / answer. The real budget
+# Floor for the per-turn context digest fed to the author. The real budget
 # is a share of the *model's* window (see ``context_budget_for``) — a constant
 # here would hand a 1M-window model the same 16K digest as a 200K one, which is
 # what made a 32K-token chat (3% of the window) drop turns and re-derive
@@ -73,7 +73,7 @@ OUTPUT_RESERVE_TOKENS = 32_000
 COMPACTION_BUFFER_TOKENS = 13_000
 # How the turn ceiling is divided. Measured 2026-09-21 on this repo: a skill
 # agent's fixed overhead is ~21K tokens (5.6K system prompt + 15.4K of schemas
-# for 58 tools) and the orchestrator's is ~15K. Against a 259K ceiling that
+# for 58 tools) and the author's is ~15K. Against a 259K ceiling that
 # leaves ~238K, and the split below reserves ~78K for the transcript digest and
 # the rest for tool results and the user's message. Tool results are not given
 # a fixed share: `turn_compaction` clears the oldest ones when a request nears
@@ -210,10 +210,6 @@ def truncate_to_tokens(text: str, max_tokens: int, *, keep: str = "head") -> str
     if keep == "tail":
         return "…" + text[-lo:].lstrip()
     return text[:lo].rstrip() + "…"
-
-
-# Back-compat alias for the original private name.
-_truncate_to_tokens = truncate_to_tokens
 
 
 @dataclass(frozen=True)
@@ -358,7 +354,7 @@ def render_recent(
         # last month is not read against today.
         stamp = _turn_date(getattr(m, "created_at", ""))
         label = f"{m.role.upper()} [{stamp}]" if stamp else m.role.upper()
-        out.append(f"{label}: {_truncate_to_tokens(content, per_message_cap_tokens)}")
+        out.append(f"{label}: {truncate_to_tokens(content, per_message_cap_tokens)}")
     return "\n".join(out)
 
 

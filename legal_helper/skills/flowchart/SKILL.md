@@ -15,9 +15,11 @@ underlying process and every statutory step drawn in it.
 ## Output Contract (binding)
 
 As a specialist, emit the harness's bundle contract (Findings · Issues ·
-Artefacts · Out of scope · Sources), supplied with your task. As the author of
-a final answer, follow the author contract instead. Artefacts this skill
-produces: the deck path from `create_deck`, or the image path from
+Artefacts · Out of scope · Sources), supplied with your task.
+
+## Artefacts
+
+The deck path from `create_deck`, or the image path from
 `render_flowchart_image`, plus the Mermaid source.
 
 ## Where the diagram goes
@@ -63,7 +65,7 @@ one-page deck (`page_count: 1`).
 3. Slide or deck → `create_deck`. Picture → `render_flowchart_image`, then
    `view_image` on the PNG and fix what you see: a missing branch is almost
    always a node id typed two ways.
-4. Report the artefact and the source per the output contract.
+4. Report the artefacts listed above: the file path and the Mermaid source.
 
 Read `references/flowchart_authoring.md` for the full syntax this renderer
 understands and examples; `references/cookbook_patterns.md` for prompting

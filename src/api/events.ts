@@ -10,6 +10,7 @@
  *
  * Persisted events (from GET /api/chats/{id}) share the outer envelope shape:
  *   { id, chat_id, created_at, event_type, agent_name, run_id, data: { ..., data: {...payload} } }
+ * so lib/eventsToUIMessages.ts replays them through the same function.
  */
 
 export type NormalizedEvent = {
@@ -59,23 +60,5 @@ export function normalizeEvent(
     agent: (d.agent as string) ?? undefined,
     runId: (d.run_id as string) ?? undefined,
     createdAt: (d.created_at as string) ?? (d.ts as string) ?? undefined,
-  };
-}
-
-/** Normalize a persisted event row (GET /api/chats/{id} → events[]). */
-export function normalizePersistedEvent(row: Record<string, unknown>): NormalizedEvent {
-  const type = (row.event_type as string) || "workflow_event";
-  const outer = (row.data ?? {}) as Record<string, unknown>;
-  // Persisted rows for enveloped events keep the nested {..., data:{...}}; direct
-  // rows (workflow_plan, citation_audit, tool_call) store the payload flat in data.
-  const payload = (outer.data && typeof outer.data === "object"
-    ? (outer.data as Record<string, unknown>)
-    : outer) as Record<string, unknown>;
-  return {
-    type,
-    payload: payload ?? {},
-    agent: (row.agent_name as string) ?? (outer.agent as string) ?? undefined,
-    runId: (row.run_id as string) ?? (outer.run_id as string) ?? undefined,
-    createdAt: (row.created_at as string) ?? undefined,
   };
 }

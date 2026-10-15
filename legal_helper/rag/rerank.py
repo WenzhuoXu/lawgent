@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Protocol, Sequence
+import threading
+from typing import Any, Protocol, Sequence
 
 _DEFAULT_MODEL = "BAAI/bge-reranker-v2-m3"
 
@@ -32,25 +33,35 @@ class Reranker(Protocol):
 
 
 class CrossEncoderReranker:
-    """Lazily-loaded sentence-transformers CrossEncoder."""
+    """Lazily-loaded sentence-transformers CrossEncoder, released when the
+    search that loaded it finishes (see ``retrieve.models_held``)."""
 
     def __init__(self, model_name: str | None = None) -> None:
         self.name = model_name or os.getenv("LEGAL_HELPER_RAG_RERANKER", _DEFAULT_MODEL)
         self._model = None
+        self._lock = threading.Lock()
 
-    def _load(self) -> None:
-        if self._model is not None:
-            return
-        from sentence_transformers import CrossEncoder
+    def _load(self) -> Any:
+        # Locked so two overlapping searches load one copy, not two.
+        with self._lock:
+            if self._model is None:
+                from sentence_transformers import CrossEncoder
 
-        self._model = CrossEncoder(self.name)
+                self._model = CrossEncoder(self.name)
+            return self._model
+
+    def release(self) -> bool:
+        """Drop the weights. True when a loaded model was dropped."""
+        with self._lock:
+            dropped, self._model = self._model is not None, None
+        return dropped
 
     def score(self, query: str, texts: Sequence[str]) -> list[float]:
         if not texts:
             return []
-        self._load()
-        assert self._model is not None
-        out = self._model.predict([(query, t) for t in texts])
+        # A local reference, so a release mid-call cannot pull the model away.
+        model = self._load()
+        out = model.predict([(query, t) for t in texts])
         return out.tolist() if hasattr(out, "tolist") else [float(v) for v in out]
 
 
@@ -72,6 +83,12 @@ def set_reranker(reranker: Reranker | None) -> None:
     """Inject a reranker (or ``None`` to restore the lazy default)."""
     global _RERANKER
     _RERANKER = reranker
+
+
+def release_reranker() -> bool:
+    """Drop the reranker's weights. True when a loaded model was dropped."""
+    release = getattr(_RERANKER, "release", None)
+    return bool(release()) if release else False
 
 
 def rerank_order(query: str, texts: Sequence[str], k: int) -> list[tuple[int, float | None]]:

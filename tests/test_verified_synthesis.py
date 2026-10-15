@@ -2,58 +2,51 @@
 
 Before this, the audit ran after the answer had streamed and its verdict was
 attached as metadata: a memo citing a statute that does not support the claim
-shipped with a warning on it. The workflow now buffers a substantive legal
-answer, audits it, repairs exactly what the audit flagged, and only then
-reveals it — bounded by `max_repair_rounds` so a model that cannot satisfy its
-own auditor cannot loop.
-
-Also covered here: the clarify gates (a hedging router does not get to ask
-forever) and the durable run record (research already paid for survives a
-cancel).
+shipped with a warning on it. The author's answer is buffered, audited,
+repaired for exactly what the audit flagged, and only then revealed — bounded
+by `max_repair_rounds` so a model that cannot satisfy its own auditor cannot
+loop. Whether an answer is audited is decided from the answer itself.
 """
 
 from __future__ import annotations
 
-from legal_helper.chat_models import AgentTask, WorkflowPlan
 from legal_helper.config import load_settings
+from legal_helper.providers import StreamEvent
 from legal_helper.workflow import (
-    CLARIFY_CONFIDENCE_THRESHOLD,
-    MAX_CLARIFY_ROUNDS,
     WorkflowExecutor,
     _audit_is_repairable,
+    _infer_cite_check_stakes,
+    _should_run_cite_check,
 )
 
 
-def _plan(**kwargs) -> WorkflowPlan:
-    base = {
-        "title": "t",
-        "execution_mode": "agent_workflow",
-        "agent_tasks": [
-            AgentTask(id="a1", skill_name="legal-response", title="research", task="do")
-        ],
-    }
-    base.update(kwargs)
-    return WorkflowPlan(**base)
+class _ScriptedProvider:
+    """Answers each stream call with the next scripted text."""
+
+    name = "openai"
+    model = "gpt-6.1-sol"
+
+    def __init__(self, *texts: str) -> None:
+        self.texts = list(texts)
+        self.calls: list[dict] = []
+
+    def stream(self, system, messages, tools=(), *, max_iterations=None, **kwargs):
+        self.calls.append({"system": system, "messages": messages})
+        text = self.texts.pop(0)
+        yield StreamEvent("delta", {"text": text})
+        yield StreamEvent("done", {"text": text, "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+    def run(self, *args, **kwargs):  # pragma: no cover
+        raise AssertionError("no one-shot call expected")
 
 
-def _executor(**settings_updates) -> WorkflowExecutor:
+def _executor(provider=None, **settings_updates) -> WorkflowExecutor:
     # config.yaml ships with enable_cite_check off for fast iteration; verified
     # synthesis is gated on it, so these tests state the flag they need.
     updates = {"enable_cite_check": True}
     updates.update(settings_updates)
     settings = load_settings(refresh=True).model_copy(update=updates)
-    return WorkflowExecutor(settings=settings, provider=_NullProvider())
-
-
-class _NullProvider:
-    name = "openai"
-    model = "gpt-5.6-terra"
-
-    def stream(self, *args, **kwargs):  # pragma: no cover - never called here
-        raise AssertionError("no model call expected")
-
-    def run(self, *args, **kwargs):  # pragma: no cover
-        raise AssertionError("no model call expected")
+    return WorkflowExecutor(settings=settings, provider=provider or _ScriptedProvider())
 
 
 # --- what counts as repairable ------------------------------------------
@@ -76,24 +69,30 @@ def test_a_failed_audit_with_nothing_to_act_on_is_not_repairable():
     assert not _audit_is_repairable({"ok": False, "items": [], "report_markdown": "  "})
 
 
-# --- which answers are held back ----------------------------------------
+# --- what is held back and audited --------------------------------------
 
 
-def test_substantive_legal_answers_are_verified_before_reveal():
-    executor = _executor()
-    assert executor._verify_before_reveal(_plan()) is True
-
-
-def test_chit_chat_and_clarifications_are_not_held_back():
-    executor = _executor()
-    assert executor._verify_before_reveal(_plan(execution_mode="direct_answer")) is False
-    assert executor._verify_before_reveal(_plan(execution_mode="clarify")) is False
-    assert executor._verify_before_reveal(None) is False
+def test_answers_are_held_back_whenever_the_audit_is_on():
+    assert _executor()._verify_before_reveal() is True
 
 
 def test_verification_can_be_turned_off_in_one_setting():
-    assert _executor(verify_before_reveal=False)._verify_before_reveal(_plan()) is False
-    assert _executor(enable_cite_check=False)._verify_before_reveal(_plan()) is False
+    assert _executor(verify_before_reveal=False)._verify_before_reveal() is False
+    assert _executor(enable_cite_check=False)._verify_before_reveal() is False
+
+
+def test_the_audit_runs_on_answers_that_state_law_and_skips_the_rest():
+    assert _should_run_cite_check("根据《民法典》第577条，违约方应当承担违约责任。")
+    assert _should_run_cite_check("Under Article 17 of the Montreal Convention the carrier is liable.")
+    assert not _should_run_cite_check("你好！有什么可以帮你？")
+    assert not _should_run_cite_check("正确答案是 C。否定 C 后论证不成立。")
+    assert not _should_run_cite_check("")
+
+
+def test_stakes_escalate_on_filing_methods_not_on_brief():
+    assert _infer_cite_check_stakes({"brief"}, "An internal memo.") == "internal"
+    assert _infer_cite_check_stakes({"litigation-analysis"}, "An internal memo.") == "filed"
+    assert _infer_cite_check_stakes(set(), "Draft 民事起诉状 for filing with the court") == "filed"
 
 
 def test_the_repair_prompt_names_the_findings_and_forbids_invention():
@@ -106,7 +105,7 @@ def test_the_repair_prompt_names_the_findings_and_forbids_invention():
             {"severity": "low", "claim": "ignore me", "note": "nit"},
         ],
     }
-    prompt = executor._repair_prompt("DRAFT TEXT", audit, _plan(user_language="Chinese"))
+    prompt = executor._repair_prompt("DRAFT TEXT", audit, "Chinese")
     assert "DRAFT TEXT" in prompt
     assert "Article 577 does not support the claim." in prompt
     assert "Damages are capped" in prompt
@@ -115,64 +114,25 @@ def test_the_repair_prompt_names_the_findings_and_forbids_invention():
     assert "Chinese" in prompt
 
 
-# --- clarify gates -------------------------------------------------------
-
-
-def test_a_low_confidence_clarify_still_asks():
-    executor = _executor()
-    plan = _plan(execution_mode="clarify", intake_confidence=0.2, direct_response="Which contract?")
-    resolved = executor._resolve_clarify(plan, 0)
-    assert resolved.execution_mode == "clarify"
-    assert resolved.direct_response == "Which contract?"
-
-
-def test_a_confident_clarify_is_treated_as_a_hedge():
-    executor = _executor()
-    plan = _plan(
-        execution_mode="clarify",
-        intake_confidence=CLARIFY_CONFIDENCE_THRESHOLD,
-        direct_response="Which jurisdiction?",
+def test_a_flagged_answer_is_repaired_before_the_reader_sees_it(monkeypatch):
+    provider = _ScriptedProvider(
+        "根据《民法典》第999条，赔偿以合同价款为限。",
+        "根据《民法典》第584条，赔偿以可预见的损失为限。",
     )
-    resolved = executor._resolve_clarify(plan, 0)
-    assert resolved.execution_mode == "agent_workflow"
-    # The question it wanted to ask becomes the assumption the answer must state.
-    assert "Which jurisdiction?" in resolved.integration_instructions
-    assert "State the assumptions" in resolved.integration_instructions
+    executor = _executor(provider)
+    audits = iter(
+        [
+            {"ok": False, "items": [{"severity": "critical", "claim": "第999条"}], "report_markdown": "x"},
+            {"ok": True, "items": []},
+        ]
+    )
 
+    def fake_audit(self, *, turn, final_text, cancel_event):
+        yield StreamEvent("citation_audit", next(audits))
 
-def test_an_unreported_confidence_does_not_count_as_confident():
-    """The heuristic planner omits the field; that must not disable clarify."""
-    executor = _executor()
-    plan = _plan(execution_mode="clarify", direct_response="Which contract?")
-    assert plan.intake_confidence is None
-    assert executor._resolve_clarify(plan, 0).execution_mode == "clarify"
-
-
-def test_clarifying_stops_after_the_round_cap():
-    executor = _executor()
-    plan = _plan(execution_mode="clarify", intake_confidence=0.1, direct_response="Which one?")
-    assert executor._resolve_clarify(plan, MAX_CLARIFY_ROUNDS - 1).execution_mode == "clarify"
-    exhausted = executor._resolve_clarify(plan, MAX_CLARIFY_ROUNDS)
-    assert exhausted.execution_mode == "agent_workflow"
-    assert "Which one?" in exhausted.integration_instructions
-
-
-def test_non_clarify_plans_pass_through_untouched():
-    executor = _executor()
-    plan = _plan(intake_confidence=0.1)
-    assert executor._resolve_clarify(plan, 99) is plan
-
-
-def test_consecutive_clarify_rounds_counts_only_the_trailing_run(tmp_path):
-    from legal_helper.chat_store import ChatStore
-
-    store = ChatStore(db_path=tmp_path / "chats.sqlite3")
-    chat = store.create_chat()
-    assert store.consecutive_clarify_rounds(chat.id) == 0
-    store.add_event(chat.id, "workflow_plan", {"execution_mode": "clarify"})
-    store.add_event(chat.id, "workflow_plan", {"execution_mode": "clarify"})
-    assert store.consecutive_clarify_rounds(chat.id) == 2
-    # A turn that did real work resets the streak.
-    store.add_event(chat.id, "workflow_plan", {"execution_mode": "agent_workflow"})
-    store.add_event(chat.id, "workflow_plan", {"execution_mode": "clarify"})
-    assert store.consecutive_clarify_rounds(chat.id) == 1
+    monkeypatch.setattr(WorkflowExecutor, "_run_cite_check_after_summary", fake_audit)
+    events = list(executor.stream("违约赔偿有没有上限？"))
+    shown = "".join(e.data.get("text", "") for e in events if e.kind == "delta")
+    assert "第584条" in shown and "第999条" not in shown
+    assert [e.data.get("ok") for e in events if e.kind == "citation_audit"] == [True]
+    assert len(provider.calls) == 2  # the draft and one repair

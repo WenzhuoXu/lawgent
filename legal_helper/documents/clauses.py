@@ -661,7 +661,6 @@ class ClauseUnit:
     text: str
     paragraph: Optional[int] = None
     heading_level: Optional[int] = None
-    numbering_ilvl: Optional[int] = None
     is_table: bool = False
 
 

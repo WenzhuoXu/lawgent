@@ -60,7 +60,13 @@ for the 法律意见书 / 请示 skeleton.
 
 ## Output Contract (binding)
 
-1. Deliverable: a `.docx` whose every change is a tracked revision
+As a specialist, emit the harness's bundle contract (Findings · Issues ·
+Artefacts · Out of scope · Sources), supplied with your task, and report the
+deliverable below in it.
+
+## Deliverable (binding)
+
+1. A `.docx` whose every change is a tracked revision
    (`w:ins`/`w:del`) attributed to the configured author(s), with margin
    comments for any change that needs a reason a reviewer must see. Track
    Changes is left on in the output.

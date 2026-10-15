@@ -7,10 +7,10 @@
 ## File location
 
 The report is rendered as `verification-report.md` adjacent to the input
-document being verified. It is **not** appended to a legal-answer
-bundle and is **not** subject to the playbook's ≤2000-char ceiling
-(that ceiling governs legal answers; an audit trail is necessarily as
-long as the audit).
+document being verified. It is **not** appended to a research bundle
+and is **not** subject to the bundle contract's length budget (that
+budget governs research bundles; an audit trail is necessarily as long
+as the audit).
 
 ## Skeleton (English)
 

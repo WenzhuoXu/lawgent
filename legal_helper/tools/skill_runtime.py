@@ -4,11 +4,10 @@ An in-tree legal skill produces prose and calls the document writers. An
 external skill such as ``ppt-master`` works differently: it *authors text
 files* (a design spec, a lock, one SVG per page, a notes document) and it
 *runs its own scripts* (an integrity guard, a structure validator, a quality
-gate, an exporter). Neither capability existed here, and without them the
-skill cannot be driven at all — not for want of permission but for want of a
-call. ``write_docx``/``write_pdf`` take structured parameters and emit
-binaries; there was no way to write an ``.svg``, and no way to run the
-checker that is the skill's own gate.
+gate, an exporter). ``write_docx``/``write_pdf`` take structured parameters
+and emit binaries; neither writes an ``.svg`` or runs the checker that is the
+skill's own gate, so without these tools the skill cannot be driven at all —
+not for want of permission but for want of a call.
 
 Both tools are deliberately narrow:
 
@@ -41,7 +40,7 @@ from typing import Any
 from anthropic import beta_tool
 
 from ..config import current_settings
-from ..skills import discover_skills, skill_dir
+from ..skills import skill_dir
 
 #: Refuse a single authored file larger than this. An SVG page runs ~10-40 KB;
 #: a megabyte means something has gone wrong upstream, and writing it would
@@ -124,6 +123,42 @@ def write_text_file(path: str, content: str, mode: str = "overwrite") -> str:
     except OSError as exc:
         return f"ERROR writing {resolved}: {type(exc).__name__}: {exc}"
     return str(resolved)
+
+
+@beta_tool
+def edit_text_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> str:
+    """Replace exact text in a text file under outputs/ — change a file without rewriting it.
+
+    Args:
+        path: The file, relative to outputs/ (or an absolute path under it).
+        old_string: Text to replace, copied exactly; it must occur once unless replace_all.
+        new_string: The replacement.
+        replace_all: Replace every occurrence.
+    """
+    resolved, err = _resolve_under_outputs(path)
+    if resolved is None:
+        return err
+    if not resolved.is_file():
+        return f"ERROR: {resolved} does not exist; write it with write_text_file."
+    if not old_string:
+        return "ERROR: old_string is empty."
+    try:
+        text = resolved.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return f"ERROR reading {resolved}: {type(exc).__name__}: {exc}"
+    count = text.count(old_string)
+    if count == 0:
+        return f"ERROR: old_string not found in {resolved}; read the file and copy the text exactly."
+    if count > 1 and not replace_all:
+        return f"ERROR: old_string occurs {count} times in {resolved}; add context to make it unique, or set replace_all."
+    updated = text.replace(old_string, new_string) if replace_all else text.replace(old_string, new_string, 1)
+    if len(updated.encode("utf-8")) > MAX_TEXT_BYTES:
+        return f"ERROR: the edited file would exceed the {MAX_TEXT_BYTES}-byte limit."
+    try:
+        resolved.write_text(updated, encoding="utf-8")
+    except OSError as exc:
+        return f"ERROR writing {resolved}: {type(exc).__name__}: {exc}"
+    return f"{resolved} ({count if replace_all else 1} replaced)"
 
 
 @beta_tool
@@ -317,18 +352,11 @@ def run_skill_script(
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def external_skill_names() -> tuple[str, ...]:
-    """Discovered skills that live outside this package."""
-    from ..skills import is_external_skill
-
-    return tuple(n for n in sorted(discover_skills()) if is_external_skill(n))
-
-
 __all__ = [
+    "edit_text_file",
     "write_text_file",
     "run_skill_script",
     "list_skill_dir",
-    "external_skill_names",
     "MAX_TEXT_BYTES",
     "MAX_TIMEOUT_S",
 ]

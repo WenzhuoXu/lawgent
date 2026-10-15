@@ -20,11 +20,11 @@ frequently; verify against authoritative sources before reliance.
 ## Output Contract (binding)
 
 As a specialist, emit the harness's bundle contract (Findings · Issues ·
-Artefacts · Out of scope · Sources), supplied with your task. As the author of
-a final answer, follow the author contract instead and put these artefacts in
-the answer where they help the reader.
+Artefacts · Out of scope · Sources), supplied with your task.
 
-Artefacts this skill produces: a requirements table (requirement · pinpoint · approval or reporting duty · deadline · owner) when the request involves several obligations.
+## Artefacts
+
+A requirements table (requirement · pinpoint · approval or reporting duty · deadline · owner) when the request involves several obligations.
 
 ## Inputs
 

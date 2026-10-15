@@ -11,11 +11,11 @@ citation_style: gb_t_7714              # gb_t_7714 | bluebook | oscola
 active_domain_packs: []                # e.g. [aviation]; empty = generic legal mode
 
 anthropic_model: claude-opus-5-5       # high-effort primary (opus-5 / 4-8 / 4-7 and haiku-4-5 retired 2026-09-22)
-anthropic_fast_model: claude-sonnet-5  # internal low-effort routing / summarization
+anthropic_fast_model: claude-sonnet-5  # fast tier: cite-check, rolling summary, chat titles
 
 openai_model: gpt-6.1-sol              # high-effort primary (no bare "gpt-6.1" alias; gpt-5.5 retired 2026-09-11, gpt-5.6 family 2026-09-22, gpt-6-sol 2026-10-07)
-openai_fast_model: gpt-6-luna          # lower-latency routing / classification
-openai_reasoning_effort: medium        # none | low | medium | high | xhigh | max  (gpt-6.1-sol has no none: it omits the param and runs at medium)
+openai_fast_model: gpt-6-luna          # fast tier: cite-check, rolling summary, chat titles
+openai_reasoning_effort: medium        # none | low | medium | high | xhigh | max  (gpt-6.1-sol has no none: it runs at low)
 openai_enable_file_search: false
 openai_file_search_vector_store_ids: []
 
@@ -27,7 +27,7 @@ max_iterations: 0
 parent_max_iterations: 0
 sub_agent_max_iterations: 0
 max_concurrent_agents: auto            # Anthropic=2, OpenAI=4; override with an integer
-max_tokens: 32000                      # per-turn output ceiling; 8192 truncated long legal memos. Opus 4.x allows up to 128000 (streaming).
+max_tokens: 32000                      # per-turn output ceiling; 8192 truncated long legal memos
 chat_context_token_budget: 16000       # FLOOR for the within-chat context digest (rolling summary + recent transcript)
 chat_context_window_fraction: 0.25     # digest budget = this share of the serving model's window, floored by the line above
 chat_compaction_threshold: 0.0         # 0 = derive from the model tier (frontier 0.75, fast 0.55 — see context.compaction_threshold_for); any positive value pins it for every model
@@ -49,22 +49,20 @@ enable_cite_check: false
 verify_before_reveal: true              # audit (and repair) before the answer is shown
 max_repair_rounds: 1                    # repair passes a failed audit may trigger; 0 = advisory
 
-# Answer length: auto sizes each answer from the router's complexity
-# (simple → brief, standard → focused, complex → full memo); a chat can pin one
-# in Settings. It sets only the provider's verbosity and one sentence in the
-# request — never an output-token, tool-round or tool-budget limit.
+# Answer length: auto lets the author size each answer from the request; a
+# chat can pin brief / focused / full in Settings. It sets only the provider's
+# verbosity and one sentence in the request — never an output-token,
+# tool-round or tool-budget limit.
 answer_length: auto                     # auto | brief | focused | full
 
 # Which model tier and reasoning effort each role runs at. Defaults live in
 # config.DEFAULT_ROLE_PROFILES; list only the roles you want to change.
 # effort: a level, "user" (the chat's setting) or "cap:<level>".
-# Roles: router, decomposer, author, specialist, integrator, cite_check,
-# summariser, title, deck.
+# Roles: author (answers every turn), specialist (run_workflow sub-agents),
+# cite_check, summariser, title, deck.
 # role_profiles:
-#   router:     {tier: fast, effort: low}
-#   decomposer: {tier: fast, effort: low}
 #   author:     {tier: main, effort: user}
 #   specialist: {tier: main, effort: "cap:medium"}
-#   integrator: {tier: main, effort: "cap:medium"}
 
+max_workflow_tasks: 3                   # specialists one run_workflow call may start
 external_skill_max_iterations: 0         # external procedural skills (ppt-master); 0 = no limit

@@ -18,7 +18,8 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5174,
     proxy: {
-      '/api': 'http://0.0.0.0:8010',
+      // LEGAL_HELPER_API points the dev UI at another backend (a test server).
+      '/api': process.env.LEGAL_HELPER_API ?? 'http://0.0.0.0:8010',
     },
   },
 });

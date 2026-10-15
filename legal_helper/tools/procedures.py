@@ -2,13 +2,10 @@
 
 ``create_deck`` drives ppt-master. Any other external skill — a GB/T 9704 公文
 generator such as gongwen-gbt9704-skill, with its red-head 版头, 发文字号 and
-版记 — was reachable only through ``run_skill``, which went with the
-dispatcher, so installing one changed nothing a user could reach. This tool
-reaches it the way ``create_deck`` reaches ppt-master: a sub-agent follows the
-procedure under the host runtime contract (``agent._external_skill_prompt``)
-in a fresh work directory under ``<outputs_dir>/_procedures/``, out of the
-chat's file list, and only the files it names as deliverables are copied out
-and reported.
+版记 — is driven here the same way: a sub-agent follows the procedure under
+the host runtime contract (``agent._external_skill_prompt``) in a fresh work
+directory under ``<outputs_dir>/_procedures/``, out of the chat's file list,
+and only the files it names as deliverables are copied out and reported.
 
 It is on the author's surface only while at least one such procedure is
 installed: an always-present tool that can only answer "nothing installed" is
@@ -31,7 +28,7 @@ from anthropic import beta_tool
 from anthropic.lib.tools._beta_functions import BetaFunctionTool
 
 from ..config import Settings, current_settings, override_current_settings
-from ..logging_setup import log_workflow_event
+from ..logging_setup import log_workflow_event, sub_agent_scope
 from .decks import DECK_SKILL, decisions_under_delegation
 
 #: Under ``outputs_dir`` but out of the user's file list: the server's artifact
@@ -254,13 +251,14 @@ def run_procedure(skill: str, brief: str, title: str, source_paths: list[str] | 
     task = compose_procedure_task(
         skill=skill, title=title, brief=brief, brief_file=brief_file, sources=sources, workspace=workspace
     )
-    log_workflow_event("procedure_started", {"skill": skill, "title": title, "workspace": str(workspace)})
     since = time.time()
     report, error = "", ""
-    try:
-        report = run_procedure_agent(skill, task, settings.model_copy(update={"outputs_dir": workspace})) or ""
-    except Exception as exc:  # noqa: BLE001 — a failed run is reported, not raised
-        error = f"{type(exc).__name__}: {exc}"
+    with sub_agent_scope(skill):
+        log_workflow_event("procedure_started", {"skill": skill, "title": title, "workspace": str(workspace)})
+        try:
+            report = run_procedure_agent(skill, task, settings.model_copy(update={"outputs_dir": workspace})) or ""
+        except Exception as exc:  # noqa: BLE001 — a failed run is reported, not raised
+            error = f"{type(exc).__name__}: {exc}"
     elapsed = round(time.monotonic() - started, 1)
     exclude = {p.resolve() for p in sources} | {brief_file.resolve()}
     made = find_deliverables(report, workspace, exclude, since)

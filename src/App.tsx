@@ -1,20 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UIMessage } from "ai";
-import { Info, Loader2, Menu, MessageSquarePlus, Send, Square } from "lucide-react";
-import {
-  Conversation,
-  ConversationContent,
-  ConversationEmptyState,
-} from "@/components/ai-elements/conversation";
+import { Info, Loader2, Menu } from "lucide-react";
+import { Conversation, ConversationContent } from "@/components/ai-elements/conversation";
 import { Message, MessageContent } from "@/components/ai-elements/message";
-import {
-  PromptInput,
-  PromptInputBody,
-  PromptInputFooter,
-  PromptInputSubmit,
-  PromptInputTextarea,
-  PromptInputTools,
-} from "@/components/ai-elements/prompt-input";
 import { RenderMessageParts } from "@/components/parts/renderMessageParts";
 import { MessageActions } from "@/components/parts/MessageActions";
 import { AuditItemRows, SourceRows } from "@/components/parts/CitationRows";
@@ -81,20 +69,13 @@ export default function App() {
   // When the viewed chat finishes streaming, refresh the sidebar so a newly
   // created chat appears. The title and memory summary are written by a
   // background worker after the stream closes (the user is released at
-  // `done`), so look again a few times while the title is still the default.
+  // `done`), so look again a few times while it runs.
   const prevStatusRef = useRef<string>("");
   useEffect(() => {
     if (prevStatusRef.current && prevStatusRef.current !== "ready" && chat.status === "ready") {
       const refresh = () => client.listChats().then((r) => setChats(r.chats ?? []));
       refresh();
-      const timers = [3000, 8000, 15000].map((ms) =>
-        window.setTimeout(() => {
-          client.listChats().then((r) => {
-            const list = r.chats ?? [];
-            setChats(list);
-          });
-        }, ms),
-      );
+      const timers = [3000, 8000, 15000].map((ms) => window.setTimeout(refresh, ms));
       prevStatusRef.current = chat.status;
       return () => timers.forEach((t) => window.clearTimeout(t));
     }
@@ -172,7 +153,6 @@ export default function App() {
         copy={copy}
         onOpenSettings={() => setSettingsOpen(true)}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
         usedTokens={usedTokens}
         maxTokens={maxTokens}
       />
@@ -235,8 +215,8 @@ export default function App() {
               })
             )}
             {/* Pre-first-event placeholder: the gap between send and the first
-                backend event (a full planning LLM call). Without this the user
-                stares at nothing after sending. */}
+                backend event. Without this the user stares at nothing after
+                sending. */}
             {busy && chat.messages[chat.messages.length - 1]?.role === "user" ? (
               <Message from="assistant">
                 <MessageContent>

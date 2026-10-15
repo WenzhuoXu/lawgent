@@ -4,10 +4,10 @@
 
 **An open-source legal AI agent — grounded, multi-jurisdiction, citation-verified.**
 
-Answers most requests in one research pass and splits a complex matter across parallel
-specialist sub-agents. Pulls primary law from official sources, round-trips every quotation
-against the document it came from, and returns a memo, tracked-changes redline, workbook, or
-deck.
+Answers every request in one tool loop on the model you pick, and can split a complex matter
+across parallel specialist sub-agents. Pulls primary law from official sources, round-trips
+every quotation against the document it came from, and returns a memo, tracked-changes
+redline, workbook, or deck.
 
 <br/>
 
@@ -66,13 +66,14 @@ Register, GovInfo, CourtListener, EUR-Lex, ECAA — or read from a locally inges
 (the CAAC rules, ICAO documents). Where no connector exists, the official gazette, regulator
 or court site is searched. The rule is to cite only what was read.
 
-**2. Every claim carries a pinpoint, and pinpoints are audited, not trusted.** Answers end
-with one `## Sources` / `## 资料来源` list, one line per source with its 条款 / article /
-section / § and a status: verified online, unverified, user-provided, or pinpoint
-unavailable (无法获得具体条款). Before the answer is shown, a citation audit re-fetches the
-cited documents and round-trips the quoted language against them; a citation that does not
-survive is repaired or flagged, never quietly kept. The audit needs `enable_cite_check`, off
-in the shipped `config.yaml` for fast iteration; turn it on for matter work.
+**2. Every claim carries a pinpoint, and pinpoints are audited, not trusted.** An answer that
+states law ends with one `## Sources` / `## 资料来源` list, one line per source with its
+条款 / article / section / § and a status: verified online, unverified, user-provided, or
+pinpoint unavailable (无法获得具体条款). Before the answer is shown, a citation audit
+re-fetches the cited documents and round-trips the quoted language against them; a citation
+that does not survive is repaired or flagged, never quietly kept. The audit needs
+`enable_cite_check`, off in the shipped `config.yaml` for fast iteration; turn it on for
+matter work.
 
 **3. Jurisdiction is a first-class axis.** The connectors an agent can see and the source
 hierarchy it follows change with the jurisdiction; the answer's language follows the user's.
@@ -92,10 +93,12 @@ tracked changes, and hands every deck to ppt-master.
 ## What it looks like
 
 Real runs against live sources, captured from the web UI. (In-product branding is
-**法务助手 / Legal Helper** — Lawgent is the project name.)
+**法务助手 / Legal Helper** — Lawgent is the project name.) The captures predate the one
+author loop; a workflow's specialists now appear in one card under the `run_workflow` call
+([web UI](#web-ui-and-http-api)).
 
 **The answer.** A comparative CN/US question; the chip above it reports elapsed time,
-specialist tasks, tool calls and distinct sources. In the CAAC column the table says
+specialists, tool calls and distinct sources. In the CAAC column the table says
 *pinpoint unavailable* rather than invent an article number, because no official CCAR-121
 text made it into the record.
 
@@ -125,43 +128,46 @@ mid-matter; month-to-date tokens and cost are broken out per model.
 
 ```mermaid
 flowchart TB
-    U["User · CLI · Web UI · HTTP API"] --> R{"Router<br/>one fast-model call"}
-    R -->|complex| DEC
-    R -->|"simple · standard"| A
-    R -->|"direct_answer · clarify"| D["Short reply, or one question"]
-    PM[("Chat digest + project memory<br/>brief · typed memory · files · transcript · summary")] -.-> W
+    U["User · CLI · Web UI · HTTP API"] --> A
+    PM[("Chat digest + project memory<br/>brief · typed memory · files · transcript · summary")] -.-> A
 
-    subgraph W["agent_workflow"]
+    subgraph L["One author loop — the chat's own model and effort"]
         direction TB
-        A["One author, one pass<br/>playbook + the routed skill's method"]
-        DEC["Decomposer<br/>issues + 2–3 specialist tasks"] --> S["Specialist sub-agents · forked context<br/>one skill method each, in parallel"]
-        S --> I["Integrator<br/>one answer from the bundles; closes or names their gaps"]
+        A["Author<br/>playbook · method list · pack list<br/>read_document · hosted web search"]
+        A -->|load_skill| M["A method<br/>SKILL.md + pack overlay"]
+        A -->|load_pack| P["A domain pack<br/>playbook · source routing"]
+        A -->|run_workflow| S["Up to 3 specialists in parallel · depth 1<br/>one method each; bundles return to the author"]
     end
 
-    W -.->|tools| G
+    A -.->|tool search| G
+    S -.->|tool search| G
 
-    subgraph G["Grounded retrieval — tools filtered by jurisdiction + active packs"]
+    subgraph G["Deferred tools — found by the provider's native tool search"]
         direction LR
-        CN["CN<br/>PKULaw<br/>flk.npc.gov.cn"] ~~~ US["US<br/>eCFR · FR<br/>GovInfo · CourtListener"] ~~~ EU["EU<br/>EUR-Lex"] ~~~ ET["ET<br/>Negarit Gazeta<br/>mirror"] ~~~ AV["Aviation pack<br/>CAAC · FAA<br/>EASA · ECAA"] ~~~ RAG["Local RAG<br/>bge-m3 + Qdrant<br/>+ rerank"] ~~~ WEB["Hosted<br/>web_search<br/>web_fetch"]
+        CN["CN<br/>flk.npc.gov.cn<br/>PKULaw"] ~~~ US["US<br/>eCFR · FR<br/>GovInfo · CourtListener"] ~~~ EU["EU<br/>EUR-Lex"] ~~~ ET["ET<br/>Negarit Gazeta<br/>mirror"] ~~~ AV["Aviation pack<br/>CAAC · FAA<br/>EASA · ECAA"] ~~~ RAG["Local RAG<br/>bge-m3 + Qdrant<br/>+ rerank"] ~~~ DOC["Documents<br/>Word · PDF · XLSX<br/>decks · deadlines"]
     end
 
-    G --> QC["Citation audit before reveal<br/>extract → validate → round-trip quotes → repair"]
+    A --> QC["Citation audit before reveal<br/>extract → validate → round-trip quotes → repair"]
     QC --> OUT["Deliverable<br/>answer · Word / PDF · tracked-changes DOCX · XLSX · deck via ppt-master"]
     OUT -.-> LED[("Usage ledger<br/>tokens + cost per turn")]
 ```
 
-**One fast-model routing call sizes each turn.** Simple and standard turns go to
-**one author** that researches and writes in a single pass with the general playbook and the
-routed skill's method, or a general prompt for non-legal work. Only a complex turn — several
-issues that each need sustained research in their own body of law — pays for a decomposer,
-two or three forked-context specialists researching in parallel, and an integrator that
-writes the one answer from their bundles.
+**The chat's own model answers every turn, in one tool loop.** Nothing routes the turn
+first: a greeting, an exam question and a memo all go to the model and effort the user
+picked. The author decides what the turn needs: a method (`load_skill`), a domain pack
+(`load_pack`), research, one clarifying question, or a workflow. When a request has several
+distinct issues that each need sustained research in their own body of law, or the user asks
+for a workflow, it calls `run_workflow`. Up to three forked-context specialists then research
+in parallel, and their bundles come back as the tool result, which the author integrates in
+the same loop. The fast tier does side work only: the rolling summary and the chat title.
 
 With `enable_cite_check` on, a legal answer is audited, and repaired where it fails,
 before it is revealed ([the grounding stack](#the-grounding-stack)). Both providers see
 **the same tool surface**: connectors, MCP-discovered tools, RAG, citation tools and
 document writers are all plain function tools, with no provider-native MCP path and no
-Claude-only or GPT-only branch. Detail: [runtime internals](#runtime-internals).
+Claude-only or GPT-only branch. Only the operational tools are loaded on every request; the
+rest wait behind each provider's native tool search ([the tool surface](#the-tool-surface)).
+Detail: [runtime internals](#runtime-internals).
 
 ---
 
@@ -218,9 +224,8 @@ Keys come from the environment or from `.env` / `legal_helper/api_key`, both git
 Jurisdiction is a runtime filter, not a prompt hint. `filter_for(jurisdictions, packs)` in
 `legal_helper/connectors/__init__.py` decides which connectors an agent can see, and the MCP
 registry is filtered the same way. The set is the run's default plus its secondary
-(comparative) jurisdictions — from `config.yaml`, a project or `--jurisdiction` — and, for a
-specialist, those an active pack declares. Without CN, PKULaw and flk.npc.gov.cn stay
-hidden.
+(comparative) jurisdictions — from `config.yaml`, a project or `--jurisdiction` — plus those
+an active pack declares. Without CN, PKULaw and flk.npc.gov.cn stay hidden.
 
 | Jurisdiction | Primary-source stack | Tools the agent gets |
 |---|---|---|
@@ -231,11 +236,11 @@ hidden.
 | ✈️ **ICAO** | Chicago Convention + annexes, ICAO docs, Cape Town / IDERA | local RAG collections `icao_doc`, `aviation_treaties` |
 | 🇬🇧 **UK** / 🇭🇰 **HK** | No dedicated connector yet; hosted web search + fetch | `web_search`, `web_fetch`, `fetch_url_to_artifact` |
 
-**Comparative work is the normal case.** A short comparison is answered by one author
-holding every configured jurisdiction's connectors; a market-entry memo, whose issues each
-need their own body of law, goes to specialists ([architecture](#architecture)). Either way
-every paragraph says whose law it applies, and comparative law contextualises, never
-overrides.
+**Comparative work is the normal case.** The author holds every configured jurisdiction's
+connectors, so a short comparison is answered in its own loop; for a market-entry memo whose
+issues each need their own body of law, it can hand each to a specialist with `run_workflow`
+([architecture](#architecture)). Either way every paragraph says whose law it applies, and
+comparative law contextualises, never overrides.
 
 Across jurisdictions:
 
@@ -258,10 +263,13 @@ Across jurisdictions:
 ### 15 practice skills
 
 Each skill is a progressive-disclosure bundle. Its `SKILL.md` (under 100 lines) is the
-method: the planner picks the skill for each piece of legal work, and that file is inlined,
-with the general playbook, for whoever does it — the author, or each specialist on a complex
-turn. `references/` prose and `resources/` presets stay on disk until that agent calls
-`read_skill_reference`.
+method. The author's system prompt lists each method by name and one line; when a request
+fits one, the author calls `load_skill`, which returns the method without its
+specialist-bundle sections, with the active pack's overlay and the list of files
+`read_skill_file` opens. A method picked in the UI is inlined in the request instead. A
+`run_workflow` specialist holds one method, inlined with the general playbook, and opens its
+`references/` prose and `resources/` presets with `read_skill_reference`. `cite-check` is
+not on the author's list: it runs as the citation audit.
 
 | Skill | What it does |
 |---|---|
@@ -283,16 +291,19 @@ turn. `references/` prose and `resources/` presets stay on disk until that agent
 
 ### Domain packs
 
-A **domain pack** adds subject-matter depth to the generic skills without forking them. It
-is active when `active_domain_packs`, a project or `--domain-pack` names it, or when its
-markers appear in the request or the last three messages. Then its playbook and source
-routing are standing context for every legal author and specialist, and the skill in use
-gets its overlay; otherwise no generic prompt or `SKILL.md` names its regulators, treaties or
-tools, and two tests keep it that way.
+A **domain pack** adds subject-matter depth to the generic skills without forking them. A
+pack named by `active_domain_packs`, a project or `--domain-pack` is pinned: its playbook and
+source routing are in the author's prompt from the start. Every other installed pack is
+listed by name only, and the author loads it with `load_pack` when it judges the request
+falls in the domain; nothing matches keywords. The result carries the playbook, the source
+routing, the methods it overlays and its source tools, which wait behind tool search like
+every other source. For the rest of the turn `load_skill` appends the pack's overlay and
+`run_workflow` specialists hold the pack. Until a pack is pinned or loaded, no generic prompt
+or `SKILL.md` names its regulators, treaties or tools, and two tests keep it that way.
 
 ```
 legal_helper/domains/aviation/
-├── pack.yaml               # CN · US · EU · ET · ICAO, trigger markers, overlay map
+├── pack.yaml               # CN · US · EU · ET · ICAO, connectors, RAG, overlay map
 ├── playbook.md             # domain defaults under general playbook §0
 ├── research_sources.md     # which tool reaches FAA, EASA, CAAC, ICAO and ECAA law
 ├── references/ethiopia.md
@@ -318,9 +329,9 @@ process start. No core code changes unless it brings its own source: a connector
 
 ## External procedural skills
 
-The fifteen in-tree skills are legal methodology, inlined into the prompt with the playbook. A
-second kind lives outside the package and is driven, not inlined: it carries its own workflow,
-reference tree, artifact contracts and gate scripts.
+The fifteen in-tree skills are legal methodology, loaded by the author or inlined into a
+specialist with the playbook. A second kind lives outside the package and is driven, not
+inlined: it carries its own workflow, reference tree, artifact contracts and gate scripts.
 
 [ppt-master](https://github.com/hugohe3/ppt-master) makes every deck Lawgent produces. It
 authors one SVG per page, compiles them to native DrawingML, and gates the result with its own
@@ -396,13 +407,25 @@ reaches the export step.
 
 ## The tool surface
 
-78 in-process function tools (55 harness tools and 23 primary-source connectors), plus the
+82 in-process function tools (59 harness tools and 23 primary-source connectors), plus the
 tools of the HTTP MCP servers (the nine PKULaw services, and CourtListener's and GovInfo's
 official servers) and the hosted web search / fetch pair. They are assembled per turn from who
-is calling (author, specialist or procedure sub-agent), the active skill, jurisdictions and
-packs, so provider tool schemas stay small. The workflow executor runs the plan's tasks, and no
-plan task runs a procedure: `create_deck` and `run_procedure` are the only tools that start a
-sub-agent.
+is calling (author, specialist or procedure sub-agent), a specialist's method, the
+jurisdictions and the packs. `run_workflow`, `create_deck` and `run_procedure` are the only
+tools that start a sub-agent; a workflow task is a legal method or general work, never a
+procedure.
+
+**Only the operational tools are loaded on every request**: `read_document`, `load_skill`,
+`read_skill_file`, `load_pack`, `run_workflow`, project memory and hosted web search, plus a
+specialist's own skill and audit tools. Every functional tool — legal search and the local
+corpus, connectors, deadlines, Word / PDF / spreadsheet / slide tools, diagrams, procedures,
+pack sources — is marked `defer_loading` and found by the provider's own tool search, then
+called by its real name: OpenAI's `tool_search` over the deferred tools grouped into
+described namespaces, Anthropic's `tool_search_tool_bm25_20251119`. The author's prompt lists
+the groups. The `tools` array never changes, so the cached prefix survives. Measured on a
+one-word request, the tool surface fell from 17,865 to 3,007 input tokens on OpenAI and from
+37,423 to 4,971 on Anthropic. Every offered model was probed for it; there is no fallback
+path, and a new model must pass the same probe.
 
 <details open>
 <summary><b>Legal research and retrieval</b></summary>
@@ -456,14 +479,17 @@ sub-agent.
 </details>
 
 <details open>
-<summary><b>Skill runtime and memory</b></summary>
+<summary><b>Methods, packs, workflow, skill runtime and memory</b></summary>
 
 | Tool | Purpose |
 |---|---|
+| `load_skill` · `read_skill_file` | The author's methods: one method's steps, the active pack's overlay and its file list; then one of those files |
+| `load_pack` | Load a domain pack for the turn: its playbook, source routing, overlaid methods and source tools |
+| `run_workflow` | Up to three specialists researching in parallel, each with one method; their bundles and open gaps are the result |
 | `write_text_file` | Author a text file (SVG, Markdown, JSON) under `outputs/` |
 | `run_skill_script` | Run a skill's own Python or Node script: its gates and exporters |
 | `list_skill_dir` | List a skill's own tree |
-| `list_skill_references` · `read_skill_reference` | A skill's `references/` prose and `resources/` presets, on demand |
+| `list_skill_references` · `read_skill_reference` | A specialist's own skill files: `references/` prose and `resources/` presets, on demand |
 | `project_memory_write` · `project_memory_search` · `project_brief_read` | Durable cross-chat matter memory |
 | `list_format_recipes` · `read_format_recipe` | House formatting rules for deliverables |
 
@@ -485,11 +511,12 @@ Citation discipline is layered; each check catches one failure mode.
 | **Provenance tags** | Model recall presented as retrieval | `citations/provenance.py` — retrieval tags vs. verify tags |
 | **Pinpoint rule** | "See the Company Law" with no article | `answer_contract.py`: every sources line has a pinpoint or says `无法获得具体条款` / `pinpoint unavailable`; a repair may not keep an unconfirmed one |
 
-Citation QC is not a task the planner schedules. Once an answer with legal substance is
-written, a `cite-check` sub-agent audits it on a tool surface that cannot edit what it
-audits: at `filed` stakes (strictest, with a DO-NOT-FILE threshold) when the answer points at
-a filing or the turn was routed to `legal-response` / `litigation-analysis`, otherwise at
-`internal` stakes.
+Citation QC is not a workflow task. Once an answer with legal substance is written, a
+`cite-check` sub-agent audits it on a tool surface that cannot edit what it audits: at
+`filed` stakes (strictest, with a DO-NOT-FILE threshold) when the answer points at a filing
+or the turn used the `legal-response` or `litigation-analysis` method (loaded by the author
+or given to a specialist), otherwise at `internal` stakes. Whether an answer states law is
+read from the answer itself.
 
 **The audit runs before you read the answer, and it repairs.** A substantive legal answer is
 buffered, audited, and only then revealed, so a citation that does not support its claim is
@@ -507,38 +534,45 @@ matter work.
 
 ## Runtime internals
 
-**Planner and complexity dial.** One fast-tier routing call classifies each turn `simple` /
-`standard` / `complex`, reading the summary and the newest turns first, so the latest turn is
-never the one dropped. A greeting or a question about the assistant gets a direct reply
-unless the reply states law, which goes to the author. A missing fact gets one clarifying
-question, only when the answer can neither proceed on a stated assumption nor briefly cover
-each reading. Simple and standard turns, a short comparison or a request for a short answer
-included, are answered in one pass. A `complex` turn (several issues, each needing sustained
-research in its own body of law) pays for a decomposition call that returns the issues (争点,
-claim basis, elements, facts needed and assumed) and two or three specialists with disjoint
-evidence surfaces. If planning fails, the turn is answered in one pass, never on a guessed
-decomposition.
+**One author loop** (`workflow.WorkflowExecutor.stream`). The chat's own model, at the
+user's effort, reads every turn and answers it in one tool loop. It decides what it needs:
+which method to load, whether to load a pack, whether to research, whether to delegate, and
+whether to ask one clarifying question, which it does only when a missing fact changes the
+answer and neither a stated assumption nor a short answer for each reading will do. A
+disputed answer is worked again from the source material before it is changed. Until
+2026-10-14 a fast-tier router chose the path for each turn and wrote 48% of the answers
+itself; [the plan](docs/plans/2026-10-14-single-agent-loop.md) has the measurements that
+removed it.
 
-**One author holds the method.** The single-pass author and the integrator work from one
-system prompt (`authoring.py`): research rules, the whole general playbook, the output
-contract and, when the router chose a skill, that skill's `SKILL.md`. It is static per mode,
-skill and active packs, so it caches; the date, answer language, length tier, points to cover
-and any conflicting facts travel in the request tail.
+**One author prompt** (`authoring.py`): role and conduct, research conduct, the output
+contract, the rules for files written for other people, the whole general playbook, the
+method list, the pack list, the tool-search groups and the workflow guidance. It is static
+per set of pinned packs, so it caches; the date, answer language, length tier and a method
+the user picked travel in the request tail.
 
-**Sub-agent runtime.** A specialist runs in a forked context with its `SKILL.md` and the
-playbook inlined, the chat digest as its cache prefix, and only the attachments its task
-names (all of them when no task names any). It returns a research bundle (findings with
-pinpoints, per-issue element work, artefacts, out-of-scope items, sources) with a typed
-outcome: completed, empty, truncated, refused or failed. The integrator is an author, not a
-dispatcher: with the author's tools it walks the plan's issues, reconciles conflicting
-findings or says how they sit together, and closes or discloses every gap, including a
-failed or empty specialist.
+**The workflow is a tool** (`multi_agent.py`). `run_workflow(objective, tasks)` takes up to
+`max_workflow_tasks` (3) tasks, each a title, a method, a self-contained assignment and
+optional `depends_on`, and runs them in parallel under the concurrency cap, with one retry,
+rate-limit back-off and fail-soft gaps. Whether it pays is the model's call, set out in the
+tool description; a request for a workflow or for several agents, in any language or
+phrasing, makes it mandatory, and that is the model's judgement too, never a keyword match.
+Depth is one: specialists never hold the tool. A specialist runs in a forked context with
+its `SKILL.md` and the playbook inlined, the chat digest as its cache prefix, the workflow's
+objective and its own task, and only the attachments its task names (all of them when no
+task names any). It returns a research bundle (findings with pinpoints, issues, artefacts,
+out-of-scope items, sources) with a typed outcome: completed, empty, truncated, refused or
+failed. The bundles and the open gaps are the tool result, exempt from the result budget,
+and the author integrates them in the same loop: it reconciles conflicting findings or says
+how they sit together, and closes or discloses every gap, including a failed or empty
+specialist. Every event a specialist emits carries `task_id` and `parent_call_id`, so the UI
+nests it under its `run_workflow` call.
 
 **Roles are a table.** `config.DEFAULT_ROLE_PROFILES` sets the model tier and effort of the
-router, decomposer, author, specialists, integrator, cite-check, summariser, title and deck;
-`role_profiles:` in `config.yaml` overrides a row. Routing and decomposition run on the fast
-tier at low effort, the author at the chat's own setting, specialists and the integrator
-capped at medium, and the citation audit on the fast tier at the chat's effort.
+author, specialists, cite-check, summariser, title and deck; `role_profiles:` in
+`config.yaml` overrides a row. The author runs at the chat's own setting, specialists capped
+at medium, the citation audit on the fast tier at the chat's effort, and the summary and
+title on the fast tier at low and no effort. `done` names the model that wrote the answer,
+and the message is stamped with it.
 
 **One output contract.** What an answer must look like is rendered from `answer_contract.py`; a
 test fails when a prompt restates it. The author leads with the conclusion, cites at the point
@@ -546,10 +580,10 @@ of use and, when the facts call for action (a deadline, a filing, evidence to ob
 analysis with those steps in order. Sources are one numbered line each with a status word in
 the answer's language (已在线核验 / 未核验 / 用户提供 / 无法获得具体条款, or verified online / unverified /
 user-provided / pinpoint unavailable); no claim column, and no disclaimer line, since the
-interface and every export carry one. Length is a tier, not a cap: simple → brief, standard →
-focused, complex → full memo, pinnable per chat (`answer_length`). It adds one sentence to the
-request and sets OpenAI's `text.verbosity`, never a token, round or tool-budget limit; a length
-the user asks for wins.
+interface and every export carry one. Length is a tier, not a cap: `auto` by default, one
+sentence asking the author to fit the request with the provider's default verbosity, or brief /
+focused / full pinned per chat (`answer_length`), each with its OpenAI `text.verbosity`. It is
+never a token, round or tool-budget limit; a length the user asks for wins.
 
 **The answer lint is a stream filter** (`answer_lint.py`). Working on whole lines as the
 answer streams, so a URL is never split, it strips `utm_*` parameters, drops a search chip
@@ -638,11 +672,12 @@ earlier result would invalidate later thinking, the server clears them
 clearing leaves in place.
 
 **Runs are durable** (`runs.py`). Each run writes its phases to
-`state/runs/<run_id>/artifacts/` as they complete (plan, research bundles, draft, audits,
-repairs), with a snapshot and an event log. A cancel or provider outage finishes the run as
-`paused`; passing its `run_id` back as `resume_run_id` reuses the completed bundles instead
-of re-running the research. `GET /api/runs` lists what is resumable. Writes are best-effort:
-durability can never fail a turn.
+`state/runs/<run_id>/artifacts/` as they complete (a workflow's task list, research bundles,
+draft, audits, repairs), with a snapshot and an event log. A cancel or provider outage
+finishes the run as `paused`; passing its `run_id` back as `resume_run_id` reuses the
+bundles of tasks with the same id and method instead of re-running their research.
+`GET /api/runs` lists what is resumable. Writes are best-effort: durability can never fail a
+turn.
 
 **Documents are read as the user sees them.** One reader (`documents/intake.py`) serves
 `read_document` and attachments. Word files (.docx, and .doc, .rtf, .odt or .wps through a
@@ -696,12 +731,17 @@ an answer said what it said.
 
 `python -m legal_helper serve --port 8010` starts FastAPI with SSE streaming and serves the
 React 19 + Vite UI that `npm run build` writes to `legal_helper/webui_dist/`; without a
-build it falls back to a minimal legacy page. `npm run dev` adds hot reload on port 5174,
-proxying `/api` to 8010.
+build, `/` returns a 503 page saying to run `npm run build`. `npm run dev` adds hot reload on
+port 5174, proxying `/api` to 8010.
 
-- **Live trajectory** — plan, per-agent tasks, tool calls and reasoning as they happen, folded
-  into a one-line run summary when done; a status line keeps moving through long document
-  writes, hosted searches and deck runs
+- **Live trajectory** — reasoning and tool calls as they happen, folded into a one-line run
+  summary when done; a status line keeps moving through long document writes, hosted
+  searches, workflows and deck runs
+- **Workflow card** — a `run_workflow` call renders as one card: the objective, then a row
+  per specialist with its method, status and latest action, expanding to its task, its own
+  tool calls and its sources, and closing to a receipt (tool calls, tokens, time)
+- **Methods** — the composer's 技能 menu picks a method for the turn, inlined in the request
+  rather than left to the model to load
 - **Sources** — one line per source, linked where a URL exists, with a status dot: green for
   verified online, amber for unverified or pinpoint unavailable, neutral for the user's own
   files
@@ -767,9 +807,10 @@ anthropic_fast_model: claude-sonnet-5
 openai_model: gpt-6.1-sol         # a named variant; there is no bare "gpt-6.1"
 openai_fast_model: gpt-6-luna
 openai_reasoning_effort: medium   # none … max; both providers read it
-parent_max_iterations: 0          # author and integrator tool-loop round limit; 0 = none
+parent_max_iterations: 0          # author tool-loop round limit; 0 = none
 sub_agent_max_iterations: 0       # same, for specialists and the citation audit
 external_skill_max_iterations: 0  # same, for external procedures
+max_workflow_tasks: 3             # specialists one run_workflow call may start
 max_concurrent_agents: auto       # Anthropic 2, OpenAI 4; an integer pins it
 max_tokens: 32000                 # per-turn output ceiling
 chat_context_token_budget: 16000  # floor of the chat digest's budget
@@ -825,7 +866,10 @@ invocation and env var uses.
 
 ```
 legal_helper/
-├── workflow.py         # routing, planning, author, specialists, integrator
+├── workflow.py         # the author loop, audit-then-reveal, answer export
+├── multi_agent.py      # run_workflow: specialists in parallel, bundles as the result
+├── tool_exposure.py    # what is always loaded, what waits behind tool search
+├── turn_context.py     # the turn's state, for the tools that need it
 ├── authoring.py        # the author's system prompt
 ├── answer_contract.py  # the output contract: sources list, status words
 ├── answer_lint.py      # deterministic answer clean-up as it streams
@@ -846,7 +890,7 @@ legal_helper/
 ├── domains/aviation/   # the aviation pack
 ├── playbook/           # PRC-first defaults + format recipes
 ├── connectors/         # in-process connectors (CN/US/EU/ET/aviation)
-├── mcp/                # MCP registry, manager, adapter, in-tree servers
+├── mcp/                # MCP registry, adapter, client, health breaker, in-tree server
 ├── citations/          # extract · validate · round-trip · ground · provenance
 ├── rag/                # chunker · embeddings · store · hybrid retrieve · rerank
 ├── documents/          # the deliverable layer
@@ -858,6 +902,8 @@ legal_helper/
 │   ├── writers/          # DOCX · PDF · XLSX
 │   └── …                 # DOCX reader, edit integrity, lineage, PDF ops, diagrams
 └── tools/              # function tools, assembled per turn
+    ├── skill_resources.py # load_skill · read_skill_file · a specialist's skill files
+    ├── pack_tools.py     # load_pack and the pack list
     ├── decks.py          # create_deck, through ppt-master
     ├── procedures.py     # run_procedure
     ├── redline_tools.py  # redline_docx · compare_docx
@@ -884,8 +930,8 @@ python -m pytest -q tests/test_provider_parity.py   # one turn, one result shape
 python -m pytest -q tests/test_legal_method_content.py  # PRC doctrine: playbook, pack, presets
 python -m pytest -q tests/test_citations.py tests/test_grounding.py  # extract, validate, round-trip
 python -m pytest -q tests/test_dates.py             # compute_period: 调休, holidays, month-end
-python -m pytest -q tests/test_workflow_planning.py # routing, task merging
-python -m pytest -q tests/test_verified_synthesis.py  # audit-then-reveal, repair, clarify gates
+python -m pytest -q tests/test_author_loop.py       # one author stream per turn; methods on demand
+python -m pytest -q tests/test_verified_synthesis.py  # audit-then-reveal, repair
 python -m pytest -q tests/test_decks.py             # create_deck against a faked ppt-master run
 python -m pytest -q tests/test_document_quality.py  # the output lint
 python -m pytest -q tests/test_docx_prc_output.py   # A4, 第 X 页 共 Y 页, list restarts, GB/T 9704
@@ -895,11 +941,10 @@ LEGAL_HELPER_LIVE=1 python -m pytest tests/test_integration_live.py -m live     
 LEGAL_HELPER_LIVE_OPENAI=1 python -m pytest tests/test_integration_live_openai.py -m live  # OpenAI
 ```
 
-On a host with every optional tool listed below, the baseline is 946 passed, 3 failed, 2
-skipped. The failures are in `tests/test_caac_local_connector.py`: its fixture statutes fall
-under the connector's 60-character stub floor and read as PDF-only stubs, and fetching the real
-corpus does not change that. The skips are the two opt-in live tests. Anything else is a
-regression.
+On a host with every optional tool listed below, the expected failures are the three in
+`tests/test_caac_local_connector.py`: its fixture statutes fall under the connector's
+60-character stub floor and read as PDF-only stubs, and fetching the real corpus does not
+change that. The expected skips are the two opt-in live tests. Anything else is a regression.
 
 Tests that need what a host may lack — LibreOffice, poppler's `pdftoppm`, Node, Graphviz `dot`,
 RapidOCR, the Noto CJK font, pillow-heif (deliberately not in `requirements.txt`), an installed
@@ -914,12 +959,13 @@ Current limitations, in full:
 - **Aviation is the only populated domain pack.** The pack mechanism is general; the content
   is not yet.
 - **UK and HK have no dedicated connectors.** They run on hosted web search plus grounding.
-- **PKULaw is not on the single-pass author's surface yet.** The author and the integrator hold
-  no MCP tools, so a simple or standard turn looks PRC law up through flk.npc.gov.cn and hosted
-  web search; a complex turn's specialists and the citation audit hold PKULaw.
-- **Three aviation connector tools are disabled** — `ccar_search`/`ccar_fetch` (the CAAC search
-  endpoint moved behind a JS-rendered form) and `drs_fetch` (drs.faa.gov is SPA-only);
-  `connectors/__init__.py` gives the reason and the workaround for each.
+- **PKULaw is not on the author's surface yet.** The author holds no MCP tools, so a turn it
+  answers alone looks PRC law up through flk.npc.gov.cn and hosted web search; `run_workflow`
+  specialists and the citation audit hold PKULaw.
+- **There is no live CAAC search and no FAA DRS fetch.** The CAAC search endpoint moved behind
+  a JS-rendered form and drs.faa.gov serves only a JavaScript shell to a non-browser client, so
+  CAAC rules come from the staged local corpus (`caac_local_*` and RAG), and a `drs_search` hit
+  is read through its Federal Register `html_url` or `fetch_url_to_artifact`.
 - **PRC citations stay `could_not_check` until a live PKULaw round-trip.** That is deliberate:
   structural plausibility is not verification.
 - **Corpus binaries are not committed.** `legal_helper/rag/corpus/*/manifest.yaml` and the
@@ -972,7 +1018,7 @@ this repo contributes is the assembly, the PRC-first framing, and the connector 
 | [mizzlelover/gongwen-gbt9704-skill](https://github.com/mizzlelover/gongwen-gbt9704-skill) | MIT | **Driven, and the reference for the in-tree 公文 layout.** `run_procedure` drives it for a red-head 公文; `layout="gbt9704"` takes its margins exactly as the skill's verifier (`scripts/verify_gongwen_docx.mjs`) pins them, and its footer distance and heading spacing from the skill's own calibration; a test runs that verifier over the output when the skill and Node are installed |
 | [icip-cas/PPTAgent](https://github.com/icip-cas/PPTAgent) | MIT | PPTEval's three axes — content, design, coherence — and the argument that design is scoreable; no in-tree deck judgement uses them any more, since ppt-master's own gate judges each deck |
 | [Textual-to-Visual Iterative Self-Verification](https://arxiv.org/abs/2502.15412) | paper | Review a layout as a *picture*, not a coordinate list — why an authored render returns to the model as images |
-| [vercel/ai-elements](https://github.com/vercel/ai-elements) + [shadcn/ui](https://github.com/shadcn-ui/ui) | see repos | The chat UI component layer — conversation, message, reasoning, plan, task, tool, sources |
+| [vercel/ai-elements](https://github.com/vercel/ai-elements) + [shadcn/ui](https://github.com/shadcn-ui/ui) | see repos | The chat UI component layer — conversation, message, reasoning, tool, prompt input |
 | [lilialla/request-right-skill-reference](https://github.com/lilialla/request-right-skill-reference) | MIT (code) / CC BY 4.0 (method text) | The claim lifecycle — arises → not extinguished → enforceable → defences — as the row order of the issue/element method (`skills/litigation-analysis/references/issue_element_method.md`), restated in our own words |
 | [happylawyer/jiubufa-skill](https://github.com/happylawyer/jiubufa-skill) | MIT | The 八个一致 consistency check, the denial-vs-defence split and the 真伪不明 rule in the issue/element method |
 | [cat-xierluo/legal-skills](https://github.com/cat-xierluo/legal-skills) (`court-sms`) | MIT | PRC service-of-process and period rules as the reference and test cases for `compute_period` |
@@ -984,6 +1030,11 @@ Surveyed rather than copied, but each changed a decision here:
 
 - [harveyai/harvey-labs](https://github.com/harveyai/harvey-labs) — the Legal Agent Benchmark;
   why grounding is an automated pass, not a prompt instruction
+- [openai/codex](https://github.com/openai/codex), [zai-org/ZCode](https://github.com/zai-org/ZCode)
+  and [anthropics/claude-agent-sdk-python](https://github.com/anthropics/claude-agent-sdk-python)
+  — the one author loop: no routing before the turn, the workflow as a depth-1 tool with at
+  most three children, sub-agent events naming their parent call, methods loaded on demand,
+  and functional tools behind native tool search
 - [lawve-ai/awesome-legal-skills](https://github.com/lawve-ai/awesome-legal-skills) — a curated
   map of the legal Agent Skills ecosystem
 - [anylegal-ai/anylegal-oss](https://github.com/anylegal-ai/anylegal-oss) — a multi-LLM harness

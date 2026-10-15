@@ -10,8 +10,9 @@ This module maintains it by **delta** instead. The model is asked only for what
 changed, as ``+ SECTION | text`` / ``- SECTION | text`` lines against a
 sectioned document; a deterministic merge applies them. Bullets accumulate and
 are dropped only when the model says so or a section hits its cap — so loss is
-bounded and explicit rather than emergent. If a delta will not parse, the old
-rewrite path still runs, so a bad model turn degrades rather than breaks.
+bounded and explicit rather than emergent. If a delta will not parse, the
+previous summary is kept as it was, so a bad model turn degrades rather than
+breaks.
 """
 
 from __future__ import annotations
@@ -128,13 +129,6 @@ def apply_delta(sections: dict[str, list[str]], ops: Iterable[tuple[str, str, st
         if len(bullets) > _MAX_BULLETS_PER_SECTION:
             out[name] = bullets[-_MAX_BULLETS_PER_SECTION:]
     return out
-
-
-def fallback_title(text: str) -> str:
-    clean = " ".join(text.strip().split())
-    if not clean:
-        return "New chat"
-    return clean[:48] + ("..." if len(clean) > 48 else "")
 
 
 # Room for adaptive thinking ahead of a ten-token title: thinking counts toward

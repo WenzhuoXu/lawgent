@@ -15,7 +15,6 @@ import mimetypes
 import re
 import uuid
 from pathlib import Path
-from typing import Any
 from urllib.parse import unquote, urlparse
 
 import httpx

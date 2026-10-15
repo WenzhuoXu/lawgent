@@ -18,7 +18,7 @@ formula with openpyxl's tokenizer and rewrites the references itself.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 _CELL_RE = re.compile(r"^(\$?)([A-Za-z]{1,3})(\$?)([0-9]+)$")
 _COL_RE = re.compile(r"^(\$?)([A-Za-z]{1,3})$")

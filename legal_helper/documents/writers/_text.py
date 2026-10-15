@@ -24,7 +24,7 @@ is cheaper to own than to depend on.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Literal, Optional
+from typing import Literal, Optional
 
 Lang = Literal["zh", "en"]
 
@@ -171,10 +171,6 @@ def display_width(text: str) -> float:
     return sum(1.0 if is_wide(c) else 0.5 for c in text or "")
 
 
-def joined_text(parts: Iterable[Optional[str]]) -> str:
-    return "\n".join(p for p in parts if p)
-
-
 __all__ = [
     "CHINESE_SHARE_THRESHOLD",
     "DISCLAIMERS",
@@ -187,7 +183,6 @@ __all__ = [
     "export_title",
     "han_share",
     "is_wide",
-    "joined_text",
     "resolve_lang",
     "split_leading_heading",
     "strip_title_heading",

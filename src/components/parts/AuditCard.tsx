@@ -1,8 +1,7 @@
 /**
  * AuditCard — the citation-audit verdict UI. The one bespoke component (no OSS
  * equivalent): renders the staged progress bar while auditing and the
- * pass / needs-review / DO-NOT-FILE verdict bands afterward. Faithful port of
- * CitationAuditPanel (main.jsx:1349-1439), restyled onto the paper/ink tokens.
+ * pass / needs-review / DO-NOT-FILE verdict bands afterward.
  */
 
 import { useMemo, useRef } from "react";
@@ -104,8 +103,9 @@ export function AuditCard({
         </div>
       ) : null}
 
-      {/* Structured per-citation rows (review + DNF). Falls back to the legacy
-          warning strings when the backend didn't surface structured items. */}
+      {/* Structured per-citation rows (review + DNF). Falls back to the
+          warning strings when the audit produced no structured items (a failed
+          cite-check run reports only warnings). */}
       {tone !== "pass" && flaggedCount > 0 ? (
         <div ref={rowsRef} className="mt-2.5">
           <AuditItemRows items={items} />

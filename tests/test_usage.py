@@ -81,17 +81,102 @@ def test_gpt_56_terra_pricing_math(tmp_path):
 
 
 def test_gpt_56_family_bills_cache_writes_when_reported(tmp_path):
-    # The Responses API does not report cache-write tokens yet; when a record
-    # carries them anyway, the 5.6-family cache_write rate (1.25x input) applies.
+    # Cache-write tokens are a subset of input_tokens billed at 1.25x input,
+    # so each written token costs the write rate once, not input + write.
     record_usage(
         "openai",
         "gpt-5.6-terra",
-        {"input_tokens": 100_000, "output_tokens": 0, "cache_creation_input_tokens": 10_000},
+        {"input_tokens": 100_000, "output_tokens": 0, "cache_write_input_tokens": 10_000},
         state_dir=tmp_path,
     )
     summary = month_summary(state_dir=tmp_path)
-    # 0.1M*2.00 + 0.01M*2.50 = 0.20 + 0.025
-    assert summary["estimated_cost_usd"] == pytest.approx(0.225)
+    assert summary["totals"]["cache_write_tokens"] == 10_000
+    # 0.09M*2.00 + 0.01M*2.50 = 0.18 + 0.025
+    assert summary["estimated_cost_usd"] == pytest.approx(0.205)
+
+
+def test_openai_cache_write_from_the_provider_usage_shape(tmp_path):
+    # The OpenAI provider reports writes as cache_write_input_tokens beside
+    # cached_input_tokens (openai_provider._accumulate_usage); a turn shaped
+    # like a real gpt-6.1-sol turn: five requests of ~100K each, summed to
+    # 501,077 in, 395,656 cached, 105,406 written. No request crossed 272K, so
+    # the sum crossing it must not trigger the surcharge.
+    record_usage(
+        "openai",
+        "gpt-6.1-sol",
+        {
+            "input_tokens": 501_077,
+            "output_tokens": 3_696,
+            "cached_input_tokens": 395_656,
+            "cache_write_input_tokens": 105_406,
+            "requests": 5,
+        },
+        state_dir=tmp_path,
+    )
+    summary = month_summary(state_dir=tmp_path)
+    assert summary["totals"]["cache_write_tokens"] == 105_406
+    assert summary["totals"]["requests"] == 5
+    assert summary["totals"]["long_context_requests"] == 0
+    ordinary = 501_077 - 395_656 - 105_406
+    expected = (ordinary * 2.00 + 395_656 * 0.10 + 105_406 * 2.50 + 3_696 * 10.00) / 1e6
+    assert summary["estimated_cost_usd"] == pytest.approx(expected, abs=1e-4)  # ≈ $0.34
+
+
+def test_only_the_over_threshold_requests_of_a_turn_are_surcharged(tmp_path):
+    # Two requests: 100K (normal) and 300K (surcharged), 1K output each.
+    record_usage(
+        "openai",
+        "gpt-6.1-sol",
+        {
+            "input_tokens": 400_000,
+            "output_tokens": 2_000,
+            "requests": 2,
+            "long_context": {"requests": 1, "input_tokens": 300_000, "output_tokens": 1_000},
+        },
+        state_dir=tmp_path,
+    )
+    summary = month_summary(state_dir=tmp_path)
+    assert summary["totals"]["long_context_requests"] == 1
+    # 0.1M*2.00 + 1K*10.00  +  0.3M*4.00 + 1K*15.00
+    assert summary["estimated_cost_usd"] == pytest.approx(0.2 + 0.01 + 1.2 + 0.015)
+
+
+def test_openai_accumulator_splits_requests_at_the_threshold():
+    from types import SimpleNamespace
+
+    from legal_helper.providers.openai_provider import _accumulate_usage
+
+    def resp(inp, out, cached=0, written=0):
+        details = SimpleNamespace(cached_tokens=cached, cache_write_tokens=written)
+        return SimpleNamespace(input_tokens=inp, output_tokens=out, total_tokens=inp + out,
+                               input_tokens_details=details)
+
+    total: dict = {}
+    _accumulate_usage(total, resp(100_000, 500, cached=0, written=90_000))
+    _accumulate_usage(total, resp(280_000, 700, cached=90_000, written=150_000))
+    assert total["requests"] == 2
+    assert total["input_tokens"] == 380_000
+    assert total["cache_write_input_tokens"] == 240_000
+    assert total["long_context"] == {
+        "requests": 1,
+        "input_tokens": 280_000,
+        "output_tokens": 700,
+        "cached_input_tokens": 90_000,
+        "cache_write_input_tokens": 150_000,
+    }
+
+
+def test_openai_cache_writes_take_the_long_context_surcharge(tmp_path):
+    # A row written before requests were counted: the sum decides, as before.
+    record_usage(
+        "openai",
+        "gpt-6.1-sol",
+        {"input_tokens": 300_000, "output_tokens": 0, "cache_write_input_tokens": 100_000},
+        state_dir=tmp_path,
+    )
+    summary = month_summary(state_dir=tmp_path)
+    # Past 272K the whole request is 2x input: 0.2M*4.00 + 0.1M*5.00
+    assert summary["estimated_cost_usd"] == pytest.approx(1.3)
 
 
 def test_gpt_55_never_bills_cache_writes(tmp_path):

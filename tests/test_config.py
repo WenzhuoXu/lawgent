@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 
 def test_api_key_file_supplies_provider_keys(tmp_path, monkeypatch):
     from legal_helper import config as cfg_mod

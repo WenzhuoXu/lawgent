@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import threading
 from collections import Counter
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class Embedder(Protocol):
@@ -28,6 +29,10 @@ class BgeM3Embedder:
     latter pulls in ``peft`` and other deps that conflict with the
     repo's pinned ``transformers`` major version. The dense output is
     equivalent for retrieval purposes.
+
+    A search releases the weights when it finishes
+    (:func:`legal_helper.rag.retrieve.models_held`); the next ``encode``
+    loads them again.
     """
 
     name = "BAAI/bge-m3"
@@ -35,20 +40,29 @@ class BgeM3Embedder:
 
     def __init__(self) -> None:
         self._model = None
+        self._lock = threading.Lock()
 
-    def _load(self) -> None:
-        if self._model is not None:
-            return
-        from sentence_transformers import SentenceTransformer
+    def _load(self) -> Any:
+        # Locked so two overlapping searches load one copy, not two.
+        with self._lock:
+            if self._model is None:
+                from sentence_transformers import SentenceTransformer
 
-        self._model = SentenceTransformer(self.name)
+                self._model = SentenceTransformer(self.name)
+            return self._model
+
+    def release(self) -> bool:
+        """Drop the weights. True when a loaded model was dropped."""
+        with self._lock:
+            dropped, self._model = self._model is not None, None
+        return dropped
 
     def encode(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        self._load()
-        assert self._model is not None
-        out = self._model.encode(
+        # A local reference, so a release mid-call cannot pull the model away.
+        model = self._load()
+        out = model.encode(
             texts,
             normalize_embeddings=True,
             convert_to_numpy=True,
@@ -115,5 +129,12 @@ def default_embedder() -> Embedder:
     if _DEFAULT_EMBEDDER is None:
         _DEFAULT_EMBEDDER = BgeM3Embedder()
     return _DEFAULT_EMBEDDER
+
+
+def release_default_embedder() -> bool:
+    """Drop the default embedder's weights, keeping the instance (stores
+    hold it). True when a loaded model was dropped."""
+    release = getattr(_DEFAULT_EMBEDDER, "release", None)
+    return bool(release()) if release else False
 
 

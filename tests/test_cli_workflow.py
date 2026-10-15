@@ -1,8 +1,8 @@
 """CLI unification: both CLI commands must ride the WorkflowExecutor path.
 
 The REPL keeps an in-process transcript + rolling summary (so follow-ups like
-"expand section 2" keep their context), and the CLI surface must produce the
-same plan-normalization events as the server surface for an identical prompt.
+"expand section 2" keep their context), and the CLI surface must start the
+same author turn as the server surface for an identical prompt.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from rich.console import Console
 
 from legal_helper.config import load_settings
 from legal_helper.logging_setup import workflow_event_sink_var
-from legal_helper.providers import RunResult, StreamEvent
+from legal_helper.providers import StreamEvent
 from legal_helper.workflow import WorkflowExecutor
 
 import legal_helper.cli as cli_mod
@@ -47,48 +47,18 @@ class ErrorExecutor(FakeExecutor):
         yield StreamEvent("error", {"message": "provider exploded"})
 
 
-class WorkflowMockProvider:
-    """Planner returns a plan that needs normalization; stream() is the answer."""
+class AuthorMockProvider:
+    """Answers every author turn with one fixed text."""
 
     name = "mock"
     model = "mock-advanced"
-    supports_hosted_web_search = False
-    supports_file_search = False
-    supports_structured_outputs = False
 
-    def __init__(self, plan_json: str, final_text: str = "FINAL ANSWER") -> None:
-        self.plan_json = plan_json
+    def __init__(self, final_text: str = "FINAL ANSWER") -> None:
         self.final_text = final_text
 
-    def run(self, *args, **kwargs):
-        return RunResult(text=self.plan_json, provider=self.name, model=self.model)
-
-    def tool_runner(self, *args, **kwargs):
-        return self.run(*args, **kwargs)
-
-    def stream(self, system, messages, tools=(), *, max_iterations=None):
+    def stream(self, system, messages, tools=(), *, max_iterations=None, **kwargs):
         yield StreamEvent("delta", {"text": self.final_text})
         yield StreamEvent("done", {"text": self.final_text})
-
-
-# One real specialist + a redundant final-synthesis task: normalization must
-# strip task_2, leaving a single-task plan (single-pass shortcut, no sub-agent
-# provider needed).
-_NORMALIZABLE_PLAN_JSON = """
-{
-  "title": "Passport workflow",
-  "user_language": "English",
-  "execution_mode": "agent_workflow",
-  "routing_reason": "needs research",
-  "issue_decomposition": ["sources", "final"],
-  "agent_tasks": [
-    {"id": "task_1", "skill_name": "brief", "title": "Sources", "task": "Research the governing sources and cite them.", "depends_on": []},
-    {"id": "task_2", "skill_name": "legal-response", "title": "Draft final Chinese legal analysis", "task": "Prepare the final answer in Chinese and synthesize all prior research.", "depends_on": ["task_1"]}
-  ],
-  "integration_instructions": "Integrate in Chinese.",
-  "citation_requirements": "Use pinpoint citations."
-}
-"""
 
 
 def _capture_workflow_events(fn):
@@ -188,42 +158,33 @@ def test_cmd_run_routes_through_workflow_executor(tmp_path, monkeypatch, capsys)
     assert "answer to: Summarize the filing duties." in capsys.readouterr().out
 
 
-def test_cli_and_server_paths_emit_identical_plan_normalization_events(tmp_path):
+def test_cli_and_server_paths_start_the_same_author_turn(tmp_path):
     """Parity lock: the CLI turn and the server-path engine (a direct
-    WorkflowExecutor.stream call) must emit the same plan-normalization
-    workflow events for an identical prompt."""
+    WorkflowExecutor.stream call) must start the same author turn for an
+    identical prompt."""
     settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
     prompt = "旅客机上撕毁护照怎么办？"
 
-    def _norm_events(records: list[dict]) -> list[tuple[str, dict]]:
-        return [
-            (r["event_type"], r["data"])
-            for r in records
-            if r["event_type"].startswith("workflow_plan")
-        ]
+    def _author_events(records: list[dict]) -> list[dict]:
+        return [r["data"] for r in records if r["event_type"] == "author_started"]
 
     # CLI surface.
     cli_session = _ChatSession(
         settings,
-        executor=WorkflowExecutor(settings=settings, provider=WorkflowMockProvider(_NORMALIZABLE_PLAN_JSON)),
+        executor=WorkflowExecutor(settings=settings, provider=AuthorMockProvider()),
     )
     console = Console(file=open(tmp_path / "console.txt", "w", encoding="utf-8"))
     cli_records = _capture_workflow_events(lambda: cli_session.turn(console, prompt))
 
     # Server surface engine: the exact call server.py's produce() makes.
-    server_executor = WorkflowExecutor(
-        settings=settings, provider=WorkflowMockProvider(_NORMALIZABLE_PLAN_JSON)
-    )
+    server_executor = WorkflowExecutor(settings=settings, provider=AuthorMockProvider())
     server_records = _capture_workflow_events(
         lambda: list(
             server_executor.stream(prompt, attachments=[], recent_messages=[], memory_summary="")
         )
     )
 
-    cli_norm = _norm_events(cli_records)
-    server_norm = _norm_events(server_records)
-    assert cli_norm == server_norm
-    # And normalization genuinely ran on both surfaces (synthesis task stripped).
-    normalized = [data for etype, data in cli_norm if etype == "workflow_plan_normalized"]
-    assert normalized and normalized[0]["removed_final_synthesis_tasks"] == ["task_2"]
+    cli_author = _author_events(cli_records)
+    assert len(cli_author) == 1
+    assert cli_author == _author_events(server_records)
     assert [m.content for m in cli_session.history if m.role == "assistant"] == ["FINAL ANSWER"]

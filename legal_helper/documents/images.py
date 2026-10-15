@@ -10,7 +10,6 @@ a fallback when it is what happens to be installed.
 
 from __future__ import annotations
 
-HEIF_SUFFIXES = frozenset({".heic", ".heif"})
 _REGISTERED = False
 
 
@@ -30,4 +29,4 @@ def register_heif_opener() -> bool:
     return False
 
 
-__all__ = ["HEIF_SUFFIXES", "register_heif_opener"]
+__all__ = ["register_heif_opener"]

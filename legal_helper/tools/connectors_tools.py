@@ -1,5 +1,5 @@
-"""Helper that hands the orchestrator the connector functions visible under
-the active jurisdiction + domain packs.
+"""The connector functions visible under the active jurisdictions + domain
+packs, for the author's and the specialists' tool surfaces.
 
 The connectors themselves live in ``legal_helper/connectors/`` and are
 ``@beta_tool``-decorated, so they are already function-tool-shaped for both

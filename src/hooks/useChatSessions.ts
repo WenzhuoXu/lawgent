@@ -2,8 +2,7 @@
  * Multi-chat registry. Holds one framework-agnostic `Chat` instance per opened
  * chat in a ref map; the viewed chat binds to the view via useChat({ chat }).
  * Background chats keep their instance alive and continue streaming off-screen
- * (the transport ReadableStream is still consumed by that instance's loop),
- * replicating the old busyChatIds / isViewingChat behavior for free.
+ * (the transport ReadableStream is still consumed by that instance's loop).
  */
 
 import { useCallback, useRef, useState } from "react";
@@ -28,7 +27,6 @@ export function useChatSessions(deps: Deps) {
     createLegalHelperTransport({
       getSettings: () => depsRef.current.getSettings(),
       getSkillHint: () => depsRef.current.getSkillHint(),
-      onServerAssistantId: () => {},
       onSideChannel: (chatId, name, data) => depsRef.current.onSideChannel(chatId, name, data),
     }),
   );
@@ -87,20 +85,7 @@ export function useChatSessions(deps: Deps) {
 
   const activeChat = activeId ? registry.current.get(activeId) ?? getOrCreate(activeId) : undefined;
 
-  return {
-    activeId,
-    setActiveId,
-    activeChat,
-    open,
-    create,
-    getOrCreate,
-    registry,
-    /** true if ANY registered chat is currently streaming */
-    anyBusy: () =>
-      [...registry.current.values()].some(
-        (c) => c.status === "streaming" || c.status === "submitted",
-      ),
-  };
+  return { activeId, activeChat, open, create, getOrCreate };
 }
 
 /** Bind the currently-viewed Chat instance into React. */
@@ -109,11 +94,10 @@ export function useActiveChat(chat: Chat<UIMessage> | undefined) {
   const fallback = useRef<Chat<UIMessage> | null>(null);
   if (!fallback.current) fallback.current = new Chat<UIMessage>({ id: "__idle__", messages: [] });
   // resume: on (re)bind, if the server reports an active run for this chat, the
-  // transport's reconnectToStream re-attaches and replays it — this replaces
-  // the old 1.5s polling fallback.
+  // transport's reconnectToStream re-attaches and replays it.
   // throttle: coalesce React re-renders to ~30ms (~33fps). The backend emits
-  // every token/tool/agent delta immediately (server.py:987), so without this
-  // useChat's default batching makes updates arrive in visible chunks. A small
-  // throttle yields a smooth, steady reveal without flooding React.
+  // every token/tool/agent delta immediately, so without this useChat's
+  // default batching makes updates arrive in visible chunks. A small throttle
+  // yields a smooth, steady reveal without flooding React.
   return useChat<UIMessage>({ chat: chat ?? fallback.current, resume: true, throttle: 30 });
 }

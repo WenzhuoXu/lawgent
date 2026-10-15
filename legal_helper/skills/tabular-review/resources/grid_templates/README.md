@@ -1,7 +1,7 @@
 # Grid templates
 
 Column presets for `/tabular-review`. Each `.yaml` file defines one
-preset. Load with `read_document` (they are plain text), then confirm the
+preset; open one with the tool that opened this README, then confirm the
 column list with the user before extraction.
 
 ## Schema

@@ -11,19 +11,21 @@ from __future__ import annotations
 
 import json
 
-from legal_helper.chat_models import AgentTask, WorkflowPlan
+from legal_helper.chat_models import AgentTask
 from legal_helper.config import load_settings
 from legal_helper.runs import RunStore, list_runs, load_run
 
 
-def _plan() -> WorkflowPlan:
-    return WorkflowPlan(
-        title="ET route filing",
-        agent_tasks=[
-            AgentTask(id="a1", skill_name="legal-response", title="ET aviation law", task="research"),
-            AgentTask(id="a2", skill_name="brief", title="CN outbound", task="research"),
+def _plan() -> dict:
+    # The shape `run_workflow` records.
+    return {
+        "title": "ET route filing",
+        "objective": "File the ET route",
+        "agent_tasks": [
+            AgentTask(id="a1", skill_name="legal-response", title="ET aviation law", task="research").model_dump(),
+            AgentTask(id="a2", skill_name="brief", title="CN outbound", task="research").model_dump(),
         ],
-    )
+    }
 
 
 def _settings(tmp_path):
@@ -68,6 +70,10 @@ def test_only_completed_bundles_are_resumable(tmp_path):
     assert set(resumable) == {"a1"}
     # The title header the artifact was written with is not part of the bundle.
     assert resumable["a1"].strip() == "ET findings"
+    # The workflow tool reuses a bundle only under the same method.
+    tasks = reopened.resumable_tasks()
+    assert tasks["a1"]["skill_name"] == "legal-response"
+    assert tasks["a1"]["title"] == "ET aviation law"
 
 
 def test_a_task_left_active_by_a_dead_process_becomes_pending(tmp_path):

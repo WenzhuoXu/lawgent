@@ -3,8 +3,7 @@
 ``pkulaw_health`` answers the one question that otherwise fails silently:
 is ``PKULAW_API_TOKEN`` present and accepted by the WSO2 gateway? Without
 it every ``pkulaw_*`` call degrades to the static manifest and the model
-only discovers the problem mid-conversation. Callers (CLI startup, serve)
-should log the returned dict once; the probe never raises.
+only discovers the problem mid-conversation. The probe never raises.
 """
 
 from __future__ import annotations

@@ -9,13 +9,11 @@ client-side JS.
 
 The pragmatic path: Federal Register API is the authoritative published
 record for FAA rulemaking (including all ADs and most policy notices), so
-we route ``drs_search`` through it filtered to the FAA, then surface
-DRS-style deep-links + a DRS browse URL so the agent can hand off to a
-human (or to ``drs_fetch``) for the ones that require the SPA.
-
-``drs_fetch`` does a single WebFetch-equivalent on a DRS document URL and
-returns the plain-text body — works for the static document detail pages
-even though search doesn't.
+we route ``drs_search`` through it filtered to the FAA, then surface a DRS
+browse URL so the agent can hand off to a human for the ones that require the
+SPA. DRS document pages themselves return only the JS shell to a non-browser
+client, so there is no DRS fetch tool: follow a result's ``html_url``, or use
+``fetch_url_to_artifact`` on a known FAA PDF URL.
 """
 
 from __future__ import annotations
@@ -27,7 +25,7 @@ from urllib.parse import quote_plus
 import httpx
 from anthropic import beta_tool
 
-from .base import USER_AGENT, http_get, request_with_retry, truncate
+from .base import http_get, truncate
 
 # Federal Register document types that DRS surfaces.
 # RULE = published rules including ADs; PRORULE = NPRMs; NOTICE = policy
@@ -145,50 +143,9 @@ def drs_search(
             "note": (
                 "Federal Register is the authoritative publication channel for "
                 "FAA rules and most policy notices. For ACs / Orders / SAFOs not "
-                "in FR, follow drs_browse_url or call drs_fetch with a known DRS URL."
+                "in FR, follow drs_browse_url, or fetch a known FAA PDF URL."
             ),
         },
         ensure_ascii=False,
     )
 
-
-@beta_tool
-def drs_fetch(url: str) -> str:
-    """Fetch a DRS document page and return its plain-text body.
-
-    DRS document detail URLs are stable (e.g.
-    ``https://drs.faa.gov/browse/excelExternalWindow/<DOC_ID>``). The DRS
-    search/listing pages are SPA-only and not fetchable this way.
-
-    Args:
-        url: A drs.faa.gov document URL.
-    """
-    if "drs.faa.gov" not in url:
-        return json.dumps(
-            {"error": "drs_fetch only accepts drs.faa.gov URLs", "url": url}
-        )
-    try:
-        resp = request_with_retry("GET", url, headers={"User-Agent": USER_AGENT})
-        html = resp.text
-    except httpx.HTTPError as e:
-        return json.dumps({"error": f"DRS fetch failed: {e!s}", "url": url})
-
-    try:
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return json.dumps(
-            {"source": "FAA DRS", "url": url, "text": truncate(html, 8000)},
-            ensure_ascii=False,
-        )
-    soup = BeautifulSoup(html, "lxml")
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-    text = " ".join(soup.get_text(separator=" ").split())
-    return json.dumps(
-        {
-            "source": "FAA DRS",
-            "url": url,
-            "text": truncate(text, 8000),
-        },
-        ensure_ascii=False,
-    )

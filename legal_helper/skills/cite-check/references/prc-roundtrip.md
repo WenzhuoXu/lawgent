@@ -95,5 +95,5 @@ translation when the proposition is in English:
 
 The report renderer accepts `lang="zh"` so the audit speaks the user's
 language; internal `cite-check` reasoning may run in whichever language fits
-the sources — 中文 is encouraged when tracing PRC provisions (per the global
-language policy in `CLAUDE.md`).
+the sources — 中文 is encouraged when tracing PRC provisions (general
+playbook §1).

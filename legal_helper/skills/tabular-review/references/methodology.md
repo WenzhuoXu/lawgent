@@ -113,12 +113,12 @@ into `unresolved_cells` in the bundle.
 
 ## 7. Scale and batching
 
-- Inside one specialist run, extract **one document at a time**, all
-  columns per pass — column-at-a-time re-reads every document N times.
-- Large sets arrive as orchestrator fan-out: each sub-task gets a slice
-  of documents and the SAME frozen column spec, returns its rows, and the
-  merging pass runs §6 across the union. Do not spawn concurrency
-  yourself; the workflow layer owns fan-out and its concurrency caps.
+- Within one run, extract **one document at a time**, all columns per
+  pass — column-at-a-time re-reads every document N times.
+- A set too large for one run is split across specialists by the author
+  with `run_workflow`: each gets a slice of documents and the SAME frozen
+  column spec and returns its rows, and the author runs §6 across the
+  union. A specialist never splits its slice further.
 - If a document exceeds the context comfortably (very long facilities),
   extract per section using the clause buckets in the column spec, then
   fill remaining columns with a second targeted pass — never answer from

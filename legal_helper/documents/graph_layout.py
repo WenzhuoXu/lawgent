@@ -1,7 +1,6 @@
 """Text measurement and the diagram render binaries.
 
-Two things live here, and both outlived the slide-geometry engine this module
-was named for:
+Two things live here:
 
 * **CJK-aware text measurement** (:func:`display_width`, :func:`wrap_label`).
   The DOCX writer weights table columns with it and the quality linter
@@ -10,11 +9,10 @@ was named for:
 * **The render binaries** — Graphviz ``dot`` and ``d2`` — resolved, reported
   at startup when missing, and run.
 
-It used to compute node boxes and routed edges in slide inches for an in-tree
-PPTX emitter. That emitter is gone: a diagram on a slide is now drawn by
-ppt-master inside the deck (``tools/decks.create_deck``), and a diagram as a
-picture is drawn whole by Graphviz from DOT that :mod:`.diagrams` builds, with
-a real CJK font measuring the labels instead of an estimate.
+No layout is computed here: a diagram on a slide is drawn by ppt-master inside
+the deck (``tools/decks.create_deck``), and a diagram as a picture is drawn
+whole by Graphviz from DOT that :mod:`.diagrams` builds, with a real CJK font
+measuring the labels.
 """
 
 from __future__ import annotations

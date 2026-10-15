@@ -1,4 +1,4 @@
-"""Tool registry: build function-tool sets for orchestrator and sub-agents.
+"""Tool registry: every function tool, and the tool set a specialist gets.
 
 Each tool is a ``@beta_tool``-decorated function exposing a JSON Schema that
 both the Anthropic and OpenAI providers register as a plain function tool.
@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ..skills import SKILL_NAMES, is_external_skill, load_skill_frontmatter
+from ..connectors import courtlistener_search, ecfr_search, federal_register_search, govinfo_search
+from ..skills import is_external_skill, load_skill_frontmatter
 from ..tool_policy import apply_skill_tool_policy
 from .aviation_search import aviation_source_search
 from .citations import (
@@ -62,16 +63,11 @@ from .redline_tools import compare_docx, redline_docx
 from .skill_runtime import (
     list_skill_dir,
     run_skill_script,
+    edit_text_file,
     write_text_file,
 )
 from .format_recipes import list_format_recipes, read_format_recipe
-from .legal_search import (
-    courtlistener_search,
-    ecfr_search,
-    federal_register_search,
-    govinfo_search,
-    legal_source_search,
-)
+from .legal_search import legal_source_search
 from .mcp_tools import visible_mcp_function_tools
 from .project_tools import project_brief_read, project_memory_search, project_memory_write
 from .rag_tools import retrieve_legal
@@ -80,13 +76,6 @@ from .skill_resources import (
     read_skill_reference,
 )
 
-
-_ALL_SKILL_NAMES = set(SKILL_NAMES)
-
-# RAG access is opt-in. Every skill currently declares a ``rag_collections``
-# field in its SKILL.md frontmatter; expose ``retrieve_legal`` whenever that
-# field is non-empty (computed inside ``skill_tools_for_task``).
-_RAG_OPT_IN_FALLBACK_SKILLS = set(_ALL_SKILL_NAMES)
 
 _CITE_TOOL_SKILLS = {"cite-check", "review-contract", "legal-response", "brief"}
 
@@ -177,7 +166,8 @@ def skill_tools(skill_name: str) -> list[Any]:
 #: and every unused schema is budget the tool-result limits are protecting.
 def _external_skill_tools() -> list[Any]:
     return [
-        write_text_file,
+        edit_text_file,
+    write_text_file,
         run_skill_script,
         list_skill_dir,
         read_document,
@@ -197,11 +187,13 @@ def skill_tools_for_task(
     jurisdictions: Iterable[str] | None = None,
     active_packs: Iterable[str] | None = None,
 ) -> list[Any]:
-    """Task-scoped tools for a sub-agent.
+    """Tools for a sub-agent running ``skill_name``.
 
-    Every specialist can lazily inspect its own skill and the playbook. Other
-    tools are exposed only when the task shape and active config imply they
-    are useful, keeping provider tool schemas small.
+    Connectors follow the skill's ``allowed_connectors`` frontmatter, the
+    jurisdictions and the active packs; every document tool is offered. The
+    ``task`` argument is not read. Capability-side tools are deferred behind
+    the provider's tool search (tool_exposure.py), which is what keeps the
+    schemas a specialist carries small.
 
     An *external* skill is a procedure rather than a legal methodology, so it
     gets the authoring runtime instead of the research surface.
@@ -291,6 +283,8 @@ def skill_tools_for_task(
             ]
         base.extend(mcp_fns)
 
+    # RAG access is opt-in: a skill sees ``retrieve_legal`` only when its
+    # SKILL.md frontmatter names ``rag_collections``.
     if _skill_rag_collections(skill_name):
         base.append(retrieve_legal)
 
@@ -307,8 +301,11 @@ def skill_tools_for_task(
             ]
         )
 
-    # An auditing skill reviews work; it must not be able to rewrite it.
-    return apply_skill_tool_policy(base, skill_name)
+    # An auditing skill reviews work; it must not be able to rewrite it. The
+    # capability-side tools wait behind the provider's tool search.
+    from ..tool_exposure import mark_deferred
+
+    return mark_deferred(apply_skill_tool_policy(base, skill_name))
 
 
 __all__ = [
@@ -316,6 +313,7 @@ __all__ = [
     "list_skill_dir",
     "run_procedure",
     "run_skill_script",
+    "edit_text_file",
     "write_text_file",
     "aviation_source_search",
     "cite_check_report_tool",

@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 from ..logging_setup import agent_name_var
 from .base import StreamEvent
 
-# Same cadence as the specialist answer preview (`workflow._emit_preview`):
+# Same cadence as the specialist answer preview (`multi_agent._PREVIEW_INTERVAL_S`):
 # frequent enough to read as live, rare enough not to flood N parallel agents.
 PROGRESS_INTERVAL_S = 0.25
 
@@ -37,7 +37,6 @@ PROGRESS_INTERVAL_S = 0.25
 class _Call:
     tool_name: str
     call_id: str
-    started_at: float
     last_emit: float
     chars: int = 0
 
@@ -52,7 +51,7 @@ class ToolProgressThrottle:
 
     def open(self, key: Any, tool_name: str, call_id: Optional[str]) -> None:
         now = self.clock()
-        self._calls[key] = _Call(tool_name=tool_name or "tool", call_id=str(call_id or key), started_at=now, last_emit=now)
+        self._calls[key] = _Call(tool_name=tool_name or "tool", call_id=str(call_id or key), last_emit=now)
 
     def update(self, key: Any, *, chars_so_far: Optional[int] = None, added: int = 0) -> Optional[StreamEvent]:
         """Record progress; return an event when one is due, else None."""

@@ -99,17 +99,6 @@ def resolve_local_link(target: str) -> Optional[str]:
     return None
 
 
-#: A link target that is neither a URL, a path nor an anchor: hosted web
-#: search's internal citation ids leak through as `[source](turn2view0)`.
-_OPAQUE_TARGET_RE = re.compile(r"^[A-Za-z]+\d+[A-Za-z0-9]*$")
-
-
-def _is_local_path(target: str) -> bool:
-    return target.startswith(("/", "file://", "./", "../", "~/")) or bool(
-        re.match(r"^[A-Za-z]:[\\/]", target)
-    )
-
-
 @dataclass
 class LintCounts:
     tracking_params: int = 0
@@ -245,17 +234,12 @@ class AnswerLinter:
             return match.group(0)
         if target.startswith("www."):
             return f"[{label}](https://{target})"
-        if not target or _OPAQUE_TARGET_RE.match(target) or not _is_local_path(target):
-            # No address at all: an empty target, a hosted-search citation id
-            # ("turn2view0"), or a word ("用户提供"). The label is the citation.
-            self.counts.local_links_unlinked += 1
-            return label
-        if _is_local_path(target):
-            # A path no route serves is a dead link in the UI; the file name
-            # still tells the reader which document is meant.
-            self.counts.local_links_unlinked += 1
-            return label
-        return match.group(0)
+        # No address at all — an empty target, a hosted-search citation id
+        # ("turn2view0"), a word ("用户提供") — or a local path no route serves,
+        # which is a dead link in the UI. The label is the citation, and a file
+        # name still tells the reader which document is meant.
+        self.counts.local_links_unlinked += 1
+        return label
 
     def _fix_bare_url(self, match: re.Match[str]) -> str:
         url = match.group(0)

@@ -363,7 +363,7 @@ def iteration_limit(requested: Optional[int], settings: Any) -> Optional[int]:
 
     ``0`` (the shipped default for every loop) and negative values mean no
     limit. A positive value is honoured, so a caller that genuinely wants one
-    round — a planner, a summariser — still gets exactly one.
+    round — a title or a summary call — still gets exactly one.
     """
     value = requested if requested is not None else getattr(settings, "max_iterations", 0)
     try:

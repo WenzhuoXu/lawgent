@@ -5,8 +5,8 @@ persistent context. It borrows the model that makes Claude Code effective at
 long work:
 
 - a **brief** (the ``CLAUDE.md`` equivalent) — stable, hand-authored context +
-  instructions that are re-injected into the orchestrator on every turn, so
-  they survive per-chat compaction;
+  instructions that are re-injected into the author's context on every turn,
+  so they survive per-chat compaction;
 - a structured, append-only **memory** of typed entries (fact / decision /
   task / open_question / glossary / artifact / risk / source), each scored by
   salience so the most load-bearing ones rank into the context window;
@@ -16,9 +16,9 @@ long work:
 
 ``ProjectStore`` persists all of this in the same SQLite database as
 ``ChatStore`` (``state/chat_sessions.sqlite3``) and adds a ``project_id``
-foreign key to ``chats``. The orchestrator reads ``build_context_block`` each
-turn; specialist sub-agents and the CLI/server write back via the project
-memory tools.
+foreign key to ``chats``. Each turn's chat digest opens with
+``build_context_block`` (``workflow._build_context_parts``); the author writes
+back through the project memory tools.
 """
 
 from __future__ import annotations
@@ -36,10 +36,10 @@ from .config import Settings, current_settings
 
 _SALIENCE_MIN, _SALIENCE_MAX = 1, 5
 
-# Request-scoped active project. The server/CLI set this around an
-# orchestrator run so ``_build_parent_addendum`` (agent.py) injects the
-# project context block and the project memory tools know which project to
-# write to — without threading a project id through every call site.
+# Request-scoped active project. The server/CLI set this around a turn so the
+# chat digest opens with the project context block, the author is offered the
+# project memory tools, and those tools know which project to write to —
+# without threading a project id through every call site.
 _ACTIVE_PROJECT_ID: ContextVar[Optional[str]] = ContextVar(
     "legal_helper_active_project_id", default=None
 )
@@ -446,7 +446,7 @@ class ProjectStore:
         max_chars: int = 6000,
         max_entries: int = 14,
     ) -> str:
-        """Assemble the orchestrator-facing ``# Project context`` block.
+        """Assemble the author-facing ``# Project context`` block.
 
         Order: brief (always, in full — it is the CLAUDE.md-equivalent), then
         the rolling summary, then the highest-salience open decisions / facts /
@@ -581,25 +581,9 @@ class ProjectStore:
         return self.set_summary(project_id, new_summary)
 
 
-def context_for_chat(
-    chat_id: str, store: Optional[ProjectStore] = None
-) -> tuple[Optional[Project], str]:
-    """Convenience: resolve a chat's project and its context block (or empty)."""
-    store = store or ProjectStore()
-    project_id = store.project_id_for_chat(chat_id)
-    if not project_id:
-        return None, ""
-    try:
-        project = store.get_project(project_id)
-    except KeyError:
-        return None, ""
-    return project, store.build_context_block(project_id)
-
-
 __all__ = [
     "ProjectStore",
     "slugify",
-    "context_for_chat",
     "active_project",
     "active_project_id",
     "active_project_context_block",

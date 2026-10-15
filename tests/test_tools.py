@@ -522,10 +522,7 @@ def test_author_and_skill_tool_lists():
     } <= rc_names
     assert "extract_clauses" in rc_names
 
-    doc_tools = skill_tools_for_task(
-        "review-contract",
-        "Read attachments to read with `read_document` and produce a docx redline deliverable.",
-    )
+    doc_tools = skill_tools_for_task("review-contract")
     doc_names = {getattr(t, "name", None) for t in doc_tools}
     assert {
         "read_document",
@@ -545,7 +542,7 @@ def test_author_and_skill_tool_lists():
         "fetch_url_to_artifact",
     } <= doc_names
 
-    rb_tools = skill_tools_for_task("brief", "Research treaty source support with citations.")
+    rb_tools = skill_tools_for_task("brief")
     rb_names = {getattr(t, "name", None) for t in rb_tools}
     assert "legal_source_search" in rb_names
     assert {
@@ -580,7 +577,6 @@ def test_pkulaw_surfaces_as_primary_prc_source(monkeypatch):
 
     tools = skill_tools_for_task(
         "cite-check",
-        "Validate citations in attached memo.",
         jurisdictions=["CN"],
         active_packs=[],
     )
@@ -613,7 +609,6 @@ def test_allowed_connectors_frontmatter_filters_connector_surface():
     """
     tools = skill_tools_for_task(
         "signature-request",
-        "Prepare a multi-party closing checklist.",
         jurisdictions=["CN", "US", "EU"],
         active_packs=[],
     )

@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from .chat_models import ChatMessage, utc_now
 from .config import Settings, load_settings
 from .domains import available_packs
-from .logging_setup import setup_logging
+from .logging_setup import setup_logging, workflow_event_sink_var
 from .memory import summarize_with_fast_model
 from .projects import ProjectStore, active_project
 from .workflow import WorkflowExecutor
@@ -68,10 +68,39 @@ def _resolve_project(args: argparse.Namespace):
 
 @contextmanager
 def _project_scope(args: argparse.Namespace):
-    """Activate the project (if any) for the duration of an orchestrator run."""
+    """Activate the project (if any) for the duration of a run."""
     project = _resolve_project(args)
     with active_project(project.id if project else None):
         yield project
+
+
+def _workflow_printer(console: Console):
+    """An event sink that prints the multi-agent workflow's lifecycle.
+
+    `run_workflow` runs inside the author's tool loop, so its events reach a
+    sink rather than the turn's generator — on the server, the SSE stream.
+    """
+
+    def sink(record: dict) -> None:
+        event = record.get("event_type")
+        data = record.get("data") or {}
+        if event == "workflow_started":
+            console.print(f"[dim]workflow: {len(data.get('tasks') or [])} specialist(s)[/dim]")
+        elif event == "agent_task_started":
+            console.print(
+                f"[dim]→ specialist: {data.get('title') or data.get('task_id')} "
+                f"({data.get('skill_name', '?')})[/dim]"
+            )
+        elif event == "agent_task_finished":
+            console.print(
+                f"[dim]specialist done: {data.get('task_id')} · {data.get('outcome')} · "
+                f"{data.get('tool_count', 0)} tool calls[/dim]"
+            )
+        elif event in {"agent_task_failed", "agent_task_retried", "workflow_degraded"}:
+            detail = data.get("title") or data.get("message") or ""
+            console.print(f"[yellow]{event}: {detail}[/yellow]")
+
+    return sink
 
 
 def _stream_workflow_turn(
@@ -87,58 +116,45 @@ def _stream_workflow_turn(
     """Drive one WorkflowExecutor turn and render its events to the terminal.
 
     Returns ``(final_text, ok)``. Both CLI commands go through here so they
-    ride the same machinery as the web server: routing/complexity dial, plan
-    normalization, sub-agent dispatch, and the citation audit.
+    ride the same machinery as the web server: the author loop, the
+    multi-agent workflow when the author calls it, and the citation audit.
     """
     final_text: Optional[str] = None
     ok = True
-    for ev in executor.stream(
-        message,
-        attachments=attachments,
-        recent_messages=recent_messages,
-        memory_summary=memory_summary,
-    ):
-        if ev.kind == "delta":
-            if echo_deltas:
-                console.print(ev.data.get("text", ""), end="")
-        elif ev.kind == "done":
-            final_text = ev.data.get("text", final_text)
-            if echo_deltas:
-                console.print()
-        elif ev.kind == "workflow_plan":
-            mode = ev.data.get("execution_mode", "?")
-            tasks = ev.data.get("agent_tasks") or []
-            note = f"plan: {mode}"
-            if tasks:
-                note += f", {len(tasks)} specialist task(s)"
-            console.print(f"[dim]{note}[/dim]")
-        elif ev.kind == "active_domain_packs":
-            packs = ", ".join(ev.data.get("packs", []))
-            console.print(f"[dim]domain packs: {packs}[/dim]")
-        elif ev.kind == "agent_task_started":
-            console.print(
-                f"[dim]→ task: {ev.data.get('title') or ev.data.get('id')} "
-                f"({ev.data.get('skill_name', '?')})[/dim]"
-            )
-        elif ev.kind == "agent_task_finished":
-            console.print(f"[dim]task done: {ev.data.get('title') or ev.data.get('task_id')}[/dim]")
-        elif ev.kind in {"agent_task_failed", "agent_task_retried", "workflow_degraded"}:
-            detail = ev.data.get("title") or ev.data.get("reason") or ""
-            console.print(f"[yellow]{ev.kind}: {detail}[/yellow]")
-        elif ev.kind in {"tool_call", "hosted_tool_call"}:
-            console.print(f"\n[dim]→ tool: {ev.data.get('name')}[/dim]")
-        elif ev.kind == "citation_audit":
-            if ev.data.get("skipped"):
-                note = ev.data.get("skip_reason") or "skipped"
-            else:
-                note = "ok" if ev.data.get("ok") else "flagged"
-            console.print(f"[dim]citation audit: {note}[/dim]")
-        elif ev.kind == "cancelled":
-            ok = False
-            console.print(f"[yellow]cancelled:[/yellow] {ev.data.get('message', '')}")
-        elif ev.kind == "error":
-            ok = False
-            console.print(f"\n[red]error:[/red] {ev.data.get('message') or ev.data}")
+    token = workflow_event_sink_var.set(_workflow_printer(console))
+    try:
+        for ev in executor.stream(
+            message,
+            attachments=attachments,
+            recent_messages=recent_messages,
+            memory_summary=memory_summary,
+        ):
+            if ev.kind == "delta":
+                if echo_deltas:
+                    console.print(ev.data.get("text", ""), end="")
+            elif ev.kind == "done":
+                final_text = ev.data.get("text", final_text)
+                if echo_deltas:
+                    console.print()
+            elif ev.kind == "active_domain_packs":
+                packs = ", ".join(ev.data.get("packs", []))
+                console.print(f"[dim]domain packs: {packs}[/dim]")
+            elif ev.kind in {"tool_call", "hosted_tool_call"}:
+                console.print(f"\n[dim]→ tool: {ev.data.get('name')}[/dim]")
+            elif ev.kind == "citation_audit":
+                if ev.data.get("skipped"):
+                    note = ev.data.get("skip_reason") or "skipped"
+                else:
+                    note = "ok" if ev.data.get("ok") else "flagged"
+                console.print(f"[dim]citation audit: {note}[/dim]")
+            elif ev.kind == "cancelled":
+                ok = False
+                console.print(f"[yellow]cancelled:[/yellow] {ev.data.get('message', '')}")
+            elif ev.kind == "error":
+                ok = False
+                console.print(f"\n[red]error:[/red] {ev.data.get('message') or ev.data}")
+    finally:
+        workflow_event_sink_var.reset(token)
     return final_text, ok
 
 
@@ -207,7 +223,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         attachments = [Path(p) for p in (args.input or [])]
         before = _outputs_snapshot(settings)
         # Deltas are suppressed while streaming so the final answer renders
-        # once as Markdown, matching the previous `run` output shape.
+        # once as Markdown.
         final_text, ok = _stream_workflow_turn(
             console,
             executor,
@@ -426,7 +442,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    run = sub.add_parser("run", help="Run one orchestrator turn and exit")
+    run = sub.add_parser("run", help="Run one chat turn and exit")
     run.add_argument("--task", required=True, help="The user instruction")
     run.add_argument("--input", action="append", help="Attachment path (repeatable)")
     _add_common_overrides(run)

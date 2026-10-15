@@ -3,7 +3,6 @@ OpenAI output ceiling — all against mocked SDK surfaces."""
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -164,8 +163,8 @@ def test_run_and_stream_kwargs_carry_cache_breakpoints(tmp_path):
 
 
 def test_one_shot_calls_get_no_automatic_breakpoint(tmp_path):
-    """A router, planner, summary or title call has no second round to read
-    it; an automatic breakpoint there only bills the write premium."""
+    """A summary or title call has no second round to read it; an automatic
+    breakpoint there only bills the write premium."""
     final = SimpleNamespace(content=[_text_block("ok")], usage=_usage(1, 1), id="m1")
     for tools, max_iterations in (([], 0), ([{"type": "web_search_20250305", "name": "web_search"}], 0), ([_lookup_tool()], 1)):
         captured: dict = {}
@@ -371,10 +370,7 @@ def test_system_prompts_carry_no_per_turn_content():
     prompts = {
         # The date, the answer language and the length tier go in the request
         # tail (answer_contract.author_tail), never here.
-        "single-pass author": author_system_prompt(
-            settings, mode="single_pass", skill_name="litigation-analysis"
-        ),
-        "integrator": author_system_prompt(settings, mode="integration"),
+        "author": author_system_prompt(settings),
         "legal-response": SkillAgent("legal-response", provider)._system_prompt(),
         "cite-check": SkillAgent("cite-check", provider)._system_prompt(),
     }
@@ -402,8 +398,8 @@ def test_a_system_prompt_is_byte_identical_across_builds():
 
 # --- OpenAI: the stable prefix as a cacheable developer message -------------
 # `instructions` cannot carry an explicit breakpoint, so a one-shot call (the
-# planner, the summariser) never reached a cached prefix: the luna planner read
-# 0.7% of its input from cache in September.
+# summariser, the title) never reached a cached prefix: in September a one-shot
+# luna call read 0.7% of its input from cache.
 
 
 def _openai(model: str = "gpt-6.1-sol") -> OpenAIProvider:

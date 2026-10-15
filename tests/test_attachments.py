@@ -97,6 +97,45 @@ def test_build_user_content_openai_text_block_for_inline(tmp_path):
     assert blocks[-1] == {"type": "input_text", "text": "summarize"}
 
 
+def test_inlined_attachment_says_its_text_is_complete(tmp_path):
+    p = _write(tmp_path / "note.md", b"# title\nhello")
+    for provider in ("anthropic", "openai"):
+        text = att.build_user_content("summarize", [p], provider)[0]["text"]
+        assert "complete extracted text" in text
+        assert "read_document would return the same text" in text
+        assert "hello" in text
+        assert "embedded image" not in text
+
+
+def test_failed_extraction_is_not_called_complete(tmp_path):
+    p = _write(tmp_path / "big.txt", b"x" * (att._MAX_INLINE_BYTES + 1))
+    info = att.describe(p)
+    wrapped = att._wrap_full_text(info, att.extract_inline_text(info))
+    assert "too large" in wrapped
+    assert "complete extracted text" not in wrapped
+
+
+def test_full_text_wrapper_names_what_text_cannot_carry(tmp_path):
+    import zipfile
+
+    docx = tmp_path / "rules.docx"
+    with zipfile.ZipFile(docx, "w") as z:
+        z.writestr("word/document.xml", "<w:document/>")
+        z.writestr("word/media/image1.png", b"\x89PNG")
+        z.writestr("word/media/image2.png", b"\x89PNG")
+        z.writestr("word/fonts/font1.odttf", b"\x00")
+    wrapped = att._wrap_full_text(att.describe(docx), "body text")
+    assert "2 embedded image(s)" in wrapped
+    assert "inspect_xlsx" not in wrapped
+
+    xlsx = tmp_path / "scores.xlsx"
+    with zipfile.ZipFile(xlsx, "w") as z:
+        z.writestr("xl/workbook.xml", "<workbook/>")
+    wrapped = att._wrap_full_text(att.describe(xlsx), "| a | b |")
+    assert "Cell addresses are not in this text; inspect_xlsx gives them." in wrapped
+    assert "embedded image" not in wrapped
+
+
 def test_build_user_content_binary_stub(tmp_path):
     p = _write(tmp_path / "x.bin", b"\x00\x01\x02")
     blocks_anthropic = att.build_user_content("what is this", [p], "anthropic")
@@ -144,8 +183,6 @@ def test_pdf_routes_through_anthropic_files_api(tmp_path, monkeypatch):
     class FakeClient:
         def __init__(self, *a, **k):
             self.beta = FakeBeta()
-
-    monkeypatch.setattr("legal_helper.attachments.Anthropic", FakeClient, raising=False)
 
     # The import is local, so we patch the symbol where it's resolved.
     import anthropic as _anth
@@ -317,7 +354,7 @@ def test_document_corpus_switches_to_outline_navigation(tmp_path):
 def test_navigation_can_be_disabled(tmp_path, monkeypatch):
     from legal_helper.attachments import _should_navigate, _to_info
 
-    monkeypatch.setenv("LEGAL_HELPER_INLINE_CORPUS_BYTES", "0")
+    monkeypatch.setenv("LEGAL_HELPER_INLINE_ATTACHMENT_TOKENS", "0")
     infos = []
     for i in range(3):
         f = tmp_path / f"doc{i}.md"

@@ -11,15 +11,14 @@ escalation triggers.
 
 ## 0a. Regulatory sources by jurisdiction (connector cheatsheet)
 
-Skills that have the aviation pack active see the following connectors
-in their tool surface (gated by jurisdiction). The dispatcher
-``aviation_source_search`` wraps them with a single ``source``
-discriminator.
+While the aviation pack is active the following connectors are available,
+each gated by jurisdiction. ``aviation_source_search`` wraps the
+aviation-specific ones behind a single ``source`` discriminator.
 
 | Jurisdiction | Connector | What it returns | Primary use |
 |---|---|---|---|
 | US | `faa_title14_search` | 14 CFR sections via eCFR | Airline operating rules (Part 121), passenger rights (Part 250, 259, 382), drone (Part 107), etc. |
-| US | `drs_search` / `drs_fetch` | FAA DRS — ADs, ACs, policy, SAFOs (Federal Register-backed) | Airworthiness Directive lookup, AC pinpoints. Search returns FR document + DRS deep-link. |
+| US | `drs_search` | FAA DRS — ADs, ACs, policy, SAFOs (Federal Register-backed) | Airworthiness Directive lookup, AC pinpoints. Each hit carries the FR `html_url` (read it with `fetch_url_to_artifact`; drs.faa.gov serves no readable pages) and a DRS browse link. |
 | US | `federal_register_search` | All FAA rulemaking notices | NPRMs, final rules, enforcement orders. |
 | US | `govinfo_search` | US Code, historic CFR, Public Laws | Statutory backstop (49 USC §§ 40101-46507, §§ 80101-80504). |
 | US | `courtlistener_search` | US case law | Aviation cases, MC99/Warsaw preemption, Cape Town § 1110 priority. |
@@ -28,15 +27,15 @@ discriminator.
 | EU | `eurlex_search` | EU regulations / directives / CJEU | Reg (EC) 261/2004 (denied boarding), Reg 1107/2006 (PRM), 2027/97 (MC99), Reg 376/2014 (occurrence reporting). |
 | ET | `aviation_source_search(source="ecaa_index")` | Curated Ethiopian civil-aviation legal-framework index | First stop for ET route / operator work: regulator, Civil Aviation Proclamation 616/2008 + 1179/2020, ECAA re-establishment 273/2002, ECAR, ICAO/Cape Town/BASA layer. |
 | ET | `aviation_source_search(source="ethiopia_law_fetch", identifier="616/2008")` | Federal Negarit Gazeta proclamation body (typed transcript or bilingual PDF scan) | Civil Aviation Proclamation 616/2008, amendment 1179/2020, ECAA 273/2002, or any proclamation by number. |
-| ET | `aviation_source_search(source="ecaa_fetch", identifier="sectoral/regulation")` | Readable text + document links from `ecaa.gov.et` | ECAA directorate / ECAR / directive pages; follow document_links via `fetch_url_to_artifact`. See `references/ethiopia.md`. |
+| ET | `aviation_source_search(source="ecaa_fetch", identifier="sectoral/regulation")` | Readable text + document links from `ecaa.gov.et` | ECAA directorate / ECAR / directive pages; follow document_links via `fetch_url_to_artifact`. See `read_document("legal_helper/domains/aviation/references/ethiopia.md")`. |
 | PRC | `aviation_source_search(source="caac_local" / "caac_local_fetch" / "caac_hybrid")` | Local CAAC 法律法规 + 民航规章 / CCAR corpus staged from caac.gov.cn | First stop for CAAC docs: exact title, CCAR part, validity, article, source URL. Use `caac_hybrid` when semantic expansion is useful. |
 | PRC | PKULaw MCP sub-services | CCAR statutes, 司法案例, 案号 normalisation | Primary for PRC statutes; flk_npc as fallback. |
 | All | `retrieve_legal` against ``aviation_treaties`` / ``caac_ccar`` RAG | Treaties; CAAC/CCAR semantic retrieval | Treaty pinpoints and broad CAAC issue search. |
 | All | `retrieve_legal` against ``icao_doc`` RAG | ICAO Annexes 1–19, Doc 9082/9284/9303/9957 | SARPs and implementation guidance. |
 
-For deferred sources (ICAO Data Services USOAP, FAA Registry CSV,
-Transport Canada CARs, DOT Aviation Consumer, ANAC/CASA/JCAB), see the
-"Deferred" section of the implementation plan.
+ICAO Data Services (USOAP), the FAA Registry, Transport Canada CARs, DOT
+Aviation Consumer and ANAC / CASA / JCAB have no connector: reach them by
+web search scoped to the official site.
 
 ## 0b. Treaty corpus (aviation_treaties RAG collection)
 
@@ -318,7 +317,7 @@ Escalate to senior aviation counsel / head of legal / accountable manager when:
 
 ## 15. Document Production Defaults
 
-- All generated documents include the aviation-not-legal-advice disclaimer
+- The not-legal-advice notice follows general playbook §7: in the document properties, none on a filing or a signed letter
 - All redline packages list "Must-have / Should-have / Nice-to-have" tier
 - All risk memos include the severity × likelihood matrix and a residual-risk line
 - All closing packages include the IR / FAA / CAAC / state-of-registry filings sequence

@@ -17,7 +17,7 @@ This is a *-style* layout for internal legal memos (请示/报告/法律意见�
 formal red-header 发文 (红头文件) additionally needs the issuing organ's
 版头, 发文字号, and 印章, which are organization-specific and out of scope.
 
-## Skeleton (sections for `write_docx_document`)
+## Skeleton (sections for `write_docx`)
 
 Title: `关于××××的法律意见书` (or 请示/报告)
 

@@ -17,7 +17,6 @@ export function Sidebar({
   copy,
   onOpenSettings,
   open,
-  onClose,
   usedTokens,
   maxTokens,
 }: {
@@ -30,7 +29,6 @@ export function Sidebar({
   copy: Copy;
   onOpenSettings: () => void;
   open: boolean;
-  onClose: () => void;
   /** live context-window fill for the sidebar ring (percent only, no cost) */
   usedTokens?: number;
   maxTokens?: number;

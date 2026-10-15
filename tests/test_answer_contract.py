@@ -24,8 +24,10 @@ _CONTRACT_LITERALS = (
     "在线核验/Online-checked",
     "Be comprehensive",
     "reasonable extension",
+    "not by the person who asked for it",
+    "goes in your reply next to the file's link",
 )
-_PROMPT_MODULES = ("workflow.py", "agent.py", "authoring.py", "tools/documents.py")
+_PROMPT_MODULES = ("workflow.py", "multi_agent.py", "agent.py", "authoring.py", "tools/documents.py")
 
 
 @pytest.mark.parametrize("module", _PROMPT_MODULES)
@@ -68,28 +70,40 @@ def test_status_words_are_per_language():
     assert "not-legal-advice line" in rules
 
 
-def test_length_tier_from_complexity_and_override():
-    assert contract.length_tier("simple") == "brief"
-    assert contract.length_tier("standard") == "focused"
-    assert contract.length_tier("complex") == "full"
-    assert contract.length_tier("complex", "brief") == "brief"
-    assert contract.length_tier(None) == "focused"
+def test_length_tier_is_the_pinned_tier_or_auto():
+    assert contract.length_tier("brief") == "brief"
+    assert contract.length_tier("full") == "full"
+    assert contract.length_tier(None) == "auto"
+    assert contract.length_tier("auto") == "auto"
     assert contract.VERBOSITY["brief"] == "low"
+    assert contract.VERBOSITY["auto"] is None
     sentence = contract.length_instruction("brief")
     assert "wins" in sentence  # an explicit request overrides the tier
 
 
 def test_author_tail_carries_the_volatile_parts():
-    tail = contract.author_tail(
-        user_language="Chinese",
-        tier="brief",
-        must_cover="1. 是否可以解除",
-        fact_conflicts=["入职日期写作 2024-03 和 2023-03"],
-    )
+    tail = contract.author_tail(user_language="Chinese", tier="brief")
     assert "Today's date:" in tail
     assert "Answer language: Chinese." in tail
-    assert "1. 是否可以解除" in tail
-    assert "contradict" in tail and "2024-03" in tail
+    assert "Length: brief" in tail
+
+
+def test_every_authoring_path_carries_the_deliverable_rules_once():
+    from legal_helper.authoring import author_system_prompt
+    from legal_helper.multi_agent import _GENERAL_SPECIALIST_PROMPT
+
+    rules = contract.deliverable_rules()
+    settings = load_settings()
+    for prompt in (author_system_prompt(settings), _GENERAL_SPECIALIST_PROMPT):
+        assert prompt.count(rules) == 1
+
+
+def test_deliverable_rules_separate_the_file_from_the_reply():
+    rules = contract.deliverable_rules()
+    assert "do not paste the document body" in rules
+    assert "requester's voice" in rules
+    assert "example or a template" in rules
+    assert "goes in your reply" in rules
 
 
 def test_today_line_is_shanghai_date():
@@ -123,12 +137,9 @@ _AVIATION_TOKENS = (
 def _prompts_without_packs() -> dict[str, str]:
     from legal_helper.agent import SkillAgent
     from legal_helper.authoring import author_system_prompt
-    from legal_helper.workflow import (
-        _DECOMPOSER_INSTRUCTIONS,
-        _GENERAL_SYSTEM_PROMPT,
-        _ROUTER_INSTRUCTIONS,
-        _skills_block,
-    )
+    from legal_helper.config import override_current_settings
+    from legal_helper.multi_agent import _GENERAL_SPECIALIST_PROMPT
+    from legal_helper.tools.skill_resources import render_skill
 
     settings = load_settings(refresh=True).model_copy(update={"active_domain_packs": []})
 
@@ -138,15 +149,14 @@ def _prompts_without_packs() -> dict[str, str]:
 
     prompts = {
         "author": author_system_prompt(settings),
-        "integrator": author_system_prompt(settings, mode="integration"),
-        "router": _ROUTER_INSTRUCTIONS + _skills_block(),
-        "decomposer": _DECOMPOSER_INSTRUCTIONS,
-        "general": _GENERAL_SYSTEM_PROMPT,
+        "general-specialist": _GENERAL_SPECIALIST_PROMPT,
         "specialist-contract": contract.specialist_contract(),
     }
-    for name in internal_skill_names():
-        prompts[f"author+{name}"] = author_system_prompt(settings, skill_name=name)
-        prompts[f"specialist:{name}"] = SkillAgent(name, _Provider(), settings)._system_prompt()
+    with override_current_settings(settings):
+        for name in internal_skill_names():
+            if name != "cite-check":
+                prompts[f"load_skill:{name}"] = render_skill(name)
+            prompts[f"specialist:{name}"] = SkillAgent(name, _Provider(), settings)._system_prompt()
     return prompts
 
 
@@ -159,7 +169,7 @@ def test_no_aviation_tokens_in_prompts_when_the_pack_is_inactive():
     assert not leaks, f"aviation strings in generic prompts: {leaks}"
 
 
-def test_aviation_routing_reaches_prompts_when_the_pack_is_active():
+def test_a_pinned_aviation_pack_reaches_the_author_prompt():
     from legal_helper.authoring import author_system_prompt
 
     settings = load_settings(refresh=True).model_copy(update={"active_domain_packs": ["aviation"]})

@@ -1,9 +1,8 @@
-"""Compact dispatcher over connector-layer search functions.
+"""One search tool over the connector layer's official sources.
 
-Historical entry point. Internals now live in ``legal_helper/connectors/``.
-Skills that prefer a single tool surface call ``legal_source_search`` with a
-``source`` discriminator; skills with allow-listed connectors call the
-underlying functions directly.
+``legal_source_search`` takes a ``source`` discriminator and calls the
+connector in ``legal_helper/connectors/``; skills with allow-listed connectors
+call those connectors directly.
 """
 
 import json
@@ -16,16 +15,7 @@ from ..connectors.prc import flk_npc_search
 from ..connectors.us_courts import courtlistener_search
 from ..connectors.us_federal import ecfr_search, federal_register_search, govinfo_search
 
-# Re-exports so callers that import from the old path keep working.
-__all__ = [
-    "courtlistener_search",
-    "ecfr_search",
-    "eurlex_search",
-    "federal_register_search",
-    "flk_npc_search",
-    "govinfo_search",
-    "legal_source_search",
-]
+__all__ = ["legal_source_search"]
 
 
 @beta_tool
@@ -40,23 +30,19 @@ def legal_source_search(
     document_type: Optional[str] = None,
     per_page: int = 5,
 ) -> str:
-    """Search one authoritative legal source via a discriminator.
+    """Search one authoritative legal source: US (eCFR, Federal Register,
+    GovInfo, CourtListener), EU (EUR-Lex) or PRC (国家法律法规数据库).
 
     Args:
-        source: Source to query (``ecfr`` | ``federal_register`` | ``govinfo``
-            | ``courtlistener`` | ``eurlex`` | ``flk_npc``).
-        query: Natural-language query, citation, phrase, or document number.
-        title: CFR title for eCFR searches (14 = FAA, 49 = transportation,
-            0 = all). Ignored for non-eCFR sources.
-        agency: Federal Register agency slug; empty for all. Ignored for
-            non-FR sources.
-        collections: Optional GovInfo collection codes (CFR, USCODE, FR, …).
-        court: Optional CourtListener court slug (``scotus``, ``ca9``, …).
-        level: Optional flk.npc.gov.cn level filter (``law``, ``regulation``,
-            ``judicial_interpretation``, ``rule``).
-        document_type: Optional EUR-Lex document type (``REG``, ``DIR``,
-            ``DEC``, ``RUL``).
-        per_page: Results to return (1-20).
+        source: ecfr | federal_register | govinfo | courtlistener | eurlex | flk_npc.
+        query: Query, citation, phrase or document number.
+        title: eCFR title number; 0 = all.
+        agency: Federal Register agency slug.
+        collections: GovInfo collection codes (CFR, USCODE, FR).
+        court: CourtListener court slug (scotus, ca9).
+        level: flk_npc level: law | regulation | judicial_interpretation | rule.
+        document_type: EUR-Lex type: REG | DIR | DEC | RUL.
+        per_page: Results, 1-20.
     """
     per_page = max(1, min(int(per_page), 20))
     if source == "ecfr":

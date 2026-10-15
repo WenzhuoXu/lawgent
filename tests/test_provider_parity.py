@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
+from typing import Iterable, Iterator
+
 import pytest
-import json
-from types import SimpleNamespace
-from typing import Any, Iterable, Iterator, Optional
-from unittest.mock import patch
 
 from legal_helper.config import load_settings
 from legal_helper.providers import RunResult
@@ -17,8 +15,7 @@ class MockAnthropicProvider:
     name = "anthropic"
     supports_hosted_web_search = True
     supports_file_search = False
-    supports_structured_outputs = True
-    model = "claude-opus-4-7"
+    model = "claude-opus-5-5"
 
     def run(self, *a, **k):
         return self.tool_runner(*a, **k)
@@ -33,7 +30,6 @@ class MockAnthropicProvider:
         tools: Iterable[Tool],
         *,
         max_iterations: int,
-        structured_output: Optional[type] = None,
     ) -> RunResult:
         return RunResult(
             text="Aviation review complete.\nIDERA: PASS\nLiability: FLAG\nAD: FLAG",
@@ -50,8 +46,7 @@ class MockOpenAIProvider(MockAnthropicProvider):
     name = "openai"
     supports_hosted_web_search = True
     supports_file_search = True
-    supports_structured_outputs = True
-    model = "gpt-5.5"
+    model = "gpt-6.1-sol"
 
     def tool_runner(self, *a, **k) -> RunResult:
         r = super().tool_runner(*a, **k)

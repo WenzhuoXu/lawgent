@@ -383,25 +383,6 @@ class ChatStore:
             )
         return self.get_chat(chat_id)
 
-    def consecutive_clarify_rounds(self, chat_id: str) -> int:
-        """How many of the most recent turns in a row asked for clarification.
-
-        An intake question is useful once and occasionally twice; a third in a
-        row means the model is stuck asking instead of working. The workflow
-        reads this to cap the loop, which has to be counted here because each
-        turn is a separate request with no memory of the last routing decision.
-        """
-        rounds = 0
-        for event in reversed(self.list_events(chat_id)):
-            if event.event_type != "workflow_plan":
-                continue
-            mode = (event.data or {}).get("execution_mode")
-            if mode == "clarify":
-                rounds += 1
-                continue
-            if mode:
-                break
-        return rounds
 
     def delete_chat(self, chat_id: str) -> None:
         with self._connect() as con:

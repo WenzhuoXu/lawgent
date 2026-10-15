@@ -38,7 +38,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 ERROR_TOKENS = ("#REF!", "#DIV/0!", "#NAME?", "#VALUE!", "#NULL!", "#N/A", "#NUM!")
-_ERROR_TOKENS = ERROR_TOKENS  # backward-compatible name
 
 _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"

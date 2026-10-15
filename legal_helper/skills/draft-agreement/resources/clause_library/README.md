@@ -1,8 +1,8 @@
 # Clause library
 
 Bilingual PRC-first clause presets for `/draft-agreement`. Each `.yaml`
-file defines one agreement family. Load with `read_document` (plain
-text), build the clause plan, then adapt clause text to the deal terms —
+file defines one agreement family. Open one with the tool that opened this
+README, build the clause plan, then adapt clause text to the deal terms —
 library text is a starting position, not boilerplate to paste untouched.
 
 ## Schema

@@ -43,6 +43,7 @@ MUTATING_TOOLS = frozenset(
         # Authors a text artifact, and runs a skill's own scripts (which write
         # files). Both are production rather than inspection, so an auditing
         # skill must not hold either.
+        "edit_text_file",
         "write_text_file",
         "run_skill_script",
         "write_docx",
@@ -82,7 +83,7 @@ READ_ONLY_SKILLS = frozenset({"cite-check"})
 # Exact names, for the same reason as MUTATING_TOOLS. Deliberately absent:
 # `retrieve_legal` and `aviation_source_search` (each opens the embedded Qdrant
 # store, whose file lock admits one client at a time), `project_memory_search`,
-# `create_deck` (a whole sub-agent) and every authoring tool.
+# `create_deck` and `run_workflow` (whole sub-agents) and every authoring tool.
 CONCURRENT_SAFE_TOOLS = frozenset(
     {
         # Document reads and inspections: pure-Python parsers over one file.
@@ -106,6 +107,8 @@ CONCURRENT_SAFE_TOOLS = frozenset(
         "read_format_recipe",
         "read_skill_reference",
         "list_skill_references",
+        "load_skill",
+        "read_skill_file",
         "list_skill_dir",
         "project_brief_read",
         # Public-source lookup that dispatches to the connectors below.

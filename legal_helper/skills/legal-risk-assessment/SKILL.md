@@ -17,11 +17,11 @@ validate them before any business decision.
 ## Output Contract (binding)
 
 As a specialist, emit the harness's bundle contract (Findings · Issues ·
-Artefacts · Out of scope · Sources), supplied with your task. As the author of
-a final answer, follow the author contract instead and put these artefacts in
-the answer where they help the reader.
+Artefacts · Out of scope · Sources), supplied with your task.
 
-Artefacts this skill produces: the risk matrix rows (risk · severity 1-5 · likelihood 1-5 · residual band · mitigation · escalation trigger).
+## Artefacts
+
+The risk matrix rows (risk · severity 1-5 · likelihood 1-5 · residual band · mitigation · escalation trigger).
 
 ## Severity × Likelihood Matrix
 

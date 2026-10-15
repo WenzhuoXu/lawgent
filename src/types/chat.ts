@@ -42,16 +42,6 @@ export type SkillInfo = {
   argument_hint?: string;
 };
 
-export type ProjectSummary = {
-  id: string;
-  name: string;
-  slug?: string;
-  jurisdiction?: string;
-  domain_packs?: string[];
-  brief?: string;
-  memory_summary?: string;
-};
-
 export type UsageTotals = {
   input_tokens: number;
   output_tokens: number;

@@ -1,9 +1,8 @@
 """Tracked-changes tools: author a redline, or compare two drafts into one.
 
-The redline engine (``documents/redline.py``) existed since July and no tool
-exposed it: ``skills/docx-redline`` told the model to call a Python function it
-could not reach, so 0 of 131 generated DOCX carried harness-authored
-revisions, and a chat that asked for 修订模式 output got a clean rewrite.
+They expose the redline engine (``documents/redline.py``) and LibreOffice's
+document compare (``documents/compare.py``) to the model: without a tool, a
+chat that asked for 修订模式 output got a clean rewrite.
 """
 
 from __future__ import annotations

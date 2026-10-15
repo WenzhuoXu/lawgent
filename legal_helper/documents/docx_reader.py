@@ -22,7 +22,6 @@ Every body paragraph keeps the 0-based index python-docx (and therefore
 from __future__ import annotations
 
 import posixpath
-import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,8 +70,6 @@ _REL_NUMBERING = "/numbering"
 _REL_FOOTNOTES = "/footnotes"
 _REL_ENDNOTES = "/endnotes"
 _REL_COMMENTS = "/comments"
-_REL_HEADER = "/header"
-_REL_FOOTER = "/footer"
 _REL_HYPERLINK = "/hyperlink"
 _REL_SETTINGS = "/settings"
 
@@ -670,7 +667,6 @@ class DocxReading:
                     text=block.labelled_text(),
                     paragraph=block.paragraph,
                     heading_level=block.heading_level,
-                    numbering_ilvl=block.numbering.ilvl if block.numbering else None,
                 )
             )
         return units
@@ -905,10 +901,6 @@ def read_docx(path: Path, *, document_root: Any = None) -> DocxReading:
     return DocxReading(Path(path), document_root=document_root)
 
 
-def docx_to_markdown(path: Path, *, include_comments: bool = True) -> str:
-    return read_docx(path).render(include_comments=include_comments)
-
-
 __all__ = [
     "Block",
     "Cell",
@@ -916,7 +908,6 @@ __all__ = [
     "DocxReading",
     "RevisionSummary",
     "Segment",
-    "docx_to_markdown",
     "markup_text",
     "read_docx",
     "render_block",

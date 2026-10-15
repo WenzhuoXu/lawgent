@@ -1,10 +1,9 @@
 """Deterministic conformance checks on a document we just wrote.
 
 **This is a floor, not a quality score, and it cannot tell you whether the
-document is any good.** It caught a shape 0.4in off the canvas, 8pt labels,
-1.9:1 contrast and a deck that had silently fallen back to the degraded
-writer — defects that are objective, invisible in a thumbnail, and free to
-find. It also passed, as "clean", a deck whose author called it empty with no
+document is any good.** It catches a shape 0.4in off the canvas, 8pt labels
+and 1.9:1 contrast — defects that are objective, invisible in a thumbnail,
+and free to find. It also passed, as "clean", a deck whose author called it empty with no
 storytelling, because a card rectangle counts as content whether or not
 anything is written in it.
 
@@ -21,11 +20,9 @@ dividers and then a 500–660 em exhibit that does the work — and a floor on t
 mean is satisfied by padding every slide, which is worse than an empty one.
 Do not add one.
 
-**A CJK language-tag check was considered and not added.** The HTML converter
-this lint once sat behind tagged 71 of 71 Han runs ``en-US`` with a Latin East
-Asian face. Both real ppt-master exports measured since (215 Han runs) tag
-every one ``zh-CN`` and set it in the theme's East Asian font, so on the only
-deck path left the check could never fire.
+**A CJK language-tag check was measured and not added.** Both real
+ppt-master exports (215 Han runs) tag every one ``zh-CN`` and set it in the
+theme's East Asian font, so on the only deck path the check could never fire.
 
 Two sources, deliberately:
 
@@ -52,9 +49,6 @@ from typing import Any, Literal, Sequence
 from .graph_layout import display_width, wrap_label
 
 Severity = Literal["critical", "major", "minor"]
-
-#: Reported, never graded: canvas coverage is a proxy that padding satisfies.
-CANVAS_COVERAGE_REPORT_ONLY = True
 
 #: Type floors for a 13.333in canvas seen from the back of a room.
 BODY_FONT_FLOOR_PT = 11.0
@@ -90,8 +84,8 @@ PAYLOAD_CHAR_CAP = 2000
 _MAX_EXAMPLES_PER_CHECK = 3
 
 
-#: Checks that need pixels. Empty by design: every occupancy measure was
-#: deleted, so the render stage now reports metrics and finds nothing.
+#: Checks that need pixels. Empty by design: occupancy is a proxy padding
+#: satisfies, so the render stage reports metrics and finds nothing.
 RENDER_CHECKS: frozenset[str] = frozenset()
 
 
@@ -138,7 +132,7 @@ class QualityReport:
     metrics: dict[str, Any] = field(default_factory=dict)
     #: Whether any file check ran. ``False`` reports :data:`NO_CHECKS` (or
     #: "not checked" when the file could not be read) instead of "pass";
-    #: ``None`` is the old behaviour, for reports built by hand.
+    #: ``None`` (a report built by hand) is judged by its findings alone.
     checked: bool | None = None
 
     @property
@@ -677,7 +671,7 @@ def lint_pptx(path: str | Path) -> tuple[list[Finding], dict[str, Any]]:
 
         # Once per shape, not per pair: a busy slide has hundreds of pairs.
         inks = [_ink_box(placed) for _, _, placed in boxes]
-        for i, (_, shape_a, placed_a) in enumerate(boxes):
+        for i, (_, shape_a, _) in enumerate(boxes):
             box_a = inks[i]
             for j in range(i + 1, len(boxes)):
                 _, shape_b, placed_b = boxes[j]
@@ -817,8 +811,8 @@ def lint_renders(
     # card is ink; `canvas_overfilled` fired four times and all four were
     # correct work; `dead_band` sat 0.01 from flagging eleven correct section
     # dividers, and its advice — fill the height — is the opposite of what a
-    # divider wants. The numbers are still reported, because 0.08 is how the
-    # degraded fallback writer looks, but nothing is graded on them.
+    # divider wants. The numbers are still reported, but nothing is graded on
+    # them.
     measured = [p for p in pages if not p.full_bleed]
     metrics: dict[str, Any] = {f"{label}s_measured": len(pages)}
     if len(measured) != len(pages):
@@ -1462,7 +1456,6 @@ def lint_artifact(
 
 __all__ = [
     "BODY_FONT_FLOOR_PT",
-    "CANVAS_COVERAGE_REPORT_ONLY",
     "FULL_BLEED_DELTA",
     "Finding",
     "HAIRLINE_IN",

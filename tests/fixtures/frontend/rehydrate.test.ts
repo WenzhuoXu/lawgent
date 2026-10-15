@@ -80,9 +80,4 @@ describe("eventsToUIMessages — complex turn rehydration", () => {
     );
     expect(resolved.length).toBeGreaterThan(0);
   });
-
-  it("reconstructs the plan + agent-task checklist", () => {
-    const parts = rehydratedAssistantParts("complex.chat.json");
-    expect(parts.some((p) => p.type === "data-plan")).toBe(true);
-  });
 });

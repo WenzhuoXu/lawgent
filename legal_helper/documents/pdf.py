@@ -66,16 +66,6 @@ def page_layers(pdf: Any, indices: list[int]) -> list[PageLayer]:
     return out
 
 
-def pdf_page_count(path: Path) -> int:
-    import pypdfium2 as pdfium
-
-    pdf = pdfium.PdfDocument(str(path))
-    try:
-        return len(pdf)
-    finally:
-        pdf.close()
-
-
 def read_pdf_text(path: Path, *, pages: Optional[str] = None, ocr: bool = True) -> str:
     """Text of a PDF with ``[page N]`` markers; image-only pages are OCR'd.
 

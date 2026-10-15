@@ -9,13 +9,26 @@
  *  - `workflow_event` is an envelope; use normalizeEvent() to unwrap.
  *  - assistant message id arrives up-front via `message_saved` (role=assistant)
  *    and is repeated on `done`.
- *  - OpenAI local tool call = `tool_call` (direct) + `local_tool_call_started` +
- *    `local_tool_call_finished` (enveloped). Anthropic (pre-fix) = `tool_call`
- *    only; (post-fix) = same trio. `hosted_tool_call` is emitted twice
- *    (enveloped + direct) → dedupe.
+ *  - A local tool call, on both providers, = `tool_call` (direct, carrying the
+ *    provider's `call_id`) + `local_tool_call_started` + `local_tool_call_finished`
+ *    (enveloped). A tool the server runs itself (message export) sends only
+ *    the enveloped pair. `hosted_tool_call` is emitted twice (enveloped +
+ *    direct) → dedupe.
+ *  - A sub-agent runs inside one tool call: `run_workflow`'s specialists,
+ *    `create_deck`'s ppt-master, `run_procedure`'s procedure. Every event it
+ *    emits carries `task_id` and `parent_call_id` (the spawning call — the
+ *    Agent SDK's `parent_tool_use_id` convention), so it nests under that tool
+ *    part as a `data-agentTask` row instead of becoming a top-level tool card.
+ *  - Reasoning is one part per segment: a tool call ends the segment, so the
+ *    thoughts and the calls they led to alternate in stream order. Deltas are
+ *    never stored; the `reasoning` event logged where a segment ends carries
+ *    its whole text, which closes the streamed segment live and recreates it
+ *    on reload.
  */
 
 import { normalizeEvent } from "./events";
+import type { SpecialistTask, SubTool, WorkflowData } from "@/lib/dataParts";
+import { displayToolName } from "@/lib/toolLabels";
 
 // Minimal UIMessageChunk typing — matches AI SDK's stream part union closely
 // enough for our transport; the SDK validates on ingest.
@@ -39,8 +52,11 @@ export type TranslatorState = {
   sawStart: boolean;
   textId: string | null;
   textOpen: boolean;
-  reasoningId: string | null;
+  reasoningSeq: number;
   reasoningOpen: boolean;
+  /** text streamed into the open (or just-closed) segment, not yet acknowledged
+   * by its `reasoning` event */
+  reasoningStreamed: boolean;
   /** FIFO of open tool-call ids per `${agent}:${tool}` key */
   openToolIds: Map<string, string[]>;
   toolSeq: Map<string, number>;
@@ -49,6 +65,13 @@ export type TranslatorState = {
   /** have we emitted a phase status yet this turn */
   sawPhase: boolean;
   finished: boolean;
+  /** provider call id → tool part id (pairs a specialist with its parent) */
+  partByCallId: Map<string, string>;
+  /** the part most recently opened per tool key */
+  lastOpened: Map<string, string>;
+  /** specialist snapshots by `${partId}:${taskId}` */
+  tasks: Map<string, SpecialistTask>;
+  workflows: Map<string, WorkflowData>;
 };
 
 export function createTranslatorState(): TranslatorState {
@@ -57,15 +80,22 @@ export function createTranslatorState(): TranslatorState {
     sawStart: false,
     textId: null,
     textOpen: false,
-    reasoningId: null,
+    reasoningSeq: 0,
     reasoningOpen: false,
+    reasoningStreamed: false,
     openToolIds: new Map(),
     toolSeq: new Map(),
     hostedSeen: new Set(),
     sawPhase: false,
     finished: false,
+    partByCallId: new Map(),
+    lastOpened: new Map(),
+    tasks: new Map(),
+    workflows: new Map(),
   };
 }
+
+const WORKFLOW_TOOL = "run_workflow";
 
 function toolKey(agent: string | undefined, name: string): string {
   return `${agent || "orchestrator"}:${name}`;
@@ -76,7 +106,7 @@ function looksLikeError(output: unknown): boolean {
   return /^\s*\{\s*"error"\s*:/.test(output);
 }
 
-/** Normalize backend retrieved-source chips ({label, kind}) to PlanTask.sources. */
+/** Normalize backend retrieved-source chips ({label, kind}) to SpecialistTask.sources. */
 function mapSources(raw: unknown): { label: string; kind?: string }[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: { label: string; kind?: string }[] = [];
@@ -89,7 +119,7 @@ function mapSources(raw: unknown): { label: string; kind?: string }[] | undefine
   return out.length ? out : undefined;
 }
 
-/** Open (or reuse) a tool call id for a key; returns the id. */
+/** Open a new tool part id for a key; returns the id. */
 function openTool(state: TranslatorState, key: string): string {
   const seq = state.toolSeq.get(key) ?? 0;
   const id = `${key}#${seq}`;
@@ -97,17 +127,90 @@ function openTool(state: TranslatorState, key: string): string {
   const open = state.openToolIds.get(key) ?? [];
   open.push(id);
   state.openToolIds.set(key, open);
+  state.lastOpened.set(key, id);
   return id;
 }
 
-/** Pop the oldest open tool id for a key (FIFO); synthesize one if none open. */
-function closeTool(state: TranslatorState, key: string): string {
-  const open = state.openToolIds.get(key);
-  if (open && open.length) {
-    return open.shift() as string;
+/** Remember which part a provider call id belongs to. */
+function noteCallId(state: TranslatorState, key: string, callId: unknown): void {
+  if (typeof callId !== "string" || !callId || state.partByCallId.has(callId)) return;
+  const id = state.lastOpened.get(key);
+  if (id) state.partByCallId.set(callId, id);
+}
+
+/** The `run_workflow` part a specialist event belongs to. */
+function parentPart(state: TranslatorState, p: Record<string, unknown>): string | undefined {
+  const call = p.parent_call_id;
+  return typeof call === "string" ? state.partByCallId.get(call) : undefined;
+}
+
+/** A short argument summary for a nested tool row. */
+function argDetail(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") return undefined;
+  const a = args as Record<string, unknown>;
+  for (const key of ["query", "q", "keyword", "title", "name", "url", "path", "script", "article", "section"]) {
+    const v = a[key];
+    if (typeof v === "string" && v.trim()) {
+      const s = v.trim();
+      return key === "path" || key === "script" ? s.split("/").pop() : s.slice(0, 80);
+    }
   }
-  // No matching open call (e.g. Anthropic emitted no start, or hosted): make one.
-  return openTool(state, key);
+  return undefined;
+}
+
+/** Merge a patch into a specialist's snapshot and emit the whole row. */
+function taskChunk(
+  state: TranslatorState,
+  partId: string | undefined,
+  taskId: string,
+  patch: Partial<SpecialistTask>,
+): UIMessageChunk[] {
+  if (!partId) return [];
+  const key = `${partId}:${taskId}`;
+  const prev = state.tasks.get(key) ?? { id: taskId, parentCallId: partId, status: "pending" as const };
+  const next: SpecialistTask = { ...prev };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v !== undefined) (next as Record<string, unknown>)[k] = v;
+  }
+  state.tasks.set(key, next);
+  return [{ type: "data-agentTask", id: key, data: next }];
+}
+
+function taskOf(state: TranslatorState, partId: string | undefined, taskId: string): SpecialistTask | undefined {
+  return partId ? state.tasks.get(`${partId}:${taskId}`) : undefined;
+}
+
+/** A specialist's own tool call, nested under its row. */
+function subToolChunks(
+  state: TranslatorState,
+  p: Record<string, unknown>,
+  name: string,
+  status: SubTool["status"],
+  detail?: string,
+): UIMessageChunk[] {
+  const taskId = p.task_id as string;
+  const partId = parentPart(state, p);
+  const tools = [...(taskOf(state, partId, taskId)?.tools ?? [])];
+  if (status === "running") {
+    tools.push({ name, status, detail });
+  } else {
+    const at = tools.findIndex((t) => t.name === name && t.status === "running");
+    if (at >= 0) tools[at] = { ...tools[at], status };
+    else tools.push({ name, status, detail });
+  }
+  const activity = status === "running"
+    ? [displayToolName(name, "running"), detail].filter(Boolean).join(" · ")
+    : undefined;
+  return taskChunk(state, partId, taskId, {
+    tools: tools.slice(-40),
+    activity,
+    toolCount: tools.length,
+  });
+}
+
+/** Pop the oldest open tool id for a key (FIFO). */
+function closeTool(state: TranslatorState, key: string): string | undefined {
+  return state.openToolIds.get(key)?.shift();
 }
 
 /**
@@ -131,7 +234,13 @@ export function sseEventToChunks(
     }
   };
   const textId = () => (state.textId ??= `txt-${state.assistantId ?? "run"}`);
-  const reasoningId = () => (state.reasoningId ??= `rsn-${state.assistantId ?? "run"}`);
+  const reasoningId = () => `rsn-${state.assistantId ?? "run"}-${state.reasoningSeq}`;
+  const openReasoning = () => {
+    if (state.reasoningOpen) return;
+    state.reasoningSeq += 1;
+    out.push({ type: "reasoning-start", id: reasoningId() });
+    state.reasoningOpen = true;
+  };
   const closeText = () => {
     if (state.textOpen) {
       out.push({ type: "text-end", id: textId() });
@@ -164,7 +273,7 @@ export function sseEventToChunks(
       if (!state.textOpen) {
         out.push({ type: "text-start", id: textId() });
         state.textOpen = true;
-        // Answer has begun — clear the planning status line.
+        // Answer has begun — clear the status line.
         if (state.sawPhase) out.push({ type: "data-phase", id: "phase", data: null });
       }
       out.push({ type: "text-delta", id: textId(), delta: text });
@@ -172,70 +281,72 @@ export function sseEventToChunks(
     }
 
     case "reasoning_delta": {
+      if (p.task_id) return out; // a sub-agent's thinking is not the author's
       const text = (p.text as string) ?? "";
       if (!text) return out;
       ensureStart();
-      if (!state.reasoningOpen) {
-        out.push({ type: "reasoning-start", id: reasoningId() });
-        state.reasoningOpen = true;
-      }
+      openReasoning();
+      state.reasoningStreamed = true;
       out.push({ type: "reasoning-delta", id: reasoningId(), delta: text });
       return out;
     }
 
-    case "provider_turn_finished": {
+    case "reasoning": {
+      if (p.task_id) return out;
+      if (state.reasoningStreamed) {
+        // Live: the segment already streamed; this only marks its end.
+        state.reasoningStreamed = false;
+        closeReasoning();
+        return out;
+      }
+      const text = ((p.text as string) ?? "").trim();
+      if (!text) return out;
+      ensureStart();
+      closeReasoning();
+      openReasoning();
+      out.push({ type: "reasoning-delta", id: reasoningId(), delta: text });
       closeReasoning();
       return out;
     }
 
-    // --- Planning-phase lifecycle → live status so the assistant bubble shows
-    // progress IMMEDIATELY instead of sitting empty during the (multi-second)
-    // routing/planning LLM call. ensureStart() materializes the message now. ---
+    case "provider_turn_finished": {
+      if (p.task_id) return out; // a specialist's turn, not the author's
+      closeReasoning();
+      return out;
+    }
+
+    // The author's model starts reading the turn: show the bubble and a live
+    // status line right away instead of an empty message.
+    case "author_started":
     case "provider_turn_started": {
-      ensureStart(); // first event of the turn — show the bubble right away
+      if (p.task_id) return out;
+      ensureStart();
       if (!state.sawPhase) {
         state.sawPhase = true;
-        out.push({ type: "data-phase", id: "phase", data: { phase: "routing" } });
+        out.push({ type: "data-phase", id: "phase", data: { phase: "thinking" } });
       }
       return out;
     }
-    case "workflow_plan_routed": {
-      ensureStart();
-      state.sawPhase = true;
-      const mode = p.execution_mode as string;
-      out.push({
-        type: "data-phase",
-        id: "phase",
-        data: {
-          phase: mode === "agent_workflow" ? "planning" : "integrating",
-          detail: p.routing_reason as string | undefined,
-        },
-      });
-      return out;
-    }
-    case "workflow_plan_decomposed": {
-      ensureStart();
-      state.sawPhase = true;
-      out.push({ type: "data-phase", id: "phase", data: { phase: "planning" } });
-      return out;
-    }
     case "skill_started": {
+      if (p.task_id) return out;
       ensureStart();
       state.sawPhase = true;
       out.push({ type: "data-phase", id: "phase", data: { phase: "gathering" } });
-      return out;
-    }
-    case "workflow_direct_llm_started": {
-      ensureStart();
-      state.sawPhase = true;
-      out.push({ type: "data-phase", id: "phase", data: { phase: "integrating" } });
       return out;
     }
     // Long silent spans (a document write streaming its arguments, a hosted
     // search, a deck procedure authoring pages) used to show nothing for
     // p50 30 s before a write_docx call. These keep the status line moving.
     case "tool_progress": {
+      if (p.task_id) {
+        const partId = parentPart(state, p);
+        const name = p.tool_name as string | undefined;
+        return taskChunk(state, partId, p.task_id as string, {
+          activity: name ? displayToolName(name, "running") : undefined,
+        });
+      }
       ensureStart();
+      closeReasoning();
       state.sawPhase = true;
       const chars = p.chars_so_far as number | undefined;
       out.push({
@@ -251,29 +362,54 @@ export function sseEventToChunks(
       return out;
     }
     case "hosted_tool_progress": {
+      if (p.task_id) {
+        const partId = parentPart(state, p);
+        const query = (p.query as string | undefined) ?? (p.url as string | undefined);
+        return taskChunk(state, partId, p.task_id as string, {
+          activity: [displayToolName("web_search", "running"), query].filter(Boolean).join(" · "),
+        });
+      }
       ensureStart();
+      closeReasoning();
       state.sawPhase = true;
       out.push({
         type: "data-phase",
         id: "phase",
-        data: { phase: "gathering", detail: (p.query as string | undefined) ?? (p.status as string | undefined) },
+        data: { phase: "gathering", detail: (p.query as string | undefined) ?? (p.url as string | undefined) },
       });
       return out;
+    }
+    case "deck_started":
+    case "procedure_started": {
+      if (!p.task_id) return out;
+      return taskChunk(state, parentPart(state, p), p.task_id as string, {
+        title: p.title as string | undefined,
+        skillName: (p.skill as string | undefined) ?? (p.task_id as string),
+        total: (p.total as number | null | undefined) ?? undefined,
+        status: "running",
+      });
     }
     case "deck_progress": {
       ensureStart();
       state.sawPhase = true;
+      const message = (p.message as string | undefined) ?? (p.stage as string | undefined);
       out.push({
         type: "data-phase",
         id: "phase",
-        data: {
-          phase: "drafting",
-          detail:
-            (p.message as string | undefined) ??
-            (p.stage as string | undefined) ??
-            "ppt-master",
-        },
+        data: { phase: "drafting", detail: message ?? "ppt-master" },
       });
+      if (p.task_id) {
+        const elapsed = p.elapsed_s as number | undefined;
+        out.push(
+          ...taskChunk(state, parentPart(state, p), p.task_id as string, {
+            activity: message,
+            current: p.current as number | undefined,
+            total: (p.total as number | null | undefined) ?? undefined,
+            toolCount: p.calls as number | undefined,
+            elapsedMs: elapsed !== undefined ? Math.round(elapsed * 1000) : undefined,
+          }),
+        );
+      }
       return out;
     }
     case "citation_audit_started": {
@@ -284,43 +420,64 @@ export function sseEventToChunks(
     }
 
     case "tool_call": {
-      ensureStart();
       const name = p.name as string;
       if (!name) return out;
+      if (p.task_id) return subToolChunks(state, p, name, "running", argDetail(p.arguments));
+      ensureStart();
+      closeReasoning();
       const key = toolKey(ev.agent ?? (p.agent as string), name);
       const id = openTool(state, key);
+      noteCallId(state, key, p.call_id);
       out.push({
         type: "tool-input-available",
         toolCallId: id,
         toolName: name,
         input: p.arguments ?? {},
       });
+      if (name === WORKFLOW_TOOL) {
+        state.sawPhase = true;
+        out.push({ type: "data-phase", id: "phase", data: { phase: "workflow" } });
+      }
       return out;
     }
 
     case "local_tool_call_started": {
-      // OpenAI refinement: only open if `tool_call` didn't already open one.
-      const name = (p.tool_name as string) ?? (p.name as string);
+      // The provider's `tool_call` has already opened the part; a tool the
+      // server runs itself opens it here.
+      const name = p.tool_name as string;
       if (!name) return out;
+      if (p.task_id) return subToolChunks(state, p, name, "running", argDetail(p.arguments));
       const key = toolKey(ev.agent, name);
       const open = state.openToolIds.get(key);
-      if (open && open.length) return out; // already opened by tool_call
+      if (open && open.length) {
+        noteCallId(state, key, p.call_id); // already opened by tool_call
+        return out;
+      }
       ensureStart();
+      closeReasoning();
       const id = openTool(state, key);
+      noteCallId(state, key, p.call_id);
       out.push({
         type: "tool-input-available",
         toolCallId: id,
         toolName: name,
         input: p.arguments ?? {},
       });
+      if (name === WORKFLOW_TOOL) {
+        state.sawPhase = true;
+        out.push({ type: "data-phase", id: "phase", data: { phase: "workflow" } });
+      }
       return out;
     }
 
     case "local_tool_call_finished": {
-      const name = (p.tool_name as string) ?? (p.name as string);
+      const name = p.tool_name as string;
       if (!name) return out;
-      const key = toolKey(ev.agent, name);
-      const id = closeTool(state, key);
+      if (p.task_id) {
+        return subToolChunks(state, p, name, looksLikeError(p.output_preview) ? "error" : "complete");
+      }
+      const id = closeTool(state, toolKey(ev.agent, name));
+      if (!id) return out;
       const preview = p.output_preview;
       if (looksLikeError(preview)) {
         out.push({ type: "tool-output-error", toolCallId: id, errorText: preview as string });
@@ -331,10 +488,11 @@ export function sseEventToChunks(
     }
 
     case "local_tool_call_failed": {
-      const name = (p.tool_name as string) ?? (p.name as string);
+      const name = p.tool_name as string;
       if (!name) return out;
-      const key = toolKey(ev.agent, name);
-      const id = closeTool(state, key);
+      if (p.task_id) return subToolChunks(state, p, name, "error");
+      const id = closeTool(state, toolKey(ev.agent, name));
+      if (!id) return out;
       out.push({
         type: "tool-output-error",
         toolCallId: id,
@@ -357,91 +515,98 @@ export function sseEventToChunks(
       const dedupeKey = toolId || toolKey(ev.agent, name);
       if (state.hostedSeen.has(dedupeKey)) return out; // emitted twice (envelope+direct)
       state.hostedSeen.add(dedupeKey);
+      if (p.task_id) return subToolChunks(state, p, name, "complete", argDetail(p.arguments));
       ensureStart();
+      closeReasoning();
       const id = `hosted:${dedupeKey}`;
-      out.push({ type: "tool-input-available", toolCallId: id, toolName: name, input: { provider: p.provider, model: p.model } });
-      out.push({ type: "tool-output-available", toolCallId: id, output: { tool_id: toolId } });
+      out.push({ type: "tool-input-available", toolCallId: id, toolName: name, input: p.arguments ?? {} });
+      out.push({ type: "tool-output-available", toolCallId: id, output: "" });
       return out;
     }
 
-    case "workflow_plan": {
-      const tasks = (p.agent_tasks as Array<Record<string, unknown>>) ?? [];
-      // The plan's declared agent_tasks are only a PROPOSAL. The backend runs
-      // them as visible sub-agents (emitting agent_task_started/finished) ONLY
-      // on the genuine multi-agent path; the direct_answer and single-pass
-      // paths answer inline and emit NO task lifecycle events. So we do NOT
-      // seed checklist rows here — the plan card materializes only when real
-      // agent_task_started events arrive (see below). This is the truthful
-      // signal, not a task-count heuristic.
-      out.push({
-        type: "data-plan",
-        id: "plan",
-        data: {
-          title: p.title,
-          executionMode: p.execution_mode,
-          complexity: p.complexity,
-          routingReason: p.routing_reason,
-          userLanguage: p.user_language,
-          taskIds: tasks.map((t) => t.id as string),
-        },
-      });
+    case "workflow_started": {
+      const partId = parentPart(state, p);
+      if (!partId) return out;
+      const wf: WorkflowData = { partId, objective: p.objective as string | undefined };
+      state.workflows.set(partId, wf);
+      out.push({ type: "data-workflow", id: partId, data: { ...wf } });
+      for (const t of (p.tasks as Array<Record<string, unknown>>) ?? []) {
+        out.push(
+          ...taskChunk(state, partId, t.id as string, {
+            title: t.title as string | undefined,
+            skillName: t.skill_name as string | undefined,
+            status: "pending",
+          }),
+        );
+      }
+      return out;
+    }
+
+    case "workflow_finished": {
+      const partId = parentPart(state, p);
+      if (!partId) return out;
+      const next: WorkflowData = {
+        ...(state.workflows.get(partId) ?? { partId }),
+        durationMs: p.duration_ms as number | undefined,
+      };
+      state.workflows.set(partId, next);
+      out.push({ type: "data-workflow", id: partId, data: next });
       return out;
     }
 
     case "agent_task_started": {
-      const id = (p.id as string) ?? (p.task_id as string);
+      const id = p.task_id as string;
       if (!id) return out;
-      out.push({
-        type: "data-agentTask",
-        id,
-        data: {
-          id,
-          skillName: p.skill_name,
-          title: p.title ?? p.task,
-          dependsOn: p.depends_on,
-          detail: p.task,
-          status: "running",
-        },
+      return taskChunk(state, parentPart(state, p), id, {
+        skillName: p.skill_name as string | undefined,
+        title: (p.title ?? p.task) as string | undefined,
+        detail: p.task as string | undefined,
+        status: "running",
       });
-      return out;
     }
 
     case "agent_task_finished": {
       const id = p.task_id as string;
       if (!id) return out;
-      out.push({
-        type: "data-agentTask",
-        id,
-        data: {
-          id,
-          skillName: p.skill_name,
-          status: "complete",
-          responseChars: p.response_chars,
-          toolCount: p.tool_count,
-          durationMs: p.duration_ms,
-          sources: mapSources(p.sources),
-        },
+      const outcome = p.outcome as string | undefined;
+      const good = !outcome || ["completed", "truncated", "reused"].includes(outcome);
+      return taskChunk(state, parentPart(state, p), id, {
+        skillName: p.skill_name as string | undefined,
+        status: good ? "complete" : "error",
+        outcome,
+        toolCount: p.tool_count as number | undefined,
+        totalTokens: p.total_tokens as number | undefined,
+        durationMs: p.duration_ms as number | undefined,
+        sources: mapSources(p.sources),
+        activity: "",
       });
-      return out;
+    }
+
+    case "agent_task_failed": {
+      const id = p.task_id as string;
+      if (!id) return out;
+      return taskChunk(state, parentPart(state, p), id, {
+        title: p.title as string | undefined,
+        status: "error",
+        outcome: "failed",
+        error: p.message as string | undefined,
+        activity: "",
+      });
     }
 
     case "agent_delta": {
       const id = p.task_id as string;
       if (!id) return out;
-      out.push({
-        type: "data-agentTask",
-        id,
-        data: {
-          id,
-          skillName: p.skill_name,
-          status: "running",
-          tail: p.tail,
-          totalChars: p.total_chars,
-          toolCount: p.tool_count,
-          sources: mapSources(p.sources),
-        },
+      const partId = parentPart(state, p);
+      const prev = taskOf(state, partId, id);
+      return taskChunk(state, partId, id, {
+        skillName: p.skill_name as string | undefined,
+        status: prev?.status === "complete" || prev?.status === "error" ? prev.status : "running",
+        tail: p.tail as string | undefined,
+        toolCount: (p.tool_count as number | undefined) || prev?.toolCount,
+        elapsedMs: p.elapsed_ms as number | undefined,
+        sources: mapSources(p.sources),
       });
-      return out;
     }
 
     case "cite_check_progress": {
@@ -608,8 +773,8 @@ export function sseEventToChunks(
       return out;
     }
 
-    // heartbeat, skill_finished, plan-router notes, chat_updated, and other
-    // structural log events carry no visible chunk.
+    // heartbeat, skill_finished, chat_updated and other structural log events
+    // carry no visible chunk.
     default:
       return out;
   }
@@ -618,8 +783,7 @@ export function sseEventToChunks(
 /**
  * Incremental SSE frame parser. Feed it chunks of the response body text; it
  * calls `onEvent(name, data)` for each complete `\n\n`-terminated frame and
- * returns the unconsumed remainder to prepend next call. Ported from
- * main.jsx:139-157, typed.
+ * returns the unconsumed remainder to prepend next call.
  */
 export function parseSSEBuffer(
   buffer: string,

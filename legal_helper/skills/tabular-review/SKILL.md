@@ -18,11 +18,11 @@ must verify flagged cells before reliance.
 ## Output Contract (binding)
 
 As a specialist, emit the harness's bundle contract (Findings · Issues ·
-Artefacts · Out of scope · Sources), supplied with your task. As the author of
-a final answer, follow the author contract instead and put these artefacts in
-the answer where they help the reader.
+Artefacts · Out of scope · Sources), supplied with your task.
 
-Artefacts this skill produces: the grid header block — `path` (absolute .xlsx under outputs/), `rows`, `columns`, `unresolved_cells` (NOT FOUND / AMBIGUOUS / UNREADABLE count); cell-level detail lives in the workbook.
+## Artefacts
+
+The grid header block — `path` (absolute .xlsx under outputs/), `rows`, `columns`, `unresolved_cells` (NOT FOUND / AMBIGUOUS / UNREADABLE count); cell-level detail lives in the workbook.
 
 ## Per-cell citation contract (binding)
 
@@ -68,8 +68,8 @@ Artefacts this skill produces: the grid header block — `path` (absolute .xlsx 
 - Full methodology — column design, answer-type discipline, PRC / US / EU
   pinpoint formats, unresolved-cell taxonomy, grid layout, QA pass,
   batching at scale: `references/methodology.md`.
-- Column presets: `resources/grid_templates/` (read via `read_document`;
-  schema in that directory's `README.md`).
+- Column presets: `resources/grid_templates/` (schema in that directory's
+  `README.md`).
 - Authority hierarchy + citation: `/playbook/general_playbook.md` §0 + §2;
   sanity check §3.
 - When the **aviation** pack is active, also apply

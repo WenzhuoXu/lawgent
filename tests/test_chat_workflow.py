@@ -5,88 +5,49 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from legal_helper.chat_models import ChatMessage, ChatSettings, utc_now
+import legal_helper.multi_agent as multi_agent_mod
+import legal_helper.providers as providers_mod
+from legal_helper.chat_models import ChatSettings
 from legal_helper.chat_store import ChatStore
 from legal_helper.citations import audit_citations
 from legal_helper.config import load_settings
 from legal_helper.errors import OUT_OF_MONEY_MESSAGE
-from legal_helper.providers import RunResult, StreamEvent
+from legal_helper.logging_setup import tool_call_id_var, transient_event_sink_var, workflow_event_sink_var
+from legal_helper.multi_agent import WorkflowRejected, run_workflow_tool, validate_tasks
+from legal_helper.providers import StreamEvent
+from legal_helper.turn_context import TurnContext, open_turn
 from legal_helper.workflow import (
-    GENERAL_TASK_SKILL,
     WorkflowExecutor,
     write_followup_docx,
     write_followup_pdf,
 )
 
 
-class PlannerProvider:
+class StubProvider:
+    """A provider for tests that never reach a model: building and failing."""
+
     name = "mock"
     model = "mock-advanced"
-    supports_hosted_web_search = False
-    supports_file_search = False
-    supports_structured_outputs = False
 
-    def __init__(self, text: str | None = None, exc: Exception | None = None) -> None:
-        self.text = text
+    def __init__(self, exc: Exception | None = None) -> None:
         self.exc = exc
-        self.run_calls = 0
-
-    def run(self, *args, **kwargs):
-        self.run_calls += 1
-        if self.exc:
-            raise self.exc
-        return RunResult(text=self.text or "{}", provider=self.name, model=self.model)
 
     def stream(self, *args, **kwargs):
+        if self.exc:
+            raise self.exc
         yield from ()
 
-    def tool_runner(self, *args, **kwargs):
-        return self.run(*args, **kwargs)
 
-
-class CapturingPlannerProvider(PlannerProvider):
-    def __init__(self, text: str | None = None, exc: Exception | None = None) -> None:
-        super().__init__(text=text, exc=exc)
-        self.prompts: list[str] = []
-
-    def run(self, system=None, messages=None, *args, **kwargs):
-        if messages:
-            self.prompts.append(messages[-1]["content"])
-        return super().run(system=system, messages=messages, *args, **kwargs)
-
-
-class SequentialPlannerProvider(PlannerProvider):
-    def __init__(self, texts: list[str]) -> None:
-        super().__init__(text=None)
-        self.texts = texts
-
-    def run(self, *args, **kwargs):
-        self.run_calls += 1
-        text = self.texts.pop(0) if self.texts else "{}"
-        return RunResult(text=text, provider=self.name, model=self.model)
-
-
-class StreamingPlannerProvider(PlannerProvider):
-    def __init__(self, text: str, final_text: str = "FINAL ANSWER") -> None:
-        super().__init__(text=text)
-        self.final_text = final_text
-        self.integration_messages: list[str] = []
-
-    def stream(self, system, messages, tools=(), *, max_iterations=None):
-        self.integration_messages.append(messages[-1]["content"])
-        yield StreamEvent("delta", {"text": self.final_text})
-        yield StreamEvent("done", {"text": self.final_text})
-
-
-class CapturingStreamProvider(PlannerProvider):
-    def __init__(self, text: str, final_text: str = "FINAL ANSWER") -> None:
-        super().__init__(text=text)
+class CapturingStreamProvider(StubProvider):
+    def __init__(self, final_text: str = "FINAL ANSWER") -> None:
+        super().__init__()
         self.final_text = final_text
         self.stream_calls: list[dict] = []
 
-    def stream(self, system, messages, tools=(), *, max_iterations=None):
+    def stream(self, system, messages, tools=(), *, max_iterations=None, **kwargs):
         self.stream_calls.append(
             {
                 "system": system,
@@ -99,42 +60,19 @@ class CapturingStreamProvider(PlannerProvider):
         yield StreamEvent("done", {"text": self.final_text})
 
 
-class SubAgentStreamProvider(PlannerProvider):
-    def __init__(self, text: str) -> None:
-        super().__init__(text="{}")
-        self.stream_text = text
-
-    def stream(self, *args, **kwargs):
-        yield StreamEvent("delta", {"text": self.stream_text})
-        yield StreamEvent("done", {"text": self.stream_text})
-
-
-class RateLimitOnceSubAgentProvider(PlannerProvider):
-    _lock = threading.Lock()
-    _attempts: dict[str, int] = {}
-
-    @classmethod
-    def reset(cls) -> None:
-        with cls._lock:
-            cls._attempts = {}
-
-    def stream(self, system, messages, tools=(), *, max_iterations=None):
-        task = messages[-1]["content"]
-        with self._lock:
-            attempt = self._attempts.get(task, 0)
-            self._attempts[task] = attempt + 1
-        if "Task two." in task and attempt == 0:
-            raise RuntimeError("Error code: 429 - rate_limit_error: tokens per minute")
-        text = f"SUB AGENT OUTPUT: {task}"
-        yield StreamEvent("delta", {"text": text})
-        yield StreamEvent("done", {"text": text})
+def _tool_names(tools) -> set[str]:
+    return {
+        (t.get("name") if isinstance(t, dict) else getattr(t, "name", None))
+        or (t.get("type") if isinstance(t, dict) else None)
+        for t in tools
+    }
 
 
 def test_chat_store_persists_messages_and_memory(tmp_path):
     settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
     store = ChatStore(settings, tmp_path / "chat.sqlite3")
     chat = store.create_chat(
-        settings=ChatSettings(provider="openai", model="gpt-5.5", reasoning_effort="high")
+        settings=ChatSettings(provider="openai", model="gpt-6.1-sol", reasoning_effort="high")
     )
     store.add_message(chat.id, "user", "Analyze passport tearing on board.")
     store.add_message(chat.id, "assistant", "Analysis result.")
@@ -197,12 +135,12 @@ def test_chat_store_marks_orphaned_runs_as_error(tmp_path):
     assert loaded.finished_at
 
 
-def test_workflow_builds_primary_and_low_effort_models(tmp_path, monkeypatch):
+def test_workflow_builds_the_chat_model_and_the_fast_cite_check_model(tmp_path, monkeypatch):
     settings = load_settings(refresh=True).model_copy(
         update={
             "provider": "anthropic",
-            "anthropic_model": "claude-sonnet-4-6",
-            "anthropic_fast_model": "claude-haiku-4-5",
+            "anthropic_model": "claude-opus-5-5",
+            "anthropic_fast_model": "claude-sonnet-5",
             "outputs_dir": tmp_path / "out",
         }
     )
@@ -210,585 +148,35 @@ def test_workflow_builds_primary_and_low_effort_models(tmp_path, monkeypatch):
 
     def fake_build_provider(settings_arg, *, fast=False):
         calls.append((fast, settings_arg.model_for_provider(fast=fast)))
-        return PlannerProvider(
-            """
-            {
-              "title": "Direct",
-              "user_language": "English",
-              "execution_mode": "direct_answer",
-              "direct_response": "ok",
-              "routing_reason": "test",
-              "agent_tasks": []
-            }
-            """
-        )
+        return StubProvider()
 
     import legal_helper.workflow as workflow_mod
 
     monkeypatch.setattr(workflow_mod, "build_provider", fake_build_provider)
 
-    WorkflowExecutor(settings=settings)
+    executor = WorkflowExecutor(settings=settings)
 
-    # Primary, then one provider per role from `Settings.role_profiles`:
-    # router, decomposer and cite-check on the fast tier. The integrator
-    # (main tier, effort capped at medium) reuses the primary because the cap
-    # leaves this chat's medium effort unchanged.
-    assert calls == [
-        (False, "claude-sonnet-4-6"),
-        (True, "claude-haiku-4-5"),
-        (True, "claude-haiku-4-5"),
-        (True, "claude-haiku-4-5"),
-    ]
+    # The primary, then one provider per role from `Settings.role_profiles`
+    # that differs from it: cite-check on the fast tier. The author's default
+    # row is the chat's own model and effort, so it reuses the primary.
+    assert calls == [(False, "claude-opus-5-5"), (True, "claude-sonnet-5")]
+    assert executor.author_provider is executor.provider
 
 
-def test_llm_planner_accepts_variable_agent_count(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Complex passport workflow",
-          "user_language": "Chinese",
-          "complexity": "complex",
-          "issue_decomposition": ["treaty", "operations", "risk", "drafting"],
-          "agent_tasks": [
-            {"id": "task_1", "skill_name": "brief", "title": "Treaty", "task": "Research treaty sources.", "depends_on": []},
-            {"id": "task_2", "skill_name": "compliance-check", "title": "Ops", "task": "Analyze operations.", "depends_on": []},
-            {"id": "task_3", "skill_name": "legal-risk-assessment", "title": "Risk", "task": "Assess risk.", "depends_on": []},
-            {"id": "task_4", "skill_name": "legal-response", "title": "SOP", "task": "Draft SOP.", "depends_on": ["task_1", "task_2"]}
-          ],
-          "integration_instructions": "Integrate in Chinese.",
-          "citation_requirements": "Use pinpoint citations."
-        }
-        """
-    )
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan("护照撕毁复杂问题")
-    assert plan.execution_mode == "agent_workflow"
-    # Plans larger than MAX_SPECIALISTS (3) are capped by merging, not by
-    # dropping: task_4's mandate (and its dependency on task_2) moves into a
-    # surviving specialist.
-    assert len(plan.agent_tasks) == 3
-    deps_by_id = {task.id: task.depends_on for task in plan.agent_tasks}
-    assert "task_4" not in deps_by_id
-    assert any("Draft SOP." in task.task for task in plan.agent_tasks)
-    assert deps_by_id["task_2"] == []
-    assert deps_by_id["task_3"] == []
-
-
-def test_planner_removes_redundant_final_synthesis_task_and_preserves_deps(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Passport workflow",
-          "user_language": "Chinese",
-          "complexity": "complex",
-          "issue_decomposition": ["sources", "ops", "final"],
-          "agent_tasks": [
-            {"id": "task_1", "skill_name": "brief", "title": "Sources", "task": "Research sources.", "depends_on": []},
-            {"id": "task_2", "skill_name": "compliance-check", "title": "Ops", "task": "Analyze operations.", "depends_on": ["task_1"]},
-            {"id": "task_3", "skill_name": "legal-response", "title": "Draft final Chinese legal analysis", "task": "Prepare the final answer in Chinese and synthesize all prior research.", "depends_on": ["task_1", "task_2"]}
-          ],
-          "integration_instructions": "Integrate in Chinese.",
-          "citation_requirements": "Use pinpoint citations."
-        }
-        """
-    )
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan("旅客机上撕毁护照怎么办？")
-    assert [task.id for task in plan.agent_tasks] == ["task_1", "task_2"]
-    deps_by_id = {task.id: task.depends_on for task in plan.agent_tasks}
-    assert deps_by_id["task_1"] == []
-    assert deps_by_id["task_2"] == ["task_1"]
-    assert "Final synthesis requirements moved" in plan.integration_instructions
-
-
-def test_planner_removes_observed_synthesis_and_qc_tasks(tmp_path):
-    """Regression: matches the exact mis-planned 6-agent run from 2026-05-12.
-
-    Reproduces the planner output that produced parallel "Source verification
-    and citation quality control" + "Chinese final legal analysis draft"
-    sub-agents alongside four legitimate specialists. Both extras must be
-    dropped (orchestrator owns synthesis and citation audit), and the
-    remaining specialists must keep their natural depends_on edges.
-    """
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Passport tearing onboard",
-          "user_language": "Chinese",
-          "complexity": "complex",
-          "issue_decomposition": ["sources", "authority", "ops", "risk", "qc", "draft"],
-          "agent_tasks": [
-            {"id": "task_1", "skill_name": "brief", "title": "International source mapping on travel documents", "task": "Research relevant instruments.", "depends_on": []},
-            {"id": "task_2", "skill_name": "legal-response", "title": "Aircraft commander and crew authority", "task": "Analyze commander authority.", "depends_on": []},
-            {"id": "task_3", "skill_name": "compliance-check", "title": "Airline operational compliance workflow", "task": "Define onboard workflow.", "depends_on": []},
-            {"id": "task_4", "skill_name": "legal-risk-assessment", "title": "Risk, liability, and passenger-rights assessment", "task": "Assess carrier risk.", "depends_on": []},
-            {"id": "task_5", "skill_name": "brief", "title": "Source verification and citation quality control", "task": "Verify all primary legal source references likely to be used in the final answer.", "depends_on": ["task_1", "task_2", "task_3", "task_4"]},
-            {"id": "task_6", "skill_name": "legal-response", "title": "Chinese final legal analysis draft", "task": "Using the outputs of the source, authority, compliance, risk, and verification tasks, draft a Chinese-language legal analysis.", "depends_on": ["task_1", "task_2", "task_3", "task_4", "task_5"]}
-          ],
-          "integration_instructions": "Integrate in Chinese.",
-          "citation_requirements": "Use pinpoint citations."
-        }
-        """
-    )
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan("旅客机上撕毁护照怎么办？")
-    ids = [task.id for task in plan.agent_tasks]
-    # task_5 (qc) and task_6 (synthesis) are stripped, then the
-    # MAX_SPECIALISTS=3 cap merges task_4 into a survivor rather than dropping it.
-    assert ids == ["task_1", "task_2", "task_3"]
-    assert all(task.depends_on == [] for task in plan.agent_tasks)
-    assert any("Assess carrier risk." in task.task for task in plan.agent_tasks)
-    assert "Final synthesis requirements moved" in plan.integration_instructions
-
-
-def test_router_placeholder_tasks_become_one_task_from_the_request(tmp_path):
-    """A standard turn is planned by the router alone; a placeholder task body
-    is replaced by the request itself instead of paying for a second call."""
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    bad_router_plan = """
-    {
-      "title": "Passport tearing onboard",
-      "execution_mode": "agent_workflow",
-      "complexity": "standard",
-      "routing_reason": "needs research",
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "compliance-check", "title": "Task 1", "task": "source_verification", "depends_on": []},
-        {"id": "task_2", "skill_name": "brief", "title": "Task 2", "task": "comparative_legal_research", "depends_on": []}
-      ],
-      "integration_instructions": "Integrate."
-    }
-    """
-    provider = SequentialPlannerProvider([bad_router_plan])
-
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan("旅客机上撕毁护照怎么办？")
-
-    assert provider.run_calls == 1
-    assert len(plan.agent_tasks) == 1
-    assert plan.agent_tasks[0].skill_name == "compliance-check"
-    assert plan.agent_tasks[0].task == "旅客机上撕毁护照怎么办？"
-    assert plan.user_language == "Chinese"
-
-
-def test_complex_turn_is_decomposed_by_a_second_call(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    router_plan = """
-    {"title": "Route launch", "execution_mode": "agent_workflow", "complexity": "complex",
-     "routing_reason": "multi-body memo", "agent_tasks": [],
-     "integration_instructions": "Cover establishment, tax and traffic rights.",
-     "fact_conflicts": ["launch date given as both May and June"]}
-    """
-    planner_plan = """
-    {
-      "title": "Route launch",
-      "issues": [
-        {"id": "I1", "issue": "Branch or subsidiary", "claim_basis": "company law", "jurisdiction": "ET"},
-        {"id": "I2", "issue": "Traffic rights", "claim_basis": "bilateral agreement", "jurisdiction": "CN"}
-      ],
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "Establishment", "issue_ids": ["I1"], "task": "Research establishment.\\ncoverage: establishment", "depends_on": []},
-        {"id": "task_2", "skill_name": "compliance-check", "title": "Traffic rights", "issue_ids": ["I2"], "task": "Research traffic rights。coverage：traffic-rights", "depends_on": []}
-      ]
-    }
-    """
-    provider = SequentialPlannerProvider([router_plan, planner_plan])
-
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan(
-        "A carrier plans a new international route: establishment, tax and traffic rights?"
-    )
-
-    assert provider.run_calls == 2
-    assert plan.complexity == "complex"
-    assert [task.title for task in plan.agent_tasks] == ["Establishment", "Traffic rights"]
-    # The issues survive normalisation; task titles no longer overwrite them.
-    assert plan.issue_decomposition == ["Branch or subsidiary", "Traffic rights"]
-    assert [issue.id for issue in plan.issues] == ["I1", "I2"]
-    assert plan.agent_tasks[1].issue_ids == ["I2"]
-    # The router's coverage note and fact conflicts carry into the plan.
-    assert "establishment" in plan.integration_instructions
-    assert plan.fact_conflicts == ["launch date given as both May and June"]
-    assert plan.user_language == "English"
-
-
-def test_stream_forwards_transient_subagent_previews_not_answer_text(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    plan_json = """
-    {
-      "title": "Parallel workflow",
-      "user_language": "English",
-      "complexity": "complex",
-      "issue_decomposition": ["one", "two"],
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
-        {"id": "task_2", "skill_name": "compliance-check", "title": "Two", "task": "Task two.", "depends_on": []}
-      ],
-      "integration_instructions": "Integrate.",
-      "citation_requirements": "Use citations."
-    }
-    """
-    provider = StreamingPlannerProvider(plan_json, final_text="FINAL ONLY")
-
-    import legal_helper.workflow as workflow_mod
-
-    monkeypatch.setattr(
-        workflow_mod,
-        "build_provider",
-        lambda settings: SubAgentStreamProvider("SUB AGENT OUTPUT"),
-    )
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
-    assert [ev.kind for ev in events].count("done") == 1
-    assert events[-1].kind == "done"
-    # Sub-agent output must NOT leak into the saved answer — final is the
-    # integration text only, never the sub-agent stream.
-    assert events[-1].data["text"] == "FINAL ONLY"
-    assert all("text" not in ev.data for ev in events if ev.kind == "agent_task_finished")
-    assert provider.integration_messages
-
-    # Sub-agent live previews (agent_delta) ARE forwarded now (throttled tail),
-    # but they are transient: they carry a rolling `tail` + task attribution and
-    # never accumulate into the assistant answer.
-    agent_deltas = [ev for ev in events if ev.kind == "agent_delta"]
-    for ev in agent_deltas:
-        assert "task_id" in ev.data
-        assert "tail" in ev.data
-        assert ev.data.get("phase") in {"answer", "reasoning"}
-    assert "SUB AGENT OUTPUT" in provider.integration_messages[-1]
-
-
-def test_stream_limits_parallel_subagents_to_configured_cap(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(
-        update={"outputs_dir": tmp_path / "out", "max_concurrent_agents": 1}
-    )
-    plan_json = """
-    {
-      "title": "Throttled workflow",
-      "user_language": "English",
-      "complexity": "complex",
-      "issue_decomposition": ["one", "two"],
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
-        {"id": "task_2", "skill_name": "compliance-check", "title": "Two", "task": "Task two.", "depends_on": []}
-      ],
-      "integration_instructions": "Integrate.",
-      "citation_requirements": "Use citations."
-    }
-    """
-    provider = StreamingPlannerProvider(plan_json, final_text="FINAL ONLY")
-
-    import legal_helper.workflow as workflow_mod
-
-    monkeypatch.setattr(
-        workflow_mod,
-        "build_provider",
-        lambda settings: SubAgentStreamProvider("SUB AGENT OUTPUT"),
-    )
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
-    task_lifecycle = [
-        (ev.kind, ev.data.get("task_id") or ev.data.get("id"))
-        for ev in events
-        if ev.kind in {"agent_task_started", "agent_task_finished"}
-    ]
-
-    assert task_lifecycle == [
-        ("agent_task_started", "task_1"),
-        ("agent_task_finished", "task_1"),
-        ("agent_task_started", "task_2"),
-        ("agent_task_finished", "task_2"),
-    ]
-
-
-def test_stream_reduces_concurrency_and_retries_after_rate_limit(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(
-        update={"provider": "openai", "outputs_dir": tmp_path / "out", "max_concurrent_agents": "auto"}
-    )
-    plan_json = """
-    {
-      "title": "Adaptive workflow",
-      "user_language": "English",
-      "complexity": "complex",
-      "issue_decomposition": ["one", "two"],
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
-        {"id": "task_2", "skill_name": "compliance-check", "title": "Two", "task": "Task two.", "depends_on": []}
-      ],
-      "integration_instructions": "Integrate.",
-      "citation_requirements": "Use citations."
-    }
-    """
-    provider = StreamingPlannerProvider(plan_json, final_text="FINAL ONLY")
-
-    import legal_helper.workflow as workflow_mod
-
-    RateLimitOnceSubAgentProvider.reset()
-    monkeypatch.setattr(workflow_mod, "build_provider", lambda settings: RateLimitOnceSubAgentProvider())
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
-    kinds = [ev.kind for ev in events]
-    task_2_starts = [
-        ev for ev in events if ev.kind == "agent_task_started" and ev.data.get("id") == "task_2"
-    ]
-
-    assert "agent_task_rate_limited" in kinds
-    assert "agent_concurrency_reduced" in kinds
-    assert len(task_2_starts) == 2
-    assert events[-1].kind == "done"
-    assert events[-1].data["text"] == "FINAL ONLY"
-    assert "Task one." in provider.integration_messages[-1]
-    assert "Task two." in provider.integration_messages[-1]
-
-
-def test_stream_direct_answer_skips_subagents_and_integration(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    plan_json = """
-    {
-      "title": "Greeting",
-      "user_language": "English",
-      "execution_mode": "direct_answer",
-      "direct_response": "Hi, how can I help today?",
-      "routing_reason": "Simple greeting.",
-      "issue_decomposition": [],
-      "agent_tasks": [],
-      "integration_instructions": "",
-      "citation_requirements": ""
-    }
-    """
-    provider = StreamingPlannerProvider(plan_json, final_text="SHOULD NOT STREAM")
-
-    import legal_helper.workflow as workflow_mod
-
-    monkeypatch.setattr(
-        workflow_mod,
-        "build_provider",
-        lambda settings, **kwargs: (_ for _ in ()).throw(AssertionError("sub-agent provider should not be built")),
-    )
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("hello"))
-    kinds = [ev.kind for ev in events]
-    assert provider.run_calls == 1
-    assert provider.integration_messages == []
-    assert "agent_task_started" not in kinds
-    # Direct answers still get a citation_audit event, but it must be a
-    # skipped/auto-pass payload (no cite-check sub-agent was built — the
-    # monkeypatched build_provider above would have raised).
-    assert kinds.count("citation_audit") == 1
-    audit = next(ev.data for ev in events if ev.kind == "citation_audit")
-    assert audit.get("skip_reason")
-    assert events[-1].kind == "done"
-    assert events[-1].data["text"] == "Hi, how can I help today?"
-
-
-def test_stream_clarify_skips_subagents_and_integration(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    plan_json = """
-    {
-      "title": "Clarify document review",
-      "user_language": "English",
-      "execution_mode": "clarify",
-      "direct_response": "Which agreement or clause would you like me to review?",
-      "routing_reason": "The request lacks the document or issue to analyze.",
-      "issue_decomposition": [],
-      "agent_tasks": [],
-      "integration_instructions": "",
-      "citation_requirements": ""
-    }
-    """
-    provider = StreamingPlannerProvider(plan_json, final_text="SHOULD NOT STREAM")
-
-    import legal_helper.workflow as workflow_mod
-
-    monkeypatch.setattr(
-        workflow_mod,
-        "build_provider",
-        lambda settings, **kwargs: (_ for _ in ()).throw(AssertionError("sub-agent provider should not be built")),
-    )
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("review this"))
-    kinds = [ev.kind for ev in events]
-    assert provider.run_calls == 1
-    assert provider.integration_messages == []
-    assert "agent_task_started" not in kinds
-    # Clarify turns also emit a single skipped citation_audit event.
-    assert kinds.count("citation_audit") == 1
-    audit = next(ev.data for ev in events if ev.kind == "citation_audit")
-    assert audit.get("skip_reason")
-    assert events[-1].kind == "done"
-    assert events[-1].data["text"] == "Which agreement or clause would you like me to review?"
-
-
-def test_direct_plan_with_accidental_tasks_is_normalized_to_zero(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Simple status",
-          "user_language": "English",
-          "execution_mode": "direct_answer",
-          "direct_response": "Yes, I can export that as a PDF.",
-          "routing_reason": "Simple capability response.",
-          "issue_decomposition": ["unneeded"],
-          "agent_tasks": [
-            {"id": "task_1", "skill_name": "brief", "title": "Unneeded", "task": "Do work.", "depends_on": []}
-          ],
-          "integration_instructions": "",
-          "citation_requirements": ""
-        }
-        """
-    )
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan("can you export pdf?")
-    assert plan.execution_mode == "direct_answer"
-    assert plan.agent_tasks == []
-    assert plan.issue_decomposition == []
-    assert plan.direct_response == "Yes, I can export that as a PDF."
-
-
-def test_router_prompt_gets_chat_context_for_history_followups(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = CapturingPlannerProvider(
-        """
-        {
-          "title": "Export prior findings",
-          "user_language": "English",
-          "execution_mode": "direct_answer",
-          "direct_response": "I will export the prior findings.",
-          "routing_reason": "The request references prior findings.",
-          "issue_decomposition": [],
-          "agent_tasks": [],
-          "integration_instructions": "",
-          "citation_requirements": ""
-        }
-        """
-    )
-    recent = [
-        ChatMessage(id="u", chat_id="c", role="user", content="Analyze passport tearing on board.", created_at=utc_now()),
-        ChatMessage(
-            id="a",
-            chat_id="c",
-            role="assistant",
-            content="Detailed prior findings about passport tearing.",
-            created_at=utc_now(),
-        ),
-    ]
-    WorkflowExecutor(settings=settings, provider=provider).plan(
-        "generate a document with your findings",
-        recent_messages=recent,
-        memory_summary="Prior analysis: passenger tearing a passport onboard.",
-    )
-    assert "Prior analysis: passenger tearing a passport onboard." in provider.prompts[0]
-    assert "Detailed prior findings" in provider.prompts[0]
-
-
-def test_router_failure_greeting_uses_local_direct_fallback(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(exc=RuntimeError("Invalid schema for response_format 'WorkflowPlan'"))
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan("how are you today?")
-    assert plan.execution_mode == "direct_answer"
-    assert plan.agent_tasks == []
-    assert "ready to help" in plan.direct_response
-
-
-def test_router_failure_nonlegal_search_request_uses_single_general_task(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(exc=RuntimeError("planner unavailable"))
-
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan(
-        "Find good noise cancelling headphones under $200 today."
-    )
-
-    assert plan.execution_mode == "agent_workflow"
-    # A failed router falls back to one single-pass task, without a second
-    # planning call.
-    assert provider.run_calls == 1
-    assert [task.skill_name for task in plan.agent_tasks] == [GENERAL_TASK_SKILL]
-    assert plan.agent_tasks[0].depends_on == []
-    assert plan.agent_tasks[0].title == "General answer"
-
-
-def test_stream_general_task_is_single_threaded_and_search_capable(tmp_path, monkeypatch):
+def test_the_author_turn_offers_web_search_and_the_document_tools(tmp_path):
     settings = load_settings(refresh=True).model_copy(
         update={"provider": "openai", "outputs_dir": tmp_path / "out", "enable_web_search": True}
     )
-    plan_json = f"""
-    {{
-      "title": "Headphone search",
-      "user_language": "English",
-      "execution_mode": "agent_workflow",
-      "routing_reason": "Needs current non-legal product research.",
-      "issue_decomposition": ["general search"],
-      "agent_tasks": [
-        {{"id": "task_1", "skill_name": "{GENERAL_TASK_SKILL}", "title": "General answer", "task": "Search for current headphone options under $200.", "depends_on": []}}
-      ],
-      "integration_instructions": "Answer plainly with sources.",
-      "citation_requirements": ""
-    }}
-    """
-    provider = CapturingStreamProvider(plan_json, final_text="Final general answer.")
-
-    import legal_helper.workflow as workflow_mod
-
-    monkeypatch.setattr(workflow_mod, "build_provider", lambda settings: provider)
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("Find headphones under $200 today."))
-    task_lifecycle = [
-        (ev.kind, ev.data.get("task_id") or ev.data.get("id"))
-        for ev in events
-        if ev.kind in {"agent_task_started", "agent_task_finished"}
-    ]
-
-    # Direct-LLM shortcut: a single general-answer plan skips sub-agent
-    # dispatch and the tools-empty integration step entirely. The model gets
-    # the user's verbatim message + tool surface in one call.
-    assert task_lifecycle == []
-    direct_call = provider.stream_calls[-1]
-    tool_names = {
-        (t.get("name") if isinstance(t, dict) else getattr(t, "name", None))
-        or (t.get("type") if isinstance(t, dict) else None)
-        for t in direct_call["tools"]
-    }
-    assert "web_search" in tool_names
-    assert "fetch_url_to_artifact" in tool_names
-    assert "read_document" in tool_names
-    assert "write_pdf" in tool_names
-    assert "write_docx" in tool_names
-    assert "write_xlsx" in tool_names
-    assert "create_deck" in tool_names
-    assert "inspect_pptx" in tool_names
-    assert "render_pptx_slides" in tool_names
-    assert "general-purpose assistant" in direct_call["system"]
-    assert "Find headphones under $200 today." in direct_call["message"]
-    assert events[-1].data["text"] == "Final general answer."
-
-
-def test_final_synthesis_has_document_io_tools(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    plan_json = """
-    {
-      "title": "Document rewrite",
-      "user_language": "English",
-      "execution_mode": "agent_workflow",
-      "routing_reason": "Needs a final authored answer.",
-      "issue_decomposition": ["source support"],
-      "agent_tasks": [
-        {"id": "task_1", "skill_name": "brief", "title": "Source support", "task": "Research the supporting legal points. coverage: source-support", "depends_on": []}
-      ],
-      "integration_instructions": "Answer and create a deliverable if useful.",
-      "citation_requirements": ""
-    }
-    """
-    provider = CapturingStreamProvider(plan_json, final_text="Final answer.")
-    import legal_helper.workflow as workflow_mod
-
-    monkeypatch.setattr(workflow_mod, "build_provider", lambda settings, fast=False: provider)
+    provider = CapturingStreamProvider(final_text="Final answer.")
 
     events = list(WorkflowExecutor(settings=settings, provider=provider).stream("Please create the finished file."))
 
-    final_call = provider.stream_calls[-1]
-    tool_names = {
-        (t.get("name") if isinstance(t, dict) else getattr(t, "name", None))
-        or (t.get("type") if isinstance(t, dict) else None)
-        for t in final_call["tools"]
-    }
+    assert len(provider.stream_calls) == 1
+    call = provider.stream_calls[0]
     assert {
+        "web_search",
+        "fetch_url_to_artifact",
+        "read_document",
         "write_pdf",
         "write_docx",
         "write_xlsx",
@@ -798,15 +186,15 @@ def test_final_synthesis_has_document_io_tools(tmp_path, monkeypatch):
         "inspect_pptx",
         "edit_pptx_text",
         "render_pptx_slides",
-        "read_document",
-        "fetch_url_to_artifact",
-    } <= tool_names
+    } <= _tool_names(call["tools"])
+    assert "Please create the finished file." in json.dumps(call["message"], ensure_ascii=False)
+    assert events[-1].kind == "done"
     assert events[-1].data["text"] == "Final answer."
 
 
 def test_out_of_money_stream_message(tmp_path):
     settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(exc=RuntimeError("insufficient_quota: billing hard limit"))
+    provider = StubProvider(exc=RuntimeError("insufficient_quota: billing hard limit"))
     events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
     assert any(ev.kind == "delta" and ev.data.get("text") == OUT_OF_MONEY_MESSAGE for ev in events)
     assert any(ev.kind == "error" and ev.data.get("message") == OUT_OF_MONEY_MESSAGE for ev in events)
@@ -934,31 +322,6 @@ def test_followup_docx_writer(tmp_path):
     artifact = write_followup_docx(settings, "# Analysis\n\nBody", "Legal Analysis")
     assert artifact["filename"].endswith(".docx")
     assert Path(artifact["path"]).is_file()
-
-
-def test_legacy_document_export_mode_is_demoted_to_agent_workflow(tmp_path):
-    """A planner that still emits `document_export` (cached prompt, stale build,
-    older model) is no longer special-cased — the plan normalizer demotes it
-    to `agent_workflow` so the model decides via the `write_pdf` / `write_docx`
-    tools instead of a keyword router."""
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Export PDF",
-          "user_language": "Chinese",
-          "execution_mode": "document_export",
-          "direct_response": "",
-          "artifact_format": "pdf",
-          "routing_reason": "User wants the previous answer exported as a PDF.",
-          "issue_decomposition": [],
-          "agent_tasks": []
-        }
-        """
-    )
-    executor = WorkflowExecutor(settings=settings, provider=provider)
-    plan = executor.plan("生成pdf")
-    assert plan.execution_mode == "agent_workflow"
 
 
 def test_cancel_chat_runs_endpoint_marks_active_run_cancelled(tmp_path, monkeypatch):
@@ -1089,7 +452,7 @@ def test_default_chat_store_migrates_legacy_db_out_of_outputs(tmp_path):
     assert store.get_chat(chat.id).title == "Legacy"
 
 
-def test_uploads_are_chat_scoped_and_required(tmp_path, monkeypatch):
+def test_uploads_are_chat_scoped(tmp_path, monkeypatch):
     monkeypatch.setenv("LEGAL_HELPER_OUTPUTS_DIR", str(tmp_path / "out"))
     monkeypatch.setenv("LEGAL_HELPER_STATE_DIR", str(tmp_path / "state"))
     load_settings(refresh=True)
@@ -1099,12 +462,6 @@ def test_uploads_are_chat_scoped_and_required(tmp_path, monkeypatch):
     client = TestClient(app)
     chat_a = client.post("/api/chats", json={}).json()
     chat_b = client.post("/api/chats", json={}).json()
-
-    missing_chat = client.post(
-        "/api/upload",
-        files={"file": ("loose.txt", b"loose", "text/plain")},
-    )
-    assert missing_chat.status_code == 400
 
     upload = client.post(
         f"/api/chats/{chat_a['id']}/upload",
@@ -1229,203 +586,210 @@ def test_named_prior_upload_is_inlined_again(tmp_path, monkeypatch):
     assert captured
     assert uploaded_path in captured[-1]
 
-# ---------------------------------------------------------------------------
-# Plan fidelity: coverage-dedup must merge the dropped mandate, not lose it.
-# ---------------------------------------------------------------------------
-
-
-def test_coverage_dedup_rewrites_merge_target_with_dropped_mandate(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Tax treaty analysis",
-          "user_language": "English",
-          "execution_mode": "agent_workflow",
-          "routing_reason": "multi-issue",
-          "issue_decomposition": ["treaty", "filings"],
-          "agent_tasks": [
-            {"id": "task_1", "skill_name": "brief", "title": "Treaty research", "task": "Research the bilateral tax treaty and withholding rules. coverage: tax-treaty, withholding", "depends_on": []},
-            {"id": "task_2", "skill_name": "compliance-check", "title": "Withholding filings", "task": "Check dividend withholding filings with the tax bureau. coverage: withholding, filings", "depends_on": ["task_1"]}
-          ],
-          "integration_instructions": "Integrate.",
-          "citation_requirements": "Use pinpoint citations."
-        }
-        """
-    )
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan(
-        "Analyze the treaty withholding position."
-    )
-    assert [task.id for task in plan.agent_tasks] == ["task_1"]
-    body = plan.agent_tasks[0].task
-    # The dropped task's instructions were appended, with attribution.
-    assert "Check dividend withholding filings with the tax bureau." in body
-    assert "Withholding filings" in body and "task_2" in body
-    # Exactly one coverage line, carrying the union of both tasks' tokens.
-    coverage_lines = [
-        line for line in body.splitlines() if line.lower().startswith("coverage:")
-    ]
-    assert coverage_lines == ["coverage: filings, tax-treaty, withholding"]
-
-
-def test_normalize_plan_breaks_dependency_cycles_but_keeps_downstream_edges(tmp_path):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(
-        """
-        {
-          "title": "Cyclic plan",
-          "user_language": "English",
-          "execution_mode": "agent_workflow",
-          "complexity": "complex",
-          "routing_reason": "multi-issue",
-          "issue_decomposition": ["a", "b", "c"],
-          "agent_tasks": [
-            {"id": "task_1", "skill_name": "brief", "title": "Statute research", "task": "Research the governing statutes. coverage: statutes", "depends_on": ["task_2"]},
-            {"id": "task_2", "skill_name": "compliance-check", "title": "Filing duties", "task": "Identify the filing duties. coverage: filings", "depends_on": ["task_1"]},
-            {"id": "task_3", "skill_name": "legal-risk-assessment", "title": "Exposure ranking", "task": "Rank the exposure using the statute findings. coverage: exposure", "depends_on": ["task_1"]}
-          ],
-          "integration_instructions": "Integrate.",
-          "citation_requirements": "Use pinpoint citations."
-        }
-        """
-    )
-    plan = WorkflowExecutor(settings=settings, provider=provider).plan(
-        "Assess the compliance exposure."
-    )
-    deps_by_id = {task.id: task.depends_on for task in plan.agent_tasks}
-    # Cycle members lose only the intra-cycle edges…
-    assert deps_by_id["task_1"] == []
-    assert deps_by_id["task_2"] == []
-    # …while the merely-downstream task keeps its legitimate dependency.
-    assert deps_by_id["task_3"] == ["task_1"]
-
 
 # ---------------------------------------------------------------------------
-# Fail-soft degradation: one failed specialist must not abort the whole run.
+# run_workflow: validation, parallel specialists, fail-soft degradation.
 # ---------------------------------------------------------------------------
 
 
-class FailTaskTwoSubAgentProvider(PlannerProvider):
+def _task(n: int, method: str, depends_on: list[str] | None = None) -> dict:
+    word = {1: "one", 2: "two", 3: "three", 4: "four"}[n]
+    return {
+        "id": f"task_{n}",
+        "title": word.title(),
+        "method": method,
+        "task": f"Task {word}.",
+        "depends_on": depends_on or [],
+    }
+
+
+def test_validate_tasks_rejects_what_cannot_run():
+    tasks = [_task(1, "brief", ["task_2"]), _task(2, "compliance-check", ["task_1"])]
+    with pytest.raises(WorkflowRejected, match="cycle"):
+        validate_tasks(tasks, max_tasks=3)
+    with pytest.raises(WorkflowRejected, match="At most 3"):
+        validate_tasks([_task(n, "brief") for n in range(1, 5)], max_tasks=3)
+    with pytest.raises(WorkflowRejected, match="unknown method"):
+        validate_tasks([_task(1, "cite-check")], max_tasks=3)
+    with pytest.raises(WorkflowRejected, match="not another task"):
+        validate_tasks([_task(1, "brief", ["task_9"])], max_tasks=3)
+
+    tasks[0]["depends_on"] = []
+    assert [t.depends_on for t in validate_tasks(tasks, max_tasks=3)] == [[], ["task_1"]]
+
+
+class SpecialistProvider:
+    """A specialist's model: answers ``BUNDLE <task>`` unless ``fail`` says otherwise.
+
+    ``fail(task, attempt)`` returns the exception to raise on that attempt, or
+    None. Attempts are counted per task across every provider built.
+    """
+
+    name = "mock"
+    model = "mock-specialist"
     _lock = threading.Lock()
-    attempts: dict[str, int] = {}
 
-    @classmethod
-    def reset(cls) -> None:
-        with cls._lock:
-            cls.attempts = {}
+    def __init__(self, attempts: dict[str, int], fail=None) -> None:
+        self.attempts = attempts
+        self.fail = fail
 
-    def stream(self, system, messages, tools=(), *, max_iterations=None):
-        task = messages[-1]["content"]
+    def stream(self, system, messages, tools=(), *, max_iterations=None, **kwargs):
+        content = messages[-1]["content"]
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False)
+        task = "two" if "Task two." in content else "one"
         with self._lock:
-            self.attempts[task] = self.attempts.get(task, 0) + 1
-        if "Task two." in task:
-            raise RuntimeError("connector exploded")
-        text = f"SUB AGENT OUTPUT: {task}"
+            attempt = self.attempts.get(task, 0)
+            self.attempts[task] = attempt + 1
+        exc = self.fail(task, attempt) if self.fail else None
+        if exc is not None:
+            raise exc
+        text = f"BUNDLE {task.upper()}"
         yield StreamEvent("delta", {"text": text})
         yield StreamEvent("done", {"text": text})
 
 
-_TWO_TASK_PLAN_JSON = """
-{
-  "title": "Parallel workflow",
-  "user_language": "English",
-  "complexity": "complex",
-  "issue_decomposition": ["one", "two"],
-  "agent_tasks": [
-    {"id": "task_1", "skill_name": "brief", "title": "One", "task": "Task one.", "depends_on": []},
-    {"id": "task_2", "skill_name": "compliance-check", "title": "Two", "task": "Task two.", "depends_on": []}
-  ],
-  "integration_instructions": "Integrate.",
-  "citation_requirements": "Use citations."
-}
-"""
-
-
-def test_stream_degrades_to_completed_bundles_when_one_specialist_fails(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = StreamingPlannerProvider(_TWO_TASK_PLAN_JSON, final_text="FINAL ONLY")
-
-    import legal_helper.workflow as workflow_mod
-
-    FailTaskTwoSubAgentProvider.reset()
-    monkeypatch.setattr(workflow_mod, "build_provider", lambda settings: FailTaskTwoSubAgentProvider())
-    monkeypatch.setattr(workflow_mod, "_SPECIALIST_RETRY_BACKOFF_SECONDS", 0.01)
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
-    kinds = [ev.kind for ev in events]
-
-    # Transient-failure retry ran exactly once, then the task degraded.
-    failed_attempts = [n for task, n in FailTaskTwoSubAgentProvider.attempts.items() if "Task two." in task]
-    assert failed_attempts == [2]
-    assert "agent_task_retried" in kinds
-    assert "agent_task_failed" in kinds
-    assert "workflow_degraded" in kinds
-    assert "error" not in kinds
-    # The run still completed on the surviving bundle.
-    assert events[-1].kind == "done"
-    assert events[-1].data["text"] == "FINAL ONLY"
-    integration = provider.integration_messages[-1]
-    assert "SUB AGENT OUTPUT: Task one." in integration
-    # Failed coverage is declared to the integration turn as an open gap, not
-    # silently dropped.
-    assert "Open gaps" in integration
-    assert "the specialist FAILED — connector exploded" in integration
-    assert "bundle:task_2" not in integration
-
-
-def test_stream_errors_out_when_every_specialist_fails(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = StreamingPlannerProvider(_TWO_TASK_PLAN_JSON, final_text="FINAL ONLY")
-
-    import legal_helper.workflow as workflow_mod
-
-    class AlwaysFailingSubAgentProvider(PlannerProvider):
-        def stream(self, system, messages, tools=(), *, max_iterations=None):
-            raise RuntimeError("connector exploded")
-            yield  # pragma: no cover
-
-    monkeypatch.setattr(workflow_mod, "build_provider", lambda settings: AlwaysFailingSubAgentProvider())
-    monkeypatch.setattr(workflow_mod, "_SPECIALIST_RETRY_BACKOFF_SECONDS", 0.01)
-
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
-    errors = [ev for ev in events if ev.kind == "error"]
-    assert errors and "All specialist tasks failed" in errors[-1].data["message"]
-    assert provider.integration_messages == []
-
-
-def test_stream_degrades_after_exhausted_rate_limit_instead_of_aborting(tmp_path, monkeypatch):
-    settings = load_settings(refresh=True).model_copy(
-        update={"provider": "openai", "outputs_dir": tmp_path / "out", "max_concurrent_agents": "auto"}
+def _call_run_workflow(settings, monkeypatch, fail=None):
+    """Call `run_workflow` as the author would, with two specialists."""
+    attempts: dict[str, int] = {}
+    monkeypatch.setattr(
+        providers_mod, "build_provider", lambda *args, **kwargs: SpecialistProvider(attempts, fail)
     )
-    provider = StreamingPlannerProvider(_TWO_TASK_PLAN_JSON, final_text="FINAL ONLY")
+    monkeypatch.setattr(multi_agent_mod, "_RETRY_BACKOFF_SECONDS", 0.01)
+    events: list[tuple[str, dict]] = []
+    previews: list[tuple[str, dict]] = []
+    tokens = (
+        workflow_event_sink_var.set(lambda record: events.append((record["event_type"], record["data"]))),
+        transient_event_sink_var.set(lambda kind, data: previews.append((kind, data))),
+        tool_call_id_var.set("call_wf"),
+    )
+    try:
+        turn = TurnContext(settings=settings, user_message="Answer the question.", user_language="English")
+        with open_turn(turn):
+            result = run_workflow_tool(settings).call(
+                {
+                    "objective": "Answer the question.",
+                    "tasks": [_task(1, "brief"), _task(2, "compliance-check")],
+                }
+            )
+    finally:
+        tool_call_id_var.reset(tokens[2])
+        transient_event_sink_var.reset(tokens[1])
+        workflow_event_sink_var.reset(tokens[0])
+    return result, events, previews, attempts
 
-    import legal_helper.workflow as workflow_mod
 
-    class AlwaysRateLimitedTaskTwoProvider(PlannerProvider):
-        def stream(self, system, messages, tools=(), *, max_iterations=None):
-            task = messages[-1]["content"]
-            if "Task two." in task:
-                raise RuntimeError("Error code: 429 - rate_limit_error: tokens per minute")
-            text = f"SUB AGENT OUTPUT: {task}"
-            yield StreamEvent("delta", {"text": text})
-            yield StreamEvent("done", {"text": text})
+def _workflow_settings(tmp_path, **updates):
+    base = {"outputs_dir": tmp_path / "out", "state_dir": tmp_path / "state"}
+    base.update(updates)
+    return load_settings(refresh=True).model_copy(update=base)
 
-    monkeypatch.setattr(workflow_mod, "build_provider", lambda settings: AlwaysRateLimitedTaskTwoProvider())
 
-    events = list(WorkflowExecutor(settings=settings, provider=provider).stream("test"))
-    kinds = [ev.kind for ev in events]
+def test_run_workflow_returns_the_bundles_and_names_its_call_on_every_event(tmp_path, monkeypatch):
+    result, events, previews, _ = _call_run_workflow(_workflow_settings(tmp_path), monkeypatch)
+
+    assert result.startswith("Workflow finished: 2 of 2 specialists returned research")
+    assert "## bundle task_1" in result and "BUNDLE ONE" in result
+    assert "## bundle task_2" in result and "BUNDLE TWO" in result
+    assert "Open gaps" not in result
+
+    started = [data for kind, data in events if kind == "agent_task_started"]
+    assert sorted(data["task_id"] for data in started) == ["task_1", "task_2"]
+    assert all(data["parent_call_id"] == "call_wf" for data in started)
+    workflow = [data for kind, data in events if kind == "workflow_started"]
+    assert workflow and workflow[0]["parent_call_id"] == "call_wf"
+
+    # Specialist previews are transient: they reach a watching client, never the log.
+    deltas = [data for kind, data in previews if kind == "agent_delta"]
+    assert deltas
+    for data in deltas:
+        assert data["task_id"] in {"task_1", "task_2"}
+        assert data["parent_call_id"] == "call_wf"
+        assert data["phase"] in {"answer", "reasoning", "research"}
+    assert all("tail" in data for data in deltas if data["phase"] == "answer")
+    assert "agent_delta" not in [kind for kind, _ in events]
+
+
+def test_specialists_respect_the_concurrency_cap(tmp_path, monkeypatch):
+    settings = _workflow_settings(tmp_path, max_concurrent_agents=1)
+    _, events, _, _ = _call_run_workflow(settings, monkeypatch)
+    lifecycle = [
+        (kind, data["task_id"])
+        for kind, data in events
+        if kind in {"agent_task_started", "agent_task_finished"}
+    ]
+    assert lifecycle == [
+        ("agent_task_started", "task_1"),
+        ("agent_task_finished", "task_1"),
+        ("agent_task_started", "task_2"),
+        ("agent_task_finished", "task_2"),
+    ]
+
+
+_RATE_LIMIT = "Error code: 429 - rate_limit_error: tokens per minute"
+
+
+def test_a_rate_limit_lowers_concurrency_and_retries_the_task(tmp_path, monkeypatch):
+    settings = _workflow_settings(tmp_path, provider="openai", max_concurrent_agents="auto")
+    result, events, _, attempts = _call_run_workflow(
+        settings,
+        monkeypatch,
+        fail=lambda task, attempt: RuntimeError(_RATE_LIMIT) if task == "two" and attempt == 0 else None,
+    )
+    kinds = [kind for kind, _ in events]
     assert "agent_task_rate_limited" in kinds
-    assert "agent_concurrency_reduced" in kinds
+    assert "workflow_agent_concurrency_reduced" in kinds
+    assert attempts["two"] == 2
+    assert "BUNDLE ONE" in result and "BUNDLE TWO" in result
+
+
+def test_one_failed_specialist_degrades_to_an_open_gap(tmp_path, monkeypatch):
+    result, events, _, attempts = _call_run_workflow(
+        _workflow_settings(tmp_path),
+        monkeypatch,
+        fail=lambda task, attempt: RuntimeError("connector exploded") if task == "two" else None,
+    )
+    kinds = [kind for kind, _ in events]
+
+    # One retry after a transient failure, then the task degrades.
+    assert attempts["two"] == 2
+    assert {"agent_task_retried", "agent_task_failed", "workflow_degraded"} <= set(kinds)
+    assert "BUNDLE ONE" in result
+    assert "## bundle task_2" not in result
+    # Failed coverage is declared to the author as an open gap, not dropped.
+    assert "Open gaps" in result
+    assert "the specialist FAILED — connector exploded" in result
+
+
+def test_every_specialist_failing_returns_only_open_gaps(tmp_path, monkeypatch):
+    result, events, _, _ = _call_run_workflow(
+        _workflow_settings(tmp_path),
+        monkeypatch,
+        fail=lambda task, attempt: RuntimeError("connector exploded"),
+    )
+    assert result.startswith("Workflow finished: 0 of 2 specialists returned research")
+    assert "(no bundle completed)" in result
+    assert result.count("the specialist FAILED") == 2
+    assert "workflow_degraded" not in [kind for kind, _ in events]
+
+
+def test_a_persistent_rate_limit_degrades_instead_of_aborting(tmp_path, monkeypatch):
+    settings = _workflow_settings(tmp_path, provider="openai", max_concurrent_agents="auto")
+    result, events, _, _ = _call_run_workflow(
+        settings,
+        monkeypatch,
+        fail=lambda task, attempt: RuntimeError(_RATE_LIMIT) if task == "two" else None,
+    )
+    kinds = [kind for kind, _ in events]
+    assert "agent_task_rate_limited" in kinds
+    assert "workflow_agent_concurrency_reduced" in kinds
     assert "agent_task_failed" in kinds
-    assert events[-1].kind == "done"
-    assert events[-1].data["text"] == "FINAL ONLY"
-    integration = provider.integration_messages[-1]
-    assert "SUB AGENT OUTPUT: Task one." in integration
-    assert "Open gaps" in integration and "the specialist FAILED" in integration
+    assert "BUNDLE ONE" in result
+    assert "Open gaps" in result and "the specialist FAILED" in result
 
 
 # ---------------------------------------------------------------------------
-# Project context must reach the planner context block and specialists.
+# Project context reaches the digest every request this turn carries.
 # ---------------------------------------------------------------------------
 
 
@@ -1455,7 +819,7 @@ def test_project_context_reaches_specialists_through_the_digest_not_the_system_p
     project = ProjectStore(settings).create_project(
         "Route launch memo", brief="Jurisdiction pin: PRC law first, US comparative."
     )
-    provider = CapturingStreamProvider("{}", final_text="bundle")
+    provider = CapturingStreamProvider(final_text="bundle")
     agent = SkillAgent("brief", provider, settings)
     with active_project(project.id):
         assert "Jurisdiction pin" not in agent._system_prompt()
@@ -1509,14 +873,14 @@ def test_cite_check_runs_despite_zero_extraction_when_signals_present(tmp_path, 
     # Force the zero-extraction path regardless of extractor strength.
     monkeypatch.setattr(workflow_mod, "extract_citations", lambda text: [])
 
-    executor = WorkflowExecutor(settings=settings, provider=PlannerProvider("{}"))
+    executor = WorkflowExecutor(settings=settings, provider=StubProvider())
     final_text = (
         "根据《民法典》第一千零八十七条，离婚时应当妥善处理。\n\n"
         "## 资料来源\n- 《民法典》第一千零八十七条"
     )
     events = list(
         executor._run_cite_check_after_summary(
-            plan=None, final_text=final_text, attachments=None, cancel_event=None
+            turn=TurnContext(settings=settings), final_text=final_text, cancel_event=None
         )
     )
     audit = [ev for ev in events if ev.kind == "citation_audit"][-1]
@@ -1538,104 +902,16 @@ def test_cite_check_still_auto_passes_without_surface_signals(tmp_path, monkeypa
     monkeypatch.setattr(workflow_mod, "SkillAgent", _fail_if_instantiated)
     monkeypatch.setattr(workflow_mod, "extract_citations", lambda text: [])
 
-    executor = WorkflowExecutor(settings=settings, provider=PlannerProvider("{}"))
+    executor = WorkflowExecutor(settings=settings, provider=StubProvider())
     final_text = "The compliance answer is straightforward and needs no authority."
     events = list(
         executor._run_cite_check_after_summary(
-            plan=None, final_text=final_text, attachments=None, cancel_event=None
+            turn=TurnContext(settings=settings), final_text=final_text, cancel_event=None
         )
     )
     audit = [ev for ev in events if ev.kind == "citation_audit"][-1]
     assert audit.data["ok"] is True
     assert audit.data["skip_reason"] == "no citations detected in final answer"
-
-
-# ---------------------------------------------------------------------------
-# Attachment turns: the forced agent_workflow must not erase the legal skill.
-# ---------------------------------------------------------------------------
-
-
-_DIRECT_PLAN_JSON = """
-{
-  "title": "Attached contract question",
-  "user_language": "English",
-  "execution_mode": "direct_answer",
-  "complexity": "simple",
-  "direct_response": "Sure, happy to help.",
-  "routing_reason": "looks conversational",
-  "agent_tasks": []
-}
-"""
-
-
-def _forced_plan_for(tmp_path, message: str, filename: str):
-    """Run the router with an attachment present and return the forced plan."""
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = PlannerProvider(_DIRECT_PLAN_JSON)
-    attachment = tmp_path / filename
-    attachment.write_text("x", encoding="utf-8")
-
-    executor = WorkflowExecutor(settings=settings, provider=provider)
-    plans: list = []
-    for ev in executor.stream(message, attachments=[attachment]):
-        if ev.kind == "workflow_plan":
-            plans.append(ev.data)
-        if ev.kind == "done":
-            break
-    assert plans
-    return plans[-1]
-
-
-def test_attachment_override_keeps_legal_work_on_the_legal_path(tmp_path):
-    """A legal question about an upload must not land on the general branch.
-
-    The override used to set `agent_tasks: []`, which made `_is_general_plan`
-    true downstream — dropping the turn onto the general prompt with no legal
-    connectors, no `legal_source_search`, and cite-check degraded to a text
-    sniff. It fired on 52% of the router's direct_answer decisions.
-    """
-    from legal_helper.workflow import GENERAL_TASK_SKILL, _is_general_plan
-    from legal_helper.chat_models import WorkflowPlan
-
-    plan = WorkflowPlan(**_forced_plan_for(
-        tmp_path,
-        "Review the indemnity clause in this lease and tell me if it is enforceable.",
-        "lease.docx",
-    ))
-    assert plan.execution_mode == "agent_workflow"
-    assert len(plan.agent_tasks) == 1
-    assert plan.agent_tasks[0].skill_name != GENERAL_TASK_SKILL
-    assert not _is_general_plan(plan)
-
-
-def test_attachment_override_keeps_ordinary_files_on_the_general_path(tmp_path):
-    """A non-legal file task still routes to the general skill."""
-    from legal_helper.workflow import GENERAL_TASK_SKILL, _is_general_plan
-    from legal_helper.chat_models import WorkflowPlan
-
-    plan = WorkflowPlan(**_forced_plan_for(
-        tmp_path,
-        "Make a bar chart of the numbers in this spreadsheet.",
-        "sales.xlsx",
-    ))
-    assert plan.execution_mode == "agent_workflow"
-    assert plan.agent_tasks[0].skill_name == GENERAL_TASK_SKILL
-    assert _is_general_plan(plan)
-
-
-def test_router_prompt_names_the_attachment_constraint(tmp_path):
-    """The router is told what it can and cannot see, not left to guess."""
-    settings = load_settings(refresh=True).model_copy(update={"outputs_dir": tmp_path / "out"})
-    provider = CapturingPlannerProvider(_DIRECT_PLAN_JSON)
-    executor = WorkflowExecutor(settings=settings, provider=provider)
-
-    executor.plan("check this", has_attachments=True)
-    assert any("ATTACHMENTS:" in p for p in provider.prompts)
-    assert any("never" in p and "direct_answer" in p for p in provider.prompts)
-
-    provider2 = CapturingPlannerProvider(_DIRECT_PLAN_JSON)
-    WorkflowExecutor(settings=settings, provider=provider2).plan("check this")
-    assert not any("ATTACHMENTS:" in p for p in provider2.prompts)
 
 
 def test_author_and_deck_rows_of_the_role_table_take_effect(tmp_path, monkeypatch):
@@ -1652,7 +928,7 @@ def test_author_and_deck_rows_of_the_role_table_take_effect(tmp_path, monkeypatc
 
     def fake_build_provider(settings_arg, *, fast=False):
         built.append(settings_arg.openai_reasoning_effort)
-        return PlannerProvider("{}")
+        return StubProvider()
 
     import legal_helper.workflow as workflow_mod
 
@@ -1662,7 +938,6 @@ def test_author_and_deck_rows_of_the_role_table_take_effect(tmp_path, monkeypatc
     assert built[-1] == "high"
 
     import legal_helper.agent as agent_mod
-    import legal_helper.providers as providers_mod
     from legal_helper.tools import decks
 
     seen = {}

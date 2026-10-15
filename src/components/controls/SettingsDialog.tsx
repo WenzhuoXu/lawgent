@@ -23,8 +23,8 @@ const THEME_OPTIONS: Array<{ id: ThemeId; label: string }> = [
   { id: "ink", label: "深色 Ink" },
 ];
 
-/** "auto" sizes each answer from the question's complexity; the others pin it.
- * An explicit length request in the message always wins. */
+/** "auto" lets the author size each answer from the request; the others pin
+ * it. An explicit length request in the message always wins. */
 const ANSWER_LENGTHS: Array<{ id: AnswerLength; label: string }> = [
   { id: "auto", label: "自动 / Auto" },
   { id: "brief", label: "简要 / Brief" },

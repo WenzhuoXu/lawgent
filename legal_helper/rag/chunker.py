@@ -68,8 +68,8 @@ def _split_on_boundaries(text: str) -> list[tuple[str | None, str]]:
 
 def _est_tokens(text: str) -> int:
     """CJK-aware token estimate: a CJK char is ~1 token; Latin text ~4
-    chars/token. The old flat ``len // 4`` made Chinese chunks ~4x
-    oversized — the primary corpora are PRC statutes, so this matters."""
+    chars/token. A flat ``len // 4`` makes Chinese chunks ~4x oversized —
+    the primary corpora are PRC statutes, so this matters."""
     cjk = len(_CJK_RE.findall(text))
     return max(1, cjk + (len(text) - cjk) // 4)
 

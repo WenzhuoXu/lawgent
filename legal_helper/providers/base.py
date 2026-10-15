@@ -1,7 +1,7 @@
 """Shared provider protocol + lightweight data shapes.
 
-The orchestrator, skill agents, CLI and server never special-case Claude vs.
-GPT: they go through this protocol.  Each concrete provider returns the same
+The author loop, the specialists, the CLI and the server never special-case
+Claude vs. GPT: they go through this protocol.  Each concrete provider returns the same
 `RunResult` shape and yields the same `StreamEvent` records, so we can swap
 providers per invocation via the `MODEL_PROVIDER` env var.
 """
@@ -15,9 +15,7 @@ from ..config import Settings
 
 #: ``structured_output`` value asking for syntactically valid JSON with no
 #: schema. OpenAI maps it to ``text.format = {"type": "json_object"}`` (the
-#: input must mention JSON); Anthropic ignores it. Plain-JSON plans from luna
-#: ended in a trailing comma or a stray, unterminated key in 3 of ~45 routing
-#: calls, and each one dropped the turn to the heuristic plan.
+#: input must mention JSON); Anthropic sends no format and parses the text.
 JSON_OBJECT = "json_object"
 
 
@@ -43,12 +41,10 @@ class RunResult:
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     hosted_tool_calls: list[ToolCallRecord] = field(default_factory=list)
     structured_payload: Optional[dict[str, Any]] = None
-    artifact_paths: list[str] = field(default_factory=list)
     message_id: Optional[str] = None       # Anthropic
     response_id: Optional[str] = None      # OpenAI
     iterations: int = 0
     stop_reason: Optional[str] = None
-    raw: Optional[dict[str, Any]] = None
 
 
 @dataclass

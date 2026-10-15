@@ -253,16 +253,13 @@ def _apply_data_validation(ws, spec: dict[str, Any]) -> None:
 
 def write_xlsx_workbook(
     path: Path,
-    sheets: list[
-        tuple[str, list[list[Any]]]
-        | dict[str, Any]
-    ],
+    sheets: list[dict[str, Any]],
 ) -> None:
     """Write a workbook from ``sheets``.
 
-    Each entry is either a legacy ``(name, rows)`` tuple or a dict with keys
-    ``name`` / ``rows`` / ``charts`` / ``conditional_formats`` /
-    ``data_validations`` / ``freeze_panes`` / ``number_formats``. Formula
+    Each entry is a dict with keys ``name`` / ``rows`` / ``charts`` /
+    ``conditional_formats`` / ``data_validations`` / ``freeze_panes`` /
+    ``number_formats``. Formula
     strings in ``rows`` are written verbatim; ``recalc_xlsx_workbook`` then
     computes and caches their values. ISO date strings become date cells.
     """
@@ -270,26 +267,18 @@ def write_xlsx_workbook(
     from openpyxl.styles import Alignment, Font, PatternFill
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    safe_sheets = sheets or [("Sheet1", [])]
+    safe_sheets = sheets or [{"name": "Sheet1", "rows": []}]
     wb = Workbook()
     wb.remove(wb.active)
     used_names: set[str] = set()
     for idx, sheet in enumerate(safe_sheets, start=1):
-        if isinstance(sheet, tuple):
-            name, rows = sheet
-            charts: list[dict[str, Any]] = []
-            cond_formats: list[dict[str, Any]] = []
-            validations: list[dict[str, Any]] = []
-            number_formats: list[dict[str, Any]] = []
-            freeze = "A2"
-        else:
-            name = sheet.get("name") or f"Sheet{idx}"
-            rows = sheet.get("rows") or []
-            charts = sheet.get("charts") or []
-            cond_formats = sheet.get("conditional_formats") or []
-            validations = sheet.get("data_validations") or []
-            number_formats = sheet.get("number_formats") or []
-            freeze = sheet.get("freeze_panes", "A2")
+        name = sheet.get("name") or f"Sheet{idx}"
+        rows = sheet.get("rows") or []
+        charts = sheet.get("charts") or []
+        cond_formats = sheet.get("conditional_formats") or []
+        validations = sheet.get("data_validations") or []
+        number_formats = sheet.get("number_formats") or []
+        freeze = sheet.get("freeze_panes", "A2")
 
         title = (name or f"Sheet{idx}")[:31]
         while title in used_names:
