@@ -73,6 +73,8 @@ def test_tool_name_of_handles_both_tool_shapes():
 
 
 def test_concurrent_safe_tools_are_read_only_and_exist():
+    from legal_helper.research.tools import RESEARCH_TOOLS
+    from legal_helper.tools.skill_resources import load_skill, read_skill_file
     from legal_helper.tool_policy import CONCURRENCY_GROUPS, CONCURRENT_SAFE_TOOLS, is_concurrent_safe
     from legal_helper.tools import _external_skill_tools, all_connector_tools, skill_tools
     from legal_helper.tools.project_tools import project_brief_read
@@ -86,6 +88,9 @@ def test_concurrent_safe_tools_are_read_only_and_exist():
             *_document_io_tools(),
             *_external_skill_tools(),
             *all_connector_tools(),
+            *RESEARCH_TOOLS,
+            load_skill,
+            read_skill_file,
             project_brief_read,
         ]
     }
@@ -104,7 +109,6 @@ def test_connectors_and_research_mcp_servers_are_concurrent_safe():
     for tool in all_connector_tools():
         assert is_concurrent_safe(tool_name_of(tool)), tool_name_of(tool)
     assert is_concurrent_safe("pkulaw_fatiao__get_law_item_content")
-    assert is_concurrent_safe("courtlistener_mcp__search")
 
 
 def test_anything_undeclared_runs_serially():

@@ -89,6 +89,8 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "claude-opus-4-7": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-opus-4-6": {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
     "claude-sonnet-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
+    # Sonnet 5.5: Sonnet 5's rates (verified 2026-11-01); the claude_code fast tier.
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "cache_read": 0.20, "cache_write": 2.50},
     "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "cache_read": 0.10, "cache_write": 1.25},
     # Fable/Mythos 5.1 read cache at 0.025x input (not the usual 0.1x).
     "claude-fable-5-1": {"input": 10.00, "output": 50.00, "cache_read": 0.25, "cache_write": 12.50},
@@ -334,6 +336,7 @@ def month_summary(
     }
     by_model: dict[tuple[str, str], dict[str, Any]] = {}
     cost = 0.0
+    subscription = 0.0
     path = _ledger_path(month, state_dir)
     if path.is_file():
         with path.open(encoding="utf-8") as fh:
@@ -358,6 +361,7 @@ def month_summary(
                         "requests": 0,
                         "long_context_requests": 0,
                         "estimated_cost_usd": 0.0,
+                        "subscription_equivalent_usd": 0.0,
                     },
                 )
                 for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
@@ -373,8 +377,15 @@ def month_summary(
                 bucket["long_context_requests"] += n_long
                 totals["long_context_requests"] += n_long
                 rec_cost = _cost_usd(rec, pricing)
-                bucket["estimated_cost_usd"] += rec_cost
-                cost += rec_cost
+                if rec.get("provider") == "claude_code":
+                    # Served on the claude.ai subscription: nothing is billed
+                    # per token; the list-price figure is what it would have
+                    # cost on the API.
+                    bucket["subscription_equivalent_usd"] += rec_cost
+                    subscription += rec_cost
+                else:
+                    bucket["estimated_cost_usd"] += rec_cost
+                    cost += rec_cost
     # Anthropic cache tokens are separate buckets; OpenAI cached tokens are a
     # subset of input.  Summing input+output+anthropic cache buckets gives an
     # honest "tokens processed" figure for both.
@@ -392,12 +403,17 @@ def month_summary(
         "months": list_months(state_dir=state_dir),
         "totals": totals,
         "estimated_cost_usd": round(cost, 4),
+        "subscription_equivalent_usd": round(subscription, 4),
         "by_model": sorted(
             (
-                {**b, "estimated_cost_usd": round(b["estimated_cost_usd"], 4)}
+                {
+                    **b,
+                    "estimated_cost_usd": round(b["estimated_cost_usd"], 4),
+                    "subscription_equivalent_usd": round(b["subscription_equivalent_usd"], 4),
+                }
                 for b in by_model.values()
             ),
-            key=lambda b: -b["estimated_cost_usd"],
+            key=lambda b: -(b["estimated_cost_usd"] + b["subscription_equivalent_usd"]),
         ),
         "note": "Estimated from list prices; ledger resets each calendar month.",
     }

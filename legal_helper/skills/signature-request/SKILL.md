@@ -2,7 +2,7 @@
 name: signature-request
 description: Prepare a multi-party closing / execution package — identify who must sign which document, in what order, with what supporting evidence (board resolutions, KYC, lien releases, insurance certificates, regulator filings). Use for M&A closings, financing closings, JV launches, license executions, and other multi-document signings.
 argument-hint: "<transaction summary and parties>"
-allowed_connectors: [ecfr_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

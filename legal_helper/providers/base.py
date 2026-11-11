@@ -117,6 +117,10 @@ def build_provider(settings: Settings, *, fast: bool = False) -> Provider:
         from .openai_provider import OpenAIProvider
 
         return OpenAIProvider(settings, fast=fast)
+    if settings.provider == "claude_code":
+        from ..claude_code.provider import ClaudeCodeProvider
+
+        return ClaudeCodeProvider(settings, fast=fast)
     from .anthropic_provider import AnthropicProvider
 
     return AnthropicProvider(settings, fast=fast)

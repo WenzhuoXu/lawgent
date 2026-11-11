@@ -206,7 +206,7 @@ def test_installed_execution_runs_lookups_together_and_returns_results_in_order(
     barrier = threading.Barrier(2, timeout=5)
 
     @beta_tool
-    def flk_npc_search(query: str) -> str:
+    def legal_search(query: str) -> str:
         "Search."
         barrier.wait()
         return f"hits:{query}"
@@ -218,14 +218,14 @@ def test_installed_execution_runs_lookups_together_and_returns_results_in_order(
 
     content = [
         SimpleNamespace(type="thinking", thinking=""),
-        _use("tu_1", "flk_npc_search", query="民法典"),
-        _use("tu_2", "flk_npc_search", query="合同编"),
+        _use("tu_1", "legal_search", query="民法典"),
+        _use("tu_2", "legal_search", query="合同编"),
         _use("tu_3", "write_docx", title="memo"),
         _use("tu_4", "no_such_tool"),
     ]
     runner = _ToolRunnerShell(content)
     assert _install_tool_execution(
-        runner, _runnable_tools([flk_npc_search, write_docx]), provider="anthropic", model="m"
+        runner, _runnable_tools([legal_search, write_docx]), provider="anthropic", model="m"
     )
     message = runner._generate_tool_call_response()
     blocks = message["content"]

@@ -1,9 +1,9 @@
-"""Compact dispatcher over aviation-specific connectors.
+"""Compact dispatcher over the aviation pack's regulator sources.
 
-Mirrors ``tools/legal_search.py``: a single ``@beta_tool`` entry point with
-a ``source`` discriminator, so a model that already uses
-``legal_source_search`` can reach the aviation-specific surface without
-learning every individual connector name.
+One ``@beta_tool`` entry point with a ``source`` discriminator (CAAC corpus,
+FAA DRS, EASA, ECAA), so the model reaches the pack's sources without learning
+every connector name. Statutes and cases of any jurisdiction go through the
+research tools (``legal_search`` / ``legal_fetch``) instead.
 """
 
 import json
@@ -13,7 +13,7 @@ from anthropic import beta_tool
 
 from ..connectors.caac_local import caac_local_fetch, caac_local_search
 from ..connectors.easa_safety import easa_ad_fetch, easa_ad_search, easa_ear_index
-from ..connectors.ethiopia import ecaa_fetch, ecaa_index, ethiopia_law_fetch, ethiopia_law_search
+from ..connectors.ethiopia import ecaa_fetch, ecaa_index
 from ..connectors.faa_drs import drs_search
 from ..rag.retrieve import retrieve
 
@@ -32,8 +32,6 @@ def aviation_source_search(
         "easa_ear",
         "ecaa_index",
         "ecaa_fetch",
-        "ethiopia_law",
-        "ethiopia_law_fetch",
     ],
     query: str = "",
     identifier: str = "",
@@ -71,16 +69,17 @@ def aviation_source_search(
             - ``easa_ear``: EASA Easy Access Rules curated index
             - ``ecaa_index``: Ethiopian civil-aviation legal-framework index
               (regulator, Civil Aviation Proclamation 616/2008 + 1179/2020,
+              ECAA re-establishment 273/2002, ECAR, ICAO/Cape Town/BASA layer);
+              read a proclamation with ``legal_fetch(ref="et.negarit:616/2008")``
+            - ``ecaa_fetch``: fetch readable text from an official ECAA page
+              (``ecaa.gov.et``); pass the page path in ``identifier``
+              (default ``sectoral/regulation``)
+            - ``ecaa_index``: Ethiopian civil-aviation legal-framework index
+              (regulator, Civil Aviation Proclamation 616/2008 + 1179/2020,
               ECAA re-establishment 273/2002, ECAR, ICAO/Cape Town/BASA layer)
             - ``ecaa_fetch``: fetch readable text from an official ECAA page
               (``ecaa.gov.et``); pass the page path in ``identifier``
               (default ``sectoral/regulation``)
-            - ``ethiopia_law``: search the curated Ethiopian federal-law
-              catalogue (civil aviation + foundational/commercial); pass the
-              query or a proclamation number
-            - ``ethiopia_law_fetch``: fetch one Ethiopian proclamation body;
-              pass ``616/2008`` / ``1179/2020`` / ``273/2002`` (or any
-              proclamation number) in ``identifier``
         query: Free-text query for the search-style sources.
         identifier: File path, title, or CCAR part for ``caac_local_fetch``.
         category: Optional CAAC category filter: ``laws`` or ``ccar``.
@@ -190,12 +189,6 @@ def aviation_source_search(
     if source == "ecaa_fetch":
         return ecaa_fetch.call(
             {"page": identifier or query or "sectoral/regulation", "max_chars": max_chars}
-        )
-    if source == "ethiopia_law":
-        return ethiopia_law_search.call({"query": query or identifier, "per_page": per_page})
-    if source == "ethiopia_law_fetch":
-        return ethiopia_law_fetch.call(
-            {"proclamation": identifier or query, "max_chars": max_chars}
         )
     return json.dumps(
         {"error": f"Unsupported aviation source: {source}", "query": query}

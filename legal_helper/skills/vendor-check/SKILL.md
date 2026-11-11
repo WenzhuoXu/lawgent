@@ -2,7 +2,7 @@
 name: vendor-check
 description: Run third-party due diligence on a vendor / supplier / counterparty. Verify legal standing, sanctions / denied-party screening, ESG posture, certificate status, insurance, data-security posture, prior findings, and required agreements (MSA, DPA, SOW, etc.). Use when onboarding a new supplier, switching providers, or qualifying a SaaS vendor that will touch regulated data.
 argument-hint: "<vendor name and proposed scope>"
-allowed_connectors: [ecfr_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 
@@ -48,7 +48,7 @@ The diligence table (area · finding · source · status · required action).
 7. **Anti-corruption / ESG** — code of conduct, modern-slavery statement
    where applicable, climate disclosures where applicable.
 8. **Prior findings / litigation** — adverse-media + court / regulator
-   records (use `flk_npc_search`, `courtlistener_search`).
+   records (use `legal_search` with `kind="case"` in the counterparty's jurisdiction).
 9. **Required agreements** — MSA, SOW, DPA, security addendum, audit-rights
    addendum, IP terms, exit-and-transition.
 

@@ -8,11 +8,20 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { client } from "@/api/client";
+import { PlanLimitBars } from "@/components/parts/ClaudeCodeParts";
 import { cn } from "@/lib/utils";
 import type { PersonaId, ThemeId } from "@/hooks/useTheme";
-import type { AnswerLength, ChatSettings, ProviderId, RuntimeOptions, UsageSummary } from "@/types/chat";
+import type {
+  AnswerLength,
+  ChatSettings,
+  ProviderId,
+  RuntimeOptions,
+  PlanUsage,
+  UsageSummary,
+} from "@/types/chat";
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
+  claude_code: "Claude Code（订阅 / subscription）",
   openai: "OpenAI",
   anthropic: "Anthropic",
 };
@@ -280,11 +289,14 @@ function CostCenter({ open }: { open: boolean }) {
         <div className="text-xs text-muted-foreground">{usage.month}</div>
       )}
 
+      {usage.subscription ? <PlanUsageCard plan={usage.subscription} equivalentUsd={usage.subscription_equivalent_usd} /> : null}
+
       <div className="grid grid-cols-3 gap-2">
         <StatTile label="预估费用 / Cost" value={fmtUsd(usage.estimated_cost_usd)} />
         <StatTile label="总 tokens" value={fmtInt(usage.totals.total_tokens)} />
         <StatTile label="请求数 / Requests" value={fmtInt(usage.totals.requests)} />
       </div>
+
 
       {usage.by_model.length > 0 ? (
         <div className="overflow-hidden rounded-lg border">
@@ -306,7 +318,11 @@ function CostCenter({ open }: { open: boolean }) {
                   <td className="px-2.5 py-1.5 text-right tabular-nums">
                     {fmtInt(b.input_tokens + b.output_tokens)}
                   </td>
-                  <td className="px-2.5 py-1.5 text-right tabular-nums">{fmtUsd(b.estimated_cost_usd)}</td>
+                  <td className="px-2.5 py-1.5 text-right tabular-nums">
+                    {b.provider === "claude_code"
+                      ? `订阅 ≈${fmtUsd(b.subscription_equivalent_usd ?? 0)}`
+                      : fmtUsd(b.estimated_cost_usd)}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -317,6 +333,50 @@ function CostCenter({ open }: { open: boolean }) {
       )}
 
       {usage.note ? <p className="text-[10px] text-content-faint">{usage.note}</p> : null}
+    </div>
+  );
+}
+
+/** The claude.ai plan as Claude Code's `/usage` reports it: on a flat-rate
+ * plan these limits, not tokens or dollars, are what the work uses up. */
+function PlanUsageCard({ plan, equivalentUsd }: { plan: PlanUsage; equivalentUsd?: number }) {
+  const extra = plan.extra_usage;
+  return (
+    <div className="flex flex-col gap-2.5 rounded-lg border bg-card px-3 py-2.5">
+      <div className="flex items-baseline gap-2 text-xs">
+        <span className="font-medium text-foreground">Claude 订阅额度 / Plan usage</span>
+        {plan.subscription_type ? (
+          <span className="rounded-full border px-2 text-[11px] capitalize text-muted-foreground">
+            {plan.subscription_type}
+          </span>
+        ) : null}
+        {plan.fetched_at ? (
+          <span className="ml-auto text-[11px] text-content-faint">
+            {new Date(plan.fetched_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} 更新 / updated
+          </span>
+        ) : null}
+      </div>
+      <PlanLimitBars
+        limits={plan.limits.map((l) => ({
+          kind: l.kind,
+          group: l.group,
+          percent: l.percent,
+          resetsAt: l.resets_at,
+          severity: l.severity,
+          isActive: l.is_active,
+        }))}
+      />
+      {extra?.enabled ? (
+        <div className="text-[11px] text-muted-foreground">
+          额外用量 / Extra usage: {extra.used_credits ?? 0}
+          {extra.monthly_limit ? ` / ${extra.monthly_limit}` : ""} {extra.currency ?? ""}
+        </div>
+      ) : null}
+      {equivalentUsd ? (
+        <div className="text-[11px] text-content-faint">
+          本月订阅用量按 API 价格约 / At API prices this month ≈ {fmtUsd(equivalentUsd)}，不计入下方费用 / not in the cost below
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -2,7 +2,7 @@
 name: brief
 description: Generate a contextual legal briefing — daily scan, standalone legal enquiry / topic research, or incident response. Use to start the day with a scan of legal-relevant items (open regulator correspondence, contract milestones, internal counsel queue), to research a specific legal question across internal and authoritative public sources, or to assemble rapid context on a developing situation (regulator inquiry, contract dispute, incident, enforcement action).
 argument-hint: "[daily | topic <query> | incident]"
-allowed_connectors: [ecfr_search, federal_register_search, courtlistener_search, eurlex_search, "pkulaw_*", flk_npc_search, ethiopia_law_search, ethiopia_law_fetch]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

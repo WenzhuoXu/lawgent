@@ -1,4 +1,4 @@
-- **US aviation rules:** `faa_title14_search` for 14 CFR text; `drs_search`
+- **US aviation rules:** `legal_search(jurisdiction="US", source="us.ecfr", filters={"title": 14})` / `legal_fetch(ref="us.ecfr:14/<section>")` for 14 CFR text; `drs_search`
   (FAA documents via the Federal Register) for ADs, ACs and SAFOs — follow a
   hit's `html_url` with `fetch_url_to_artifact`, since drs.faa.gov itself does
   not serve readable pages.

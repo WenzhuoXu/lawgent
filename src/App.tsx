@@ -14,7 +14,7 @@ import { SettingsDialog } from "@/components/controls/SettingsDialog";
 import { client } from "@/api/client";
 import { useChatSessions, useActiveChat } from "@/hooks/useChatSessions";
 import { displayToolName, isSourceRetrievalTool } from "@/lib/toolLabels";
-import type { MessagePart } from "@/lib/foldChunks";
+import { answerText, type MessagePart } from "@/lib/foldChunks";
 import type { AuditData, UsageData } from "@/lib/dataParts";
 import { formatDuration } from "@/lib/utils";
 import { useTheme } from "@/hooks/useTheme";
@@ -22,8 +22,8 @@ import { personaCopy, DISCLAIMER, TASK_CHIPS } from "@/persona/persona";
 import type { ChatSettings, ChatSummary, RuntimeOptions } from "@/types/chat";
 
 const DEFAULT_SETTINGS: ChatSettings = {
-  provider: "openai",
-  model: "gpt-6.1-sol",
+  provider: "claude_code",
+  model: "claude-opus-5-5",
   reasoning_effort: "medium",
   answer_length: "auto",
   enable_web_search: true,
@@ -93,10 +93,15 @@ export default function App() {
   );
 
   const newChat = useCallback(async () => {
+    // A new chat starts from the server's defaults, not from the settings of
+    // the chat viewed last.
+    const fresh = { ...DEFAULT_SETTINGS, ...(runtime?.defaults ?? {}) };
+    settingsRef.current = fresh;
+    setSettings(fresh);
     const id = await sessions.create();
     setChats((c) => [{ id, title: "新对话", created_at: "", updated_at: "" }, ...c.filter((x) => x.id !== id)]);
     setDrawerOpen(false);
-  }, [sessions]);
+  }, [sessions, runtime]);
 
   const busy = chat.status === "streaming" || chat.status === "submitted";
 
@@ -298,12 +303,9 @@ function Inspector({ parts, onClose }: { parts: MessagePart[]; onClose: () => vo
   const auditItems = audit?.items ?? [];
 
   // Parsed prose sources (资料来源 table) — the full citation list for 来源 tab.
-  const answerText = parts
-    .filter((p) => p.type === "text")
-    .map((p) => (p as { text: string }).text)
-    .join("");
+  const answer = answerText(parts);
   const proseSources = (() => {
-    const { sources } = splitSources(answerText);
+    const { sources } = splitSources(answer);
     return sources ? parseSourcesTable(sources) : null;
   })();
 

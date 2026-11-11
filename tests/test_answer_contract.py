@@ -174,5 +174,5 @@ def test_a_pinned_aviation_pack_reaches_the_author_prompt():
 
     settings = load_settings(refresh=True).model_copy(update={"active_domain_packs": ["aviation"]})
     prompt = author_system_prompt(settings)
-    assert "faa_title14_search" in prompt
+    assert "drs_search" in prompt
     assert "`aviation` pack — research sources" in prompt

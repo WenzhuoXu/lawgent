@@ -22,7 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { client } from "@/api/client";
-import type { MessagePart } from "@/lib/foldChunks";
+import { answerText, type MessagePart } from "@/lib/foldChunks";
 import type { AuditData, UsageData } from "@/lib/dataParts";
 
 export function MessageActions({
@@ -42,7 +42,7 @@ export function MessageActions({
   const usage = (parts.find((p) => p.type === "data-usage") as { data: UsageData } | undefined)?.data;
   const durationLabel = formatDuration(usage?.durationMs);
 
-  const text = parts.filter((p) => p.type === "text").map((p) => (p as { text: string }).text).join("");
+  const text = answerText(parts);
 
   // Watermark copy MUST match the confirm dialog's promise so what the user
   // approves is exactly what the exported file carries.

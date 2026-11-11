@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
-from ..connectors import courtlistener_search, ecfr_search, federal_register_search, govinfo_search
 from ..skills import is_external_skill, load_skill_frontmatter
 from ..tool_policy import apply_skill_tool_policy
 from .aviation_search import aviation_source_search
@@ -67,7 +66,6 @@ from .skill_runtime import (
     write_text_file,
 )
 from .format_recipes import list_format_recipes, read_format_recipe
-from .legal_search import legal_source_search
 from .mcp_tools import visible_mcp_function_tools
 from .project_tools import project_brief_read, project_memory_search, project_memory_write
 from .rag_tools import retrieve_legal
@@ -87,7 +85,7 @@ def _skill_allowed_connectors(skill_name: str) -> set[str] | None:
 
     Entries support three forms, each matched by ``_matches_allow_list``:
 
-    - exact connector name (``ecfr_search``)
+    - exact connector name (``caac_local_search``)
     - MCP server name (``pkulaw_law_search``) — admits every tool from that
       server
     - prefix wildcard (``pkulaw_*``) — admits every tool whose namespaced
@@ -133,7 +131,7 @@ def _matches_allow_list(tool_name: str, allow: set[str]) -> bool:
     if tool_name in allow:
         return True
     # Server-name match for namespaced MCP tools (e.g. allow lists
-    # "pkulaw_law_search" → admit "pkulaw_law_search__search_article").
+    # "pkulaw_law_search" → admit "pkulaw_law_search__search_law_articles").
     if "__" in tool_name:
         server = tool_name.split("__", 1)[0]
         if server in allow:
@@ -268,11 +266,13 @@ def skill_tools_for_task(
                 fn for fn in connector_fns
                 if _matches_allow_list(getattr(fn, "name", ""), allowed)
             ]
-        if connector_fns:
-            # Expose both the namespaced connector calls and the
-            # ``legal_source_search`` dispatcher so models can use either.
-            base.extend(connector_fns)
-            base.append(legal_source_search)
+        # Primary law of every jurisdiction comes through the research surface
+        # with any connector access; the pack connectors the allow-list names
+        # stay beside it.
+        from ..research.tools import RESEARCH_TOOLS
+
+        base.extend(RESEARCH_TOOLS)
+        base.extend(connector_fns)
         if "aviation" in packs:
             base.append(aviation_source_search)
         mcp_fns = visible_mcp_function_tools(juris, packs)
@@ -321,8 +321,6 @@ __all__ = [
     "compute_period",
     "copy_xlsx_sheet",
     "create_deck",
-    "courtlistener_search",
-    "ecfr_search",
     "extract_citations_tool",
     "extract_clauses",
     "edit_xlsx_cells",
@@ -331,16 +329,13 @@ __all__ = [
     "edit_docx_text",
     "extract_pdf_tables",
     "diff_xlsx",
-    "federal_register_search",
     "fetch_url_to_artifact",
-    "govinfo_search",
     "ground_answer_tool",
     "inspect_xlsx",
     "inspect_xlsx_range",
     "inspect_pptx",
     "inspect_docx",
     "inspect_pdf",
-    "legal_source_search",
     "list_format_recipes",
     "list_skill_references",
     "merge_pdfs",

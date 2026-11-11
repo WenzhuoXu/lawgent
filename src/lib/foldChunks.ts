@@ -126,3 +126,31 @@ function mergeData(prev: unknown, next: unknown): unknown {
   }
   return next;
 }
+
+/** How many of the turn's text parts are commentary: one `data-commentary`
+ * marker per segment the model wrote before a tool call. */
+export function commentaryCount(parts: MessagePart[]): number {
+  return parts.filter((p) => p.type === "data-commentary").length;
+}
+
+/** For each part, whether it is a commentary text part (one of the first N). */
+export function commentaryFlags(parts: MessagePart[]): boolean[] {
+  let left = commentaryCount(parts);
+  return parts.map((p) => {
+    if (p.type !== "text" || left <= 0) return false;
+    left -= 1;
+    return true;
+  });
+}
+
+/**
+ * The answer: the turn's text after its commentary — what the model wrote
+ * after its last tool call. Commentary is shown in the activity chain.
+ */
+export function answerText(parts: MessagePart[]): string {
+  const flags = commentaryFlags(parts);
+  return parts
+    .filter((p, i) => p.type === "text" && !flags[i])
+    .map((p) => (p as { text: string }).text)
+    .join("");
+}

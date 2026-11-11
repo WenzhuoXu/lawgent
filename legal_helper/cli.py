@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Optional
@@ -121,7 +122,18 @@ def _stream_workflow_turn(
     """
     final_text: Optional[str] = None
     ok = True
-    token = workflow_event_sink_var.set(_workflow_printer(console))
+    printer = _workflow_printer(console)
+    outer = workflow_event_sink_var.get(None)
+
+    def sink(record):
+        # Print to the terminal and pass the event on to whoever set a sink
+        # around this turn (a test, an embedding caller); replacing it
+        # dropped every event they meant to see.
+        printer(record)
+        if outer is not None:
+            outer(record)
+
+    token = workflow_event_sink_var.set(sink)
     try:
         for ev in executor.stream(
             message,
@@ -294,6 +306,17 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             print(f"warning: MCP server {name!r}: command {command!r} does not resolve", flush=True)
     except Exception as exc:  # noqa: BLE001 — a broken .mcp.json must not stop the server
         print(f"warning: could not check MCP commands: {exc}", flush=True)
+    # A legal database that stops answering is otherwise invisible: the model
+    # falls back to web search and nobody is told. Probe every research
+    # source in the background (search, fetch, one provision) and log it;
+    # `python -m legal_helper.research.health` runs the same check by hand.
+    if os.getenv("LEGAL_HELPER_SKIP_SOURCE_HEALTH", "").lower() not in ("1", "true", "yes"):
+        try:
+            from .research.health import run_in_background
+
+            run_in_background(lambda line: print(line, flush=True))
+        except Exception as exc:  # noqa: BLE001 — never block startup
+            print(f"warning: research source health check did not start: {exc}", flush=True)
     uvicorn.run(
         "legal_helper.server:app",
         host=args.host,

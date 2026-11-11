@@ -18,7 +18,7 @@ _marker: contextvars.ContextVar[str] = contextvars.ContextVar("tool_exec_test_ma
 
 
 def test_safe_calls_overlap_and_results_keep_call_order():
-    names = ["inspect_docx", "flk_npc_search", "pkulaw_fatiao__get_law_item_content"]
+    names = ["inspect_docx", "legal_search", "pkulaw_fatiao__get_law_item_content"]
     # Each call waits for all three to be running at once: only a concurrent
     # execution gets past the barrier.
     barrier = threading.Barrier(len(names), timeout=5)

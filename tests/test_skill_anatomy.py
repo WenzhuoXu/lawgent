@@ -174,10 +174,10 @@ def test_litigation_analysis_authority_contract() -> None:
     text = skill_path("litigation-analysis").read_text(encoding="utf-8")
     assert "Authority-verification contract (binding)" in text
     # The already-wired PKULaw case tools are the mandated verification path.
-    for tool in ("search_case", "get_case_list", "anhao_recognition"):
+    for tool in ("search_cases", "search_cases_by_keyword", "recognize_case_numbers"):
         assert tool in text, f"litigation-analysis does not reference {tool}"
     assert "案号" in text
-    assert "courtlistener_search" in text
+    assert "legal_search" in text
 
 
 def test_litigation_analysis_limitation_check() -> None:

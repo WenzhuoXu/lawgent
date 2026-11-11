@@ -252,10 +252,8 @@ def _short_query_arg(arguments: dict[str, Any]) -> str:
 _SOURCE_RETRIEVAL_TOOLS = {
     "web_search", "web_fetch", "web_search_call", "file_search_call",
     "web_search_tool_result", "web_fetch_tool_result", "retrieve_legal",
-    "legal_source_search", "aviation_source_search", "drs_search", "drs_fetch",
-    "easa_ad_search", "easa_ad_fetch", "easa_ear_index", "faa_title14_search",
-    "ecfr_search", "federal_register_search", "govinfo_search",
-    "courtlistener_search", "eurlex_search", "flk_npc_search", "flk_npc_fetch",
+    "legal_search", "legal_fetch", "aviation_source_search", "drs_search", "drs_fetch",
+    "easa_ad_search", "easa_ad_fetch", "easa_ear_index",
     "ccar_search", "ccar_fetch", "caac_local_search", "caac_local_fetch",
 }
 

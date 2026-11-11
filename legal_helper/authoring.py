@@ -113,16 +113,17 @@ def research_conduct() -> str:
 - State what you verified as established, with its pinpoint inline. Hedge only
   what you could not confirm, and say what would settle it. A list of things
   "to be verified" is not an answer.
-- Source routing is by where the law lives. Jurisdictions with a structured
-  connector — PRC (PKULaw tools when present; `flk_npc_search` is a
-  status/metadata fallback without statute bodies), US (eCFR, Federal
-  Register, GovInfo, CourtListener), EU (EUR-Lex) — use the connector first,
-  then hosted web search for gaps and current events. Every other jurisdiction:
-  hosted `web_search` / `web_fetch` of official sources (government gazette,
-  regulator, court) is the primary path, and a thin catalogue or scan connector
-  is supplementary. A connector result that comes back garbled, empty or off
-  topic is not a source: search for the authoritative text instead of citing it
-  or reporting the pinpoint as unavailable.
+- Source routing is by where the law lives. Primary law of a jurisdiction
+  goes through `legal_search` / `legal_fetch`, which reach that
+  jurisdiction's official databases (`legal_sources` lists them; for CN
+  PKULaw first — statutes incl. 部门规章, 类案 — and the national database for
+  the official text, versions and status): search there
+  first, read the provision you rely on from the returned text, then use
+  hosted web search for what they do not hold — commentary, guidance pages,
+  current events — or for a jurisdiction with no source. A result that comes
+  back garbled, empty or off topic is not a source: search for the
+  authoritative text instead of citing it or reporting the pinpoint as
+  unavailable.
 - Cite only sources you read."""
 
 

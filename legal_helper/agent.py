@@ -629,14 +629,15 @@ class SkillAgent:
 _PKULAW_ROUTING = """
 # PKULaw (PRC)
 PKULaw tools are namespaced `<server>__<tool>`; route by need:
-`pkulaw_law_search__search_article` / `pkulaw_fatiao__get_law_item_content`
-for statutes and 第X条 text; `pkulaw_case_search__search_case` /
-`pkulaw_case_list__get_case_list` for 司法案例; `pkulaw_anhao__anhao_recognition`
-to normalise 案号; `pkulaw_law_recognition__law_recognition` to resolve statute
-references in a draft; `pkulaw_citation_validator__adjust_provisions` before
+`pkulaw_law_search__search_law_articles` / `pkulaw_fatiao__get_law_article`
+for statutes and 第X条 text; `pkulaw_case_search__search_cases` /
+`pkulaw_case_list__search_cases_by_keyword` for 司法案例; `pkulaw_anhao__recognize_case_numbers`
+to normalise 案号; `pkulaw_law_recognition__recognize_law_citations` to resolve statute
+references in a draft; `pkulaw_citation_validator__verify_law_citations` before
 emitting a PRC citation chain; `pkulaw_nl_search__ai_pkulaw_search` for broad
-questions across statutes, cases and commentary. `flk_npc_search` is a
-status/metadata fallback only — it does not return statute bodies.
+questions across statutes, cases and commentary. The whole statute, every
+version and its status come from the national database through `legal_search`
+/ `legal_fetch` (jurisdiction CN).
 """
 
 

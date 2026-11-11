@@ -87,15 +87,11 @@ _INSPECTION = ResultBudget(max_tokens=12_000, strategy="truncate", preview="head
 
 _EXACT_BUDGETS: dict[str, ResultBudget] = {
     "read_document": _DOCUMENT_BODY,
+    "legal_fetch": _DOCUMENT_BODY,
+    "legal_search": _SOURCE_LIST,
+    "legal_sources": _INSPECTION,
     "retrieve_legal": _SOURCE_LIST,
-    "legal_source_search": _SOURCE_LIST,
     "aviation_source_search": _SOURCE_LIST,
-    "courtlistener_search": _SOURCE_LIST,
-    "ecfr_search": _SOURCE_LIST,
-    "eurlex_search": _SOURCE_LIST,
-    "federal_register_search": _SOURCE_LIST,
-    "govinfo_search": _SOURCE_LIST,
-    "flk_npc_search": _SOURCE_LIST,
     "extract_pdf_tables": _INSPECTION,
     "inspect_xlsx": _INSPECTION,
     "inspect_xlsx_range": _INSPECTION,

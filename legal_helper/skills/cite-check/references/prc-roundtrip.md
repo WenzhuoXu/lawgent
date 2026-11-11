@@ -18,9 +18,9 @@ cite-check workflow reaches **Phase 2 (Mode-1 verify)**, **Phase 3
 
 ### 案号 (judgment case number, e.g. `(2023)京01民终12345号`)
 
-1. `pkulaw_anhao__anhao_recognition(text)` — normalize the form, get
+1. `pkulaw_anhao__recognize_case_numbers(text)` — normalize the form, get
    canonical 案号 + 法院码 + 案件类型.
-2. `pkulaw_case_list__get_case_list(anhao=…)` — fetch the case record.
+2. `pkulaw_case_list__search_cases_by_keyword(case_number=…)` — fetch the case record.
 3. If PKULaw returns nothing, fall back to the legal `citations/prc.py`
    regex match (structural validity only). There is no free public
    case-law DB, so a missing PKULaw hit is `could_not_check`, *not*
@@ -28,27 +28,30 @@ cite-check workflow reaches **Phase 2 (Mode-1 verify)**, **Phase 3
 
 ### 法律 / 行政法规 statute pinpoint (《X》第N条)
 
-1. `pkulaw_fatiao__get_law_item_content(title="X", item="N")` — fetch
-   exact 条号 + body text.
-2. Fallback: `flk_npc_search(query="X")` confirms the statute exists and
-   returns its current `status` (有效 / 已修改 / 已废止 / 尚未生效); it
-   does not return body text — for 第N条 body call PKULaw.
-3. The flk_npc `status` field is the **good-law** check for Phase 4.
+1. `pkulaw_fatiao__get_law_article(law_title="X", article_number="N")` —
+   exact 条号 + body text (PKULaw is the primary PRC source).
+2. Official text and versions: `legal_search(jurisdiction="CN", query="X",
+   source="cn.flk")` → the national database's record of every version with
+   its `status` (有效 / 已修改 / 已废止 / 尚未生效); `legal_fetch(ref=<the
+   version in force on the operative date>, section="第N条")` returns that 条
+   from the official Word file. Numbering can change between versions (民用航空法
+   2025修订 renumbered its liability articles).
+3. The record's `status` (and `metadata.versions`) is the **good-law** check for Phase 4.
 
 ### 法释〔YYYY〕N号 (SPC judicial interpretation)
 
-1. `pkulaw_law_search__search_article(query="法释〔YYYY〕N号", level="judicial_interpretation")`.
-2. Fallback: `flk_npc_search(query="法释〔YYYY〕N号", level="judicial_interpretation")`.
+1. `pkulaw_law_search__search_law_articles(query_text="法释〔YYYY〕N号")`.
+2. Fallback: `legal_search(jurisdiction="CN", query="法释〔YYYY〕N号", source="cn.flk", filters={"level": "judicial_interpretation"})`, then `legal_fetch`.
 
 ### 国函 / 国办发 / 国发 (State Council issuances)
 
-1. `pkulaw_law_search__search_article(query="国函〔YYYY〕N号")`.
-2. Fallback: `flk_npc_search(query="国函〔YYYY〕N号")`.
+1. `pkulaw_law_search__search_law_articles(query_text="国函〔YYYY〕N号")`.
+2. Fallback: `legal_search(jurisdiction="CN", query="国函〔YYYY〕N号")`.
 
 ### 部令 / 部发 / 部公告 (Ministry orders)
 
-1. `pkulaw_law_search__search_article(query=…)`.
-2. Fallback: `flk_npc_search(query=…, level="rule")`.
+1. `pkulaw_law_search__search_law_articles(query_text=…)`.
+2. Fallback: `legal_search(jurisdiction="CN", query=…, source="cn.pkulaw")` (the national database holds no 部门规章).
 3. Many ministry rules are issued by 国家市场监管总局 (SAMR) / 生态环境部 (MEE) /
    药监局 (NMPA) / 网信办 (CAC) etc. — the ministry's own website is often
    the best primary citation when PKULaw + NPC database both miss.
@@ -59,20 +62,20 @@ After fetching the source text:
 
 1. `quote_roundtrip_tool(quote=<draft quote>, source_text=<fetched text>)` —
    classifies as `exact` / `near` / `not_found` / `could_not_check`.
-2. `pkulaw_citation_validator__adjust_provisions(text)` — PKULaw's own
-   citation-chain validator. Pass a paragraph containing the cite; it
-   returns whether the citation chain is internally consistent and
-   whether each cited 条款 actually exists in the parent law.
+2. `pkulaw_citation_validator__verify_law_citations(user_law=[{law, 条号}], answer_law=[{text}])` —
+   PKULaw's citation validator: exact (法名, 条号) pairs are checked against
+   the text, claimed provisions or summaries return candidate 条文; each item
+   reports its own status under `checks`.
 3. For 司法解释 → 法律 mappings (e.g. 法释 references that point back into
-   一部具体法律的某一条), `pkulaw_doc_link__get_linked_content(text)` returns
-   the resolved linked content and exposes the dangling references.
+   一部具体法律的某一条), `pkulaw_doc_link__add_law_links(message)` links each
+   法规 reference in the text to PKULaw, which exposes the dangling ones.
 
 A paraphrase-as-quote on a 法院认定 / 法院判决 sentence is CRITICAL — the
 sentence-leveled holding gate behind the escalation threshold.
 
 ## Phase 4 — currency / 现行有效 check
 
-- **法律 / 行政法规.** `flk_npc_search` returns a `status` field. Map
+- **法律 / 行政法规.** The `cn.flk` record (`legal_search` / `legal_fetch` metadata) carries `status`. Map
   `已废止` / `已失效` → CRITICAL with issue_type=`out_of_date`. Map
   `已修改` → NUANCED if the cited pinpoint is in the affected revision.
 - **司法解释.** PKULaw `pkulaw_law_search` exposes `effective_date` and

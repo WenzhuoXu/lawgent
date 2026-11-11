@@ -89,33 +89,44 @@ _GROUP_OF: dict[str, str] = {
         ("fetch_url_to_artifact", "view_image", "list_format_recipes", "read_format_recipe", "render_flowchart_image", "run_procedure"),
         "files",
     ),
-    **dict.fromkeys(("legal_source_search", "retrieve_legal"), "legal_research"),
+    **dict.fromkeys(
+        ("legal_sources", "legal_search", "legal_fetch", "retrieve_legal"),
+        "legal_research",
+    ),
     "compute_period": "deadlines",
 }
 _PREFIX_GROUPS: tuple[tuple[str, str], ...] = (
-    ("flk_npc_", "prc_law"),
     ("pkulaw_", "prc_law"),
-    ("courtlistener_", "us_law"),
-    ("ecfr_", "us_law"),
-    ("federal_register_", "us_law"),
-    ("govinfo_", "us_law"),
-    ("edgar_", "us_law"),
-    ("eurlex_", "eu_law"),
 )
 
 GROUP_DESCRIPTIONS: dict[str, str] = {
-    "legal_research": "Legal research: one search across US, EU and PRC official sources, and semantic search of the local legal corpus (statutes, treaties, playbooks, prior memos).",
+    "legal_research": (
+        "Legal research in official databases (legal_sources / legal_search: keyword, full text, "
+        "semantic / legal_fetch: full text by provision, range or in-document search), and semantic "
+        "search of the local legal corpus."
+    ),
     "deadlines": "Deadline and limitation-period calculation (期间计算) on the PRC holiday and 调休 calendar.",
     "word": "Word documents: write, inspect, edit text, restructure, tracked-change redlines, compare, render pages.",
     "pdf": "PDFs: write, inspect, extract tables, render pages, merge, split, rotate.",
     "spreadsheet": "Excel workbooks: write, inspect ranges, guarded cell edits, row/column reshapes, sheet copies, diffs, render.",
     "slides": "Slide decks (made by ppt-master) and existing .pptx files: create, inspect, edit text, reshape, render.",
     "files": "Fetch a URL into a file, view an image closely, format recipes, diagrams as pictures, installed document procedures.",
-    "prc_law": "PRC legal sources: national law database search and statute fetch (and PKULaw when connected).",
-    "us_law": "US legal sources: CourtListener case law, eCFR, Federal Register, GovInfo.",
-    "eu_law": "EU legal sources: EUR-Lex search and document fetch.",
-    "other_law": "Other jurisdictions' legal sources (national law catalogues and texts outside CN/US/EU).",
+    "prc_law": "PKULaw services a specialist holds: 案号 and 法条 recognition, citation-chain validation, linked text.",
 }
+
+
+@lru_cache(maxsize=1)
+def _live_descriptions() -> dict[str, str]:
+    """Descriptions that name what is installed (the research databases)."""
+    try:
+        from .research.registry import coverage_line
+
+        line = coverage_line()
+    except Exception:  # noqa: BLE001 — grouping is advisory
+        line = ""
+    if not line:
+        return {}
+    return {"legal_research": GROUP_DESCRIPTIONS["legal_research"].rstrip(".") + ". Databases: " + line + "."}
 
 
 @lru_cache(maxsize=1)
@@ -178,15 +189,14 @@ def group_for(name: str) -> Optional[str]:
 
 @lru_cache(maxsize=1)
 def _connector_groups() -> dict[str, str]:
-    """Every other registry connector, by its jurisdiction."""
-    by_jurisdiction = {"CN": "prc_law", "US": "us_law", "EU": "eu_law"}
+    """A registry connector no pack gates (none today), under its pack-less group."""
     out: dict[str, str] = {}
     try:
         from .connectors import REGISTRY
 
         for entry in REGISTRY:
-            juris = next((j for j in entry.jurisdiction if j in by_jurisdiction), None)
-            out[entry.name] = by_jurisdiction[juris] if juris else "other_law"
+            if not entry.domain_packs:
+                out[entry.name] = "legal_research"
     except Exception:  # noqa: BLE001
         pass
     return out
@@ -243,7 +253,7 @@ def openai_tools(defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deferred = [d for d in defs if d.get("defer_loading")]
     if not deferred:
         return defs
-    descriptions = {**GROUP_DESCRIPTIONS, **pack_group_descriptions()}
+    descriptions = {**GROUP_DESCRIPTIONS, **_live_descriptions(), **pack_group_descriptions()}
     loaded = [d for d in defs if not d.get("defer_loading")]
     groups: dict[str, list[dict[str, Any]]] = {}
     for d in deferred:
@@ -263,7 +273,7 @@ def openai_tools(defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def on_demand_block() -> str:
     """The author prompt's list of what tool search can find (Codex's source list)."""
-    descriptions = {**GROUP_DESCRIPTIONS, **pack_group_descriptions()}
+    descriptions = {**GROUP_DESCRIPTIONS, **_live_descriptions(), **pack_group_descriptions()}
     lines = "\n".join(f"- {group}: {text}" for group, text in descriptions.items())
     return (
         "# Tools on demand\n"

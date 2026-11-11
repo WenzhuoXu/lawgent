@@ -73,10 +73,11 @@ generic 3-year period:
 
 ## Authority deltas
 
-- PRC aviation case law via `pkulaw_case_search` / `get_case_list`
+- PRC aviation case law via `pkulaw_case_search` / `search_cases_by_keyword`
   (案由: 航空运输人身损害责任纠纷, 航空运输合同纠纷, 融资租赁合同纠纷);
-  US comparative via `courtlistener_search` (MC99 interpretation,
-  Section 1110, Cape Town enforcement).
+  US comparative via `legal_search(jurisdiction="US", kind="case")` (MC99
+  interpretation, Section 1110, Cape Town enforcement); other forums the same
+  way in their jurisdiction.
 - Treaty interpretation questions cite the treaty article first, then
   forum case law on it. A treaty displaces a conflicting statute only
   through its domestic hook (PRC: the 民用航空法 treaty-priority clause,

@@ -118,10 +118,11 @@ Verify every article below via `pkulaw_fatiao` before relying on it.
   A case decided under a repealed provision is a trap — check the
   statute's revision history when the judgment predates the current
   text.
-- Search discipline: `search_case` (semantic) for fact-pattern matches;
-  `get_case_list` (keyword) for title / party / 案由 scans; normalize
-  every 案号 via `anhao_recognition`. US comparative authority through
-  `courtlistener_search`; note it as comparative, never controlling.
+- Search discipline: `search_cases` (semantic) for fact-pattern matches;
+  `search_cases_by_keyword` (keyword) for title / party / 案由 scans; normalize
+  every 案号 via `recognize_case_numbers`. Comparative authority through
+  `legal_search` in that jurisdiction (`kind="case"`); note it as comparative,
+  never controlling.
 
 ## 6. QA pass (procedural rubric)
 

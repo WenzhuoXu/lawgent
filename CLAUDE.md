@@ -85,9 +85,16 @@ Its narration stage needs `ffmpeg`/`ffprobe`, which the host does not have.
 roots only; this package is always searched first. See **External procedural
 skills**.
 
-US sources (CourtListener, eCFR, Federal Register, GovInfo) are served by **direct-API connectors** in `legal_helper/connectors/`, not MCP servers — no install needed beyond `requirements.txt`.
+Legal sources of every jurisdiction (国家法律法规数据库, PKULaw, EUR-Lex, eCFR, Federal Register, GovInfo, CourtListener, …) are adapters of the **research layer** in `legal_helper/research/`, not MCP servers — no install needed beyond `requirements.txt`. See **Legal research layer**.
 
 The PKULaw MCP is **remote HTTP**, no install needed — set `PKULAW_API_TOKEN` in `legal_helper/api_key` (or `.env`).
+It is sent as `Authorization: Bearer …`; the token comes from mcp.pkulaw.com →
+控制台 → 应用管理 → 创建应用. The gateway stopped honouring the old WSO2 `apikey`
+key by 2026-10-27 (401 "Missing Credentials" on every sub-service). Claude Code
+cannot see the key file, so the same entries carry
+`"headersHelper": "python3 scripts/mcp_headers.py"`, which reads it; a
+`${VAR:-default}` in `.mcp.json` expands the same way in the registry as in
+Claude Code.
 
 **stdio MCP commands stay bare in `.mcp.json`.** `registry.resolve_command()`
 resolves them at launch: `python` / `python3` → `sys.executable` (so an in-tree
@@ -97,6 +104,15 @@ hardcode absolute paths in `.mcp.json` — that was the previous bug in reverse.
 `LEGAL_HELPER_MCP_ENV` (default `llm`) names the env to search; an
 unresolvable command produces a named error from `unresolvable_stdio_specs()`
 instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
+Claude Code does not use that resolver: started outside the env (the VS Code
+extension), it found no `npx` and ran `python` as base Anaconda, which has no
+`mcp`. On such a machine, give it local-scope copies of the two stdio entries.
+Local scope takes precedence over the project entries and lives in
+`~/.claude.json`, never in the repo:
+`claude mcp add-json --scope local eurlex '{"command":"<env>/bin/npx","args":["-y","eurlex-mcp-server"],"env":{"PATH":"<env>/bin:/usr/bin:/bin"}}'`,
+and `ccar_aviation` with `<env>/bin/python` plus `PYTHONPATH=<repo>`.
+`claude mcp list` then warns of "conflicting scopes"; for stdio servers that is
+expected.
 
 ## Repo anatomy
 
@@ -104,8 +120,10 @@ instead of a spawned-and-dead child reporting `CONNECTION_CLOSED`.
 - `legal_helper/domains/<pack>/` — domain packs. Each is `pack.yaml` + `playbook.md` + `research_sources.md` (the domain's source routing) + `references/` + `overlays/<skill>.md` (per-skill aviation deltas).
 - `legal_helper/playbook/general_playbook.md` — PRC-first global defaults, inlined for every legal author and specialist.
 - `legal_helper/workflow.py` — the author loop (`WorkflowExecutor.stream`), the author's tool surface and the audit-then-reveal citation check; `multi_agent.py` (the `run_workflow` tool and its specialists), `agent.py` (`SkillAgent`: the specialist and external-procedure runtime), `authoring.py` (the author's system prompt), `answer_contract.py` (the one output contract), `answer_lint.py` (deterministic answer clean-up), `tool_exposure.py` (which tools wait behind tool search), `turn_context.py` (the per-turn state a tool reads: digest, attachments, cancel signal, run record, the turn's settings).
-- `legal_helper/connectors/` — in-process tool functions over httpx / WebFetch. The primary call path for both providers.
-- `legal_helper/mcp/` — external MCP boundary. HTTP servers become plain function tools (`tools/mcp_tools.py`): the nine PKULaw sub-services in `.mcp.json`, and the first-party CourtListener and GovInfo MCPs (`first_party.py`, secondary to the direct connectors). The stdio entries — EUR-Lex and the in-tree `ccar_aviation` server — serve external MCP clients; the harness reaches those sources through its own connectors.
+- `legal_helper/claude_code/` — provider `claude_code`: the turn runs inside Claude Code (Agent SDK) on the claude.ai subscription. See **Claude Code as the engine**.
+- `legal_helper/research/` — the legal research layer: `legal_sources` / `legal_search` / `legal_fetch` over one adapter per database (`research/sources/<code>.py`), the multilingual provision index (`sections.py`), text conversion (`textify.py`), keyword/semantic ranking (`semantic.py`), the fetched-document cache (`store.py`) and the live source probe (`health.py`). See **Legal research layer**.
+- `legal_helper/connectors/` — the aviation pack's regulator tools (CAAC corpus, FAA DRS, EASA, ECAA) and `base.py`, the shared HTTP plumbing (retries, TTL cache) the research sources use too.
+- `legal_helper/mcp/` — external MCP boundary. HTTP servers become plain function tools (`tools/mcp_tools.py`): the nine PKULaw sub-services in `.mcp.json`, for specialists and the citation audit. The stdio entries — EUR-Lex and the in-tree `ccar_aviation` server — serve external MCP clients (a Claude Code session in this repo); the harness reaches those sources through the research layer.
 - `legal_helper/citations/` — eyecite-backed `extract` / `validate`, PRC and EU regex, grounding (`ground_answer`: fetch the cited source, round-trip the quotes), provenance tags, the verification report and log, format conversion, and the failure taxonomy (`trajectory.py`).
 - `legal_helper/documents/` — the deliverable layer. `office.py` (inspect / extract / guarded edit), `redline.py` (w:ins/w:del), `pdf.py`, `graph_layout.py` (CJK text measurement + the Graphviz / d2 render binaries), `diagrams.py` (Mermaid parsed and drawn by Graphviz; mermaid-cli for other types), `quality.py` (deterministic output checks), `contact_sheet.py`, `soffice.py` (headless LibreOffice under a per-call profile), `lineage.py`, `review_fonts.py` + `review_fonts.conf` (GB-font stand-ins for review renders), and `writers/` — the DOCX, PDF and XLSX writers with their shared Markdown front end (`writers/_markdown.py`) and language rules (`writers/_text.py`). Decks are made by `tools/decks.create_deck` (ppt-master), never by an in-tree writer.
 - `legal_helper/rag/` — local bge-m3 embeddings + Qdrant (embedded) + legal-aware hierarchical chunker. The embedder and reranker load per search and are released when it ends (`retrieve.models_held`): kept resident, they held ~6 GiB of GPU memory in an idle server. A reload costs ~5 s per search.
@@ -542,14 +560,13 @@ the lint reports them as `formula_without_cached_value`.
 - **The author decides what it needs** (`workflow.WorkflowExecutor.stream`):
   which method to load, whether to research, whether to delegate, whether to
   ask one clarifying question. Its tools are one surface
-  (`workflow.author_tool_surface`): hosted search, document tools, legal
-  connectors, `retrieve_legal`, `legal_source_search`, `load_skill` /
-  `read_skill_file`, `load_pack` and the loadable packs' source tools,
-  `run_workflow`, project tools. It carries no MCP tool: PKULaw stays off it
-  until its gateway answers again (capability review 2026-10-07, R-6). A skill
-  specialist and the citation audit reach the HTTP MCP tools their
-  `allowed_connectors` admit (`"pkulaw_*"`) through
-  `tools.skill_tools_for_task`.
+  (`workflow.author_tool_surface`): hosted search, document tools, the
+  research tools (`legal_sources` / `legal_search` / `legal_fetch`, PKULaw
+  among their sources), `retrieve_legal`, `load_skill` / `read_skill_file`,
+  `load_pack` and the loadable packs' source tools, `run_workflow`, project
+  tools. It carries no raw MCP tool. A skill specialist and the citation audit
+  also reach the HTTP MCP tools their `allowed_connectors` admit
+  (`"pkulaw_*"`) through `tools.skill_tools_for_task`.
 - **Methods load on demand** (`tools/skill_resources.load_skill`). The system
   prompt lists each in-tree method by name and one line
   (`authoring.methods_block`); `load_skill` returns the SKILL.md body without
@@ -595,7 +612,19 @@ the lint reports them as `formula_without_cached_value`.
   across a whole turn used to sit between tool cards and grow there.
   Reasoning deltas stay transient; `_synthesis_pass` logs one `reasoning`
   event per segment where it ends, which closes the streamed segment live and
-  recreates it on reload. `GET /api/chats/{id}` returns a chat's newest 300
+  recreates it on reload.
+- **Only the text after the turn's last tool call is the answer.** Whatever
+  the model wrote before a tool call ("我会先核对…再制作…") is commentary:
+  `_synthesis_pass` ends the text segment at each tool boundary
+  (`_TOOL_BOUNDARY_EVENTS`: `tool_call`, `tool_progress`,
+  `hosted_tool_progress`) and yields it as a `commentary` event, which the
+  server persists and the UI shows as a chain step with the calls it led to
+  (`lib/foldChunks.answerText`; text parts before the last tool part).
+  `hosted_tool_call` is not a boundary: OpenAI reports a response's searches
+  at `response.completed`, after the text that followed them. Before this,
+  sol's preambles reached the answer verbatim, one per round — the AirHelp
+  answer of 2026-10-16 opened with three. If nothing follows the last call,
+  the last commentary segment is the answer (`answer_from_commentary`). `GET /api/chats/{id}` returns a chat's newest 300
   events (`ChatStore.list_events`), so a turn longer than that — a deck turn
   with ~90 sub-agent calls — reloads without its first steps.
 - **`done` names the model that wrote the answer**; the server stamps the
@@ -650,8 +679,10 @@ the lint reports them as `formula_without_cached_value`.
   wins.
 - **The answer lint is a stream filter** (`answer_lint.py`): it strips `utm_*`,
   collapses repeated search chips within a paragraph, rewrites upload and
-  artifact paths to served routes (or to the bare file name), localises
-  `pinpoint unavailable` in a Chinese answer, rewrites each sources line to
+  artifact paths to served routes (or to the bare file name; a path may hold
+  spaces, since a deck or document is named after its title), localises the
+  English status words and a `## Sources` heading in a Chinese answer (Sonnet
+  writes both), rewrites each sources line to
   `N. [name](url) — status` (the chip or bare URL moves onto the name, "——"
   counts as a separator), counts sources sections and logs an `answer_lint`
   event. It works on whole lines, so a URL is never split, and it never grades
@@ -845,10 +876,101 @@ deliberately have no entry. `profile()` aggregates a run and reports the
 layers separately — a run with procedural failures and zero substantive ones
 is the right-answer-wrong-reason case, and summing them would hide it.
 
+## Claude Code as the engine (provider `claude_code`)
+
+- **Since 2026-11-01 the default provider is `claude_code`** (`config.yaml`).
+  `claude-agent-sdk` runs the `claude` CLI signed in with the user's claude.ai
+  subscription, and Claude Code's own loop answers the turn.
+  `ClaudeCodeExecutor.stream` has `WorkflowExecutor.stream`'s signature; the
+  server picks one by provider. `openai` / `anthropic` still run the author
+  loop on API keys and stay selectable per chat.
+- **Claude Code's tools come first.** WebSearch / WebFetch, Read / Write /
+  Edit / Glob / Grep, Bash, TodoWrite, Agent, Skill, ToolSearch
+  (`runtime.BUILTIN_TOOLS`). The legal tools Claude Code has no equivalent for
+  are an in-process MCP server `legal` (`tools.legal_tool_server`:
+  `author_tool_surface` minus `REPLACED_TOOLS` — `load_skill` /
+  `read_skill_file` → Skill + Read, `run_workflow` → Agent, `create_deck` /
+  `run_procedure` → the `deck-builder` sub-agent or the skill with Bash), named
+  `mcp__legal__<tool>`, result-budgeted and render-locked as on the other path.
+  Every discovered skill (in-tree methods, ppt-master, gongwen) is a skill of
+  a generated plugin `legal` under `state/claude_code/plugin/` (symlinks,
+  refreshed each turn), so `legal:<skill>`; `skills=` lists them, never `"all"`
+  (that admits the CLI's bundled coding skills).
+- **Nothing from the filesystem loads into the session**: `setting_sources=[]`,
+  `strict_mcp_config`, a custom system prompt (`prompt.author_system_prompt`:
+  the author's playbook, contracts and method list, with the tool section
+  rewritten), `permission_mode="dontAsk"` with an explicit allowlist. This
+  repository's CLAUDE.md and the user's own Claude Code setup never reach a
+  legal answer.
+- **The CLI's environment is scrubbed** (`runtime.subprocess_env`): every
+  variable named like a credential is blanked (Bash runs there; the legal
+  tools run in-process and keep them), `ANTHROPIC_API_KEY` is blank so the
+  claude.ai login is used (`claude_code_session.auth` = `subscription`; the UI
+  warns otherwise), and `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` /
+  `CLAUDE_CODE_DISABLE_MCP_TASK_BACKGROUND` are set: by default the Agent tool
+  started specialists in the background, the turn ended at the first result
+  saying "the agents are running", and closing the client killed them.
+- **Each chat resumes its own Claude Code session.** The session id is stored
+  on the answer (`cc_session_id`) and resumed when the previous answer came
+  from `claude_code`; otherwise (first turn, a provider switch, a session that
+  no longer exists → `claude_code_resume_failed`) a fresh session gets the
+  chat digest. The working directory is the chat's deliverables folder: a file
+  at its top level is delivered; scratch work goes under `_work/`.
+- **Sub-agents** (`prompt.agents`): `legal-specialist` (research bundle under
+  the specialist contract, effort of the `specialist` role) and `deck-builder`
+  (ppt-master, effort of the `deck` role, `--dir _work/decks`, copies the
+  .pptx to the top level). Depth is one.
+- **Events** (`executor._Translator`): the same stream as the author loop —
+  text segmented into commentary and answer through `AnswerLinter`, `reasoning`
+  per thinking block, every call as `local_tool_call_started` / `_finished` by
+  `call_id` (prefix stripped), an Agent call's own calls nested by `task_id` /
+  `parent_call_id` with `agent_delta` progress — plus Claude Code's states:
+  `claude_code_session`, `todo_list` (TodoWrite, shown as the plan card, not a
+  tool row), `claude_code_status` (compacting / retrying, transient),
+  `context_compaction` with `reason: claude_code_auto_compact`, `rate_limit`
+  (persisted on change) and `plan_usage`. UI:
+  `components/parts/ClaudeCodeParts.tsx`, the Agent tool in `ProcedureCard`.
+- **On a flat-rate plan the usage that counts is the plan's limits**, not
+  tokens or dollars. They come from the CLI's `get_usage` control request —
+  what `/usage` shows: plan type, each limit window's percent and reset time,
+  extra-usage credits (`runtime.normalize_plan_usage`). The SDK has no public
+  method for it (0.2.176), so it goes through `client._query._send_control_request`;
+  the login token never leaves the CLI. It is read after every turn on the
+  same client (`plan_usage` event; the chat shows a notice only when a limit
+  is not at `normal` severity) and by `/api/usage` (`subscription`, at most
+  `PLAN_USAGE_MAX_AGE_S` old), which the usage panel shows above the
+  API-price figures. The `rate_limit` event's `utilization` came back empty
+  on every turn measured — do not use it as the usage figure.
+- **Usage**: one ledger row per model per turn with provider `claude_code`;
+  `month_summary` keeps them out of `estimated_cost_usd` and reports their
+  list-price value as `subscription_equivalent_usd`. Titles and summaries go
+  through `provider.ClaudeCodeProvider.run` (no tools, not persisted); its
+  `stream` / `tool_runner` raise — nothing else may build a `claude_code`
+  provider for a tool loop.
+- **The SDK is pinned and upgraded by procedure** (`scripts/upgrade_agent_sdk.md`).
+  claude-agent-sdk bundles the CLI that runs every turn — a new CLI every two
+  or three days — so its version is exact in requirements.txt and
+  pyproject.toml. `scripts/agent_sdk_changes.py` prints everything that
+  changed (SDK notes, SDK commits, the whole CLI changelog between the bundled
+  versions; read it all, no keyword filter); the new version is staged with
+  `pip install --target`, checked offline (`tests/test_claude_code_contract.py`)
+  and live at zero quota (`scripts/agent_sdk_check.py`: control requests only,
+  no model call — legal tools, context overhead, compaction threshold, plan
+  usage, login and its expiry), smoke-tested only with the user's consent
+  (plan quota), and switched with a restart. Notes per upgrade:
+  `docs/sdk_upgrades/`. The claude.ai login the CLI uses expires
+  (`loginExpiresAt`; 2026-11-29 on the 11-09 check); after that every
+  `claude_code` turn fails until `claude auth login` is run again.
+- Verified live 2026-11-01 (Opus 5.5, subscription): a cited answer with a
+  Word deliverable rendered and re-rendered to one page, two parallel
+  specialists merged (18 and 26 calls), a resumed follow-up, resume fallback,
+  cancel mid-turn, the plan card and chain in the UI.
+
 ## Provider parity contract
 
 - Both `claude-opus-5-5` and `gpt-6.1-sol` (the primaries, and the only high-effort models offered) must work end-to-end on every change.
-- Fast/lightweight tier: `claude-sonnet-5` and `gpt-6-luna` (there is no `gpt-6.1-luna`). There is no bare `gpt-6` or `gpt-6.1` alias — always name the variant.
+- **The default is `gpt-6.1-sol`** (`provider: openai` in config.yaml, back on 2026-10-27 at the user's request). From 2026-10-16 to 10-27 it was `claude-opus-5-5`: on gpt-6.1-sol, follow-up legal answers ran 7.8–10.5 negations per 1,000 characters and retreated from their own answers when asked "why", with or without the harness prompt; Opus and Sonnet held their answers (replayed 3 runs per arm). "新对话" starts from the server's defaults, not from the chat viewed last. Existing chats keep their model until switched in the picker; a switch mid-chat works, since history travels as the digest.
+- Fast/lightweight tier: `claude-sonnet-5` and `gpt-6-luna` (there is no `gpt-6.1-luna`); on `claude_code`, `claude-sonnet-5-5` (titles and the rolling summary; Claude Code's own internal model calls are its business). There is no bare `gpt-6` or `gpt-6.1` alias — always name the variant.
 - **Per-model OpenAI request capabilities are tables, from live probes** (`openai_provider.OPENAI_REASONING_EFFORTS`, `OPENAI_VERBOSITY_MODELS`, `OPENAI_EXPLICIT_CACHE_MODELS`, 2026-10-07). `gpt-6.1-sol` takes low / medium / high / xhigh / max and rejects `none` / `minimal`; `gpt-6-luna` takes `none` too but not `minimal`. Omitting `reasoning` runs **both** at medium — so omitting it for `none` made every `none` luna call (chat titles among them) reason at medium. `reasoning_effort_for` sends the nearest level the model accepts (`none` → `low` on sol, `none` as-is on luna); for a model missing from the table it omits `none` / `minimal` and sends anything else as given. **Add a new model's row when you add the model.** `text.verbosity` is sent only to models in the verbosity table.
 - **Retired 2026-09-22:** `claude-opus-5`, `claude-opus-4-8`, `claude-opus-4-7`, `claude-haiku-4-5`, and the whole `gpt-5.6` family (terra / sol / luna). **Retired 2026-10-07:** `gpt-6-sol`, superseded by `gpt-6.1-sol` (same $2.00/$10.00; cached input $0.10 against $0.20). The reasons are in `config.RETIRED_MODELS`. They stay priced in `usage.DEFAULT_PRICING` and windowed in `context._WINDOWS` so historical ledger months still replay.
 - **Anthropic thinking is adaptive, never `budget_tokens`.** Every offered Claude model rejects `thinking: {type: "enabled"}` with a 400. `anthropic_provider._thinking_kwargs` maps the shared effort dial onto `thinking: {type: "adaptive", display: "summarized"}` + `output_config.effort`, on `tool_runner` as well as `stream`. `none` maps to `low` effort because Opus 5.5 cannot disable thinking at all. `display` must be set: Opus 5.5 and Sonnet 5 default to `omitted`, which streams empty thinking text.
@@ -871,7 +993,73 @@ is the right-answer-wrong-reason case, and summing them would hide it.
   against live policy first.
 - MCP tools are surfaced as **plain function tools** to both SDKs; never use Anthropic's `mcp_servers` parameter or OpenAI's Responses-API `mcp` field as the only path.
 - Hosted `web_search` / `web_fetch` already at parity; do not touch.
+- **Claude's web citations become inline links.** A cited text block's `citations_delta` events carry the URL; the text deltas carry none of it, so `anthropic_provider._citation_chips` appends `([domain](url))` when the block ends — the chip OpenAI's search answers already carry, which the answer lint collapses and moves onto sources lines. A `web_fetch` citation has no URL and gets no chip.
 - RAG is local (bge-m3 + Qdrant); no provider API in the retrieval hot path.
+
+## Legal research layer
+
+- **Three tools reach every jurisdiction's official databases**
+  (`research/tools.py`): `legal_sources(jurisdiction)` lists the sources,
+  `legal_search(jurisdiction, query, kind, mode, source, filters)` finds
+  documents (`keyword`, `fulltext`, `semantic` — native where the source has
+  it, else its results re-ranked by the local bge reranker), and
+  `legal_fetch(ref, section, query, offset)` reads one: outline, one provision
+  by its own label (第128条, Article 9, s 58, 제3조, Điều 5, [45] for a
+  judgment paragraph), a range ("第128条-第130条"), or the passages matching a
+  query by keyword and/or meaning. A hit's `ref` is `<source>:<native id>`.
+  They replaced the per-source tools (`flk_npc_*`, `eurlex_*`, `ecfr_*`,
+  `federal_register_*`, `govinfo_*`, `courtlistener_*`, `ethiopia_law_*`,
+  `legal_source_search`, `faa_title14_search`) and the first-party
+  CourtListener / GovInfo MCPs on 2026-11-04.
+- **An adapter is a `Source` subclass** in `research/sources/<code>.py`
+  exporting `SOURCES`: `search()` and `fetch()` only; provisions, ranges,
+  in-document search, caching and the tool surface are shared. It declares
+  `jurisdictions`, `kinds`, `modes`, `languages`, `auth_env` (a missing key
+  reports `needs key`, never an empty result), `coverage` (what the model
+  reads in the catalogue) and a `probe`. A failure to look raises
+  `SourceUnavailable` — "nothing found" and "could not look" must never read
+  the same. Modules starting with `_` hold shared helpers.
+- **A module is live only once listed in `registry.ENABLED_MODULES`**, after
+  its live probe passes; `LEGAL_HELPER_RESEARCH_MODULES=a,b` enables more in a
+  test process. A module that fails to import is reported, not fatal.
+- **Every source is probed live at `serve` startup** (`research/health.py`:
+  search, fetch, one provision) and the result logged
+  (`research sources: ok N | not working: …`) and written to
+  `state/legal_docs/health.json`; `python -m legal_helper.research.health
+  [CN EU …]` runs it by hand. Until 2026-11-04 nothing checked a live source:
+  EUR-Lex judgments 404'd from July to October, CourtListener snippets were
+  empty from day one, and the model silently fell back to web pages.
+- **Text keeps its lines** (`textify.py`); PDFs, Word, OFD go through the one
+  reader (`documents.intake.read_any`, OCR for image-only pages; its Markdown
+  bold and `[Header]` lines are stripped so headings start lines). Fetched
+  documents are cached under `state/legal_docs/` (legislation 3 days,
+  judgments 30); bulk indexes (TW, VN, HK, CA, California) under
+  `state/legal_docs/index/<source>/`.
+- **Provisions are found by label first, then by key** (`sections.find_section`):
+  "Article 71-2", "Supplementary Provisions", "المادة 1 مكرر" match as written;
+  "71-2" and "71.2" are one key; a hyphen is read as a range only when the
+  whole label matches nothing. A source whose format carries structure passes
+  `LegalDoc.sections` (with an optional `caption`, shown in the outline).
+  Bare-number headings ("2. Definitions") are cut only when the document sets
+  `metadata["bare_section_numbers"]` (Ethiopia): numbered list items look the
+  same and produced 985 false sections in an Indonesian statute.
+- **The prompt names each jurisdiction's databases** (`registry.coverage_line`):
+  given only codes, Opus decided "Japan, Korea and Taiwan aren't covered" and
+  went to WebFetch.
+- **Coverage decisions (2026-11-04):** no UK case law (the Open Justice
+  Licence bars computational analysis without a licence the user declined to
+  seek; judgments are under it wherever hosted), no Korean DRF key (the
+  keyless law.go.kr source serves), BC Laws off (robots allows only
+  Google/Bing), Victoria search-only and Malaysian legislation absent
+  (robots / signed links), Taiwan and Vietnam court sites unreachable from
+  this host.
+- **Source-specific facts that cost time:** flk's `download/pc` returns a
+  presigned public OBS link (`url`; `urlIn` is intranet). Cellar needs
+  `Accept: application/xhtml+xml, text/html;q=0.9` (judgments exist only as
+  XHTML). Pre-1999 EU regulations are NUMBER/YY ("2027/97" = 31997R2027).
+  eCFR search needs `date=current`. CourtListener's free tier is 5 requests a
+  minute, 50 an hour, 125 a day: its source paces itself and reuses search
+  metadata so a fetch costs one request.
 
 ## Citation rule
 
@@ -879,25 +1067,35 @@ Every answer that states law ends with exactly one `## Sources` (or `## 资料�
 
 ## PRC citation lookup — PKULaw MCP is the primary source
 
-PKULaw exposes nine MCP sub-services (all share `PKULAW_API_TOKEN` via the
-WSO2 `apikey` header). Use them as the **first** stop for PRC legal lookups
-wherever they are on the tool list (skill specialists and the citation audit;
-the author's surface leaves them off until the gateway answers again, see
-**The author decides what it needs**); `flk_npc_search` / `flk_npc_fetch` are
-the free public fallback (search, status and version history only — no
-statute body text).
+PKULaw exposes nine MCP sub-services (all share `PKULAW_API_TOKEN` as an
+`Authorization: Bearer` token; the console token of 2026-11-04 is accepted by
+eight — `assistant/mcp-pkulaw-search` answers 401, most likely an unsubscribed
+service). The research layer reaches four of them as source `cn.pkulaw`
+(article and law semantic search, any 条 or range of 条 by title — 部门规章
+included —, 类案 semantic search, case lists); the whole statute, every
+version and its status come from 国家法律法规数据库 (source `cn.flk`, the
+database's own Word file). Specialists and the citation audit also hold the
+raw sub-services, listed live (`mcp/known_tools.py` is only the fallback).
+**The gateway renames tools without notice**: between 2026-11-05 and 11-09
+every tool and argument changed (`search_article` → `search_law_articles` /
+`search_laws`, `get_law_item_content` → `get_law_article` /
+`get_law_articles_by_range`, `search_case` → `search_cases`, `get_case_list`
+→ `search_cases_by_keyword`, snake_case arguments). An unknown tool now
+raises `SourceUnavailable` naming what the service lists, so the next rename
+shows in the probe and the search result instead of as empty hits.
 
-| Need | PKULaw sub-service → tool | Fallback |
+| Need | Primary | Fallback |
 |---|---|---|
-| Statute by title + 条号 | `pkulaw_fatiao` → `get_law_item_content` | none (flk_npc has no body fetch) |
-| Statute semantic / keyword | `pkulaw_law_search` → `search_article` / `get_article` | `flk_npc_search` |
-| 司法案例 (semantic) | `pkulaw_case_search` → `search_case` | none public |
-| 司法案例 (keyword list) | `pkulaw_case_list` → `get_case_list` | none public |
-| 案号 extract + normalize | `pkulaw_anhao` → `anhao_recognition` | `citations/prc.py` regex |
-| 法条 extract + traceback in a draft | `pkulaw_law_recognition` → `law_recognition` | `citations/prc.py` regex |
-| Citation chain anti-hallucination | `pkulaw_citation_validator` → `adjust_provisions` | manual eyeball |
-| Hyperlink finished prose | `pkulaw_doc_link` → `get_linked_content` | manual |
-| Broad NL legal Q (statutes + cases + 检察文书 + 律所文章 + papers) | `pkulaw_nl_search` → `ai_pkulaw_search` | `flk_npc_search` + hosted web |
+| Statute semantic / keyword | `legal_search` CN — `cn.pkulaw` first (incl. 部门规章), then `cn.flk` | hosted web |
+| A 条's current text | `pkulaw_fatiao` → `get_law_article` (or a `cn.pkulaw` article hit) | `legal_fetch` of `cn.flk` (`section="第N条"`) |
+| Whole national statute, every version, its status (official text) | `legal_fetch` of `cn.flk` | `pkulaw_fatiao` per 条 |
+| 司法案例 (semantic) | `pkulaw_case_search` → `search_cases` | none public |
+| 司法案例 (keyword list) | `pkulaw_case_list` → `search_cases_by_keyword` | none public |
+| 案号 extract + normalize | `pkulaw_anhao` → `recognize_case_numbers` | `citations/prc.py` regex |
+| 法条 extract + traceback in a draft | `pkulaw_law_recognition` → `recognize_law_citations` | `citations/prc.py` regex |
+| Citation chain anti-hallucination | `pkulaw_citation_validator` → `verify_law_citations` | manual eyeball |
+| Hyperlink finished prose | `pkulaw_doc_link` → `add_law_links` | manual |
+| Broad NL legal Q (statutes + cases + 检察文书 + 律所文章 + papers) | `pkulaw_nl_search` → `ai_pkulaw_search` | `legal_search` CN `mode="semantic"` + hosted web |
 
 `legal_helper/citations/prc.py` handles 案号, 法释, 国函, 国办发, 部令, and
 statute pinpoints by regex (still useful for fast, offline extraction).

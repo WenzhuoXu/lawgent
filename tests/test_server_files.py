@@ -55,6 +55,55 @@ def test_working_directories_are_not_registered_as_deliverables(tmp_path, monkey
     assert found == ["汇报.pptx"]
 
 
+def test_a_turn_that_rewrites_a_delivered_file_delivers_it_again(tmp_path, monkeypatch):
+    """A revision written over a delivered workbook had no card on the turn
+    that wrote it; the only card left was on the earlier answer."""
+    import os
+
+    _env(tmp_path, monkeypatch)
+    from legal_helper.chat_store import ChatStore
+    from legal_helper.config import current_settings
+    from legal_helper.server import _chat_generated_inventory, _deliverable_snapshot, _scan_new_artifacts
+
+    store = ChatStore(current_settings())
+    chat = store.create_chat()
+    artifact_dir = tmp_path / "out" / "chat_artifacts" / chat.id
+    artifact_dir.mkdir(parents=True)
+    table, memo = artifact_dir / "对比表.xlsx", artifact_dir / "memo.docx"
+    table.write_bytes(b"v1")
+    memo.write_bytes(b"memo")
+    m1, m2, m3 = (store.add_message(chat.id, "assistant", f"turn {i}").id for i in range(3))
+    first = [
+        a["filename"]
+        for a in _scan_new_artifacts(store, chat.id, set(), artifact_dir, m1, before=_deliverable_snapshot(artifact_dir))
+    ]
+    assert first == ["memo.docx", "对比表.xlsx"]
+
+    before = _deliverable_snapshot(artifact_dir)
+    table.write_bytes(b"v2, longer")
+    os.utime(table, ns=(before[str(table.resolve())][0] + 1_000_000,) * 2)
+    seen = store.existing_artifact_paths(chat.id)
+    second = list(_scan_new_artifacts(store, chat.id, seen, artifact_dir, m2, before=before))
+    assert [(a["filename"], a["message_id"]) for a in second] == [("对比表.xlsx", m2)]
+
+    # A turn that touches nothing and names nothing delivers nothing.
+    before = _deliverable_snapshot(artifact_dir)
+    seen = store.existing_artifact_paths(chat.id)
+    assert list(_scan_new_artifacts(store, chat.id, seen, artifact_dir, m3, before=before, named_in="已完成。")) == []
+
+    # An answer that hands over an earlier file, by name or by path, attaches it.
+    m4, m5 = (store.add_message(chat.id, "assistant", f"turn {i}").id for i in (4, 5))
+    named = list(_scan_new_artifacts(store, chat.id, seen, artifact_dir, m4, before=before, named_in="文件：`memo.docx`"))
+    assert [(a["filename"], a["message_id"]) for a in named] == [("memo.docx", m4)]
+    by_path = list(
+        _scan_new_artifacts(store, chat.id, seen, artifact_dir, m5, before=before, named_in=f"路径是 `{table}`")
+    )
+    assert [a["filename"] for a in by_path] == ["对比表.xlsx"]
+
+    # The model's file inventory names each file once.
+    assert sorted(e["name"] for e in _chat_generated_inventory(store, chat.id)) == ["memo.docx", "对比表.xlsx"]
+
+
 def test_generated_inventory_lists_newest_first_with_lineage(tmp_path, monkeypatch):
     settings = _env(tmp_path, monkeypatch)
     from legal_helper.chat_store import ChatStore

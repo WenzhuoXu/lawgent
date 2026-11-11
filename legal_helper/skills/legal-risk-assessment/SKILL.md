@@ -2,7 +2,7 @@
 name: legal-risk-assessment
 description: Assess and classify legal risks using a severity-by-likelihood framework with escalation criteria. Use when evaluating contract risk, deal exposure, regulatory enforcement risk, litigation exposure, sanctions / export-control risk, data-protection risk, IP risk, employment risk, or whether a matter requires senior counsel or outside legal review.
 argument-hint: "<scenario or matter to assess>"
-allowed_connectors: [ecfr_search, federal_register_search, courtlistener_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

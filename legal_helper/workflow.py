@@ -81,7 +81,6 @@ from .tools.procedures import procedure_tool
 from .tools.fetch_attach import fetch_url_to_artifact
 from .tools.format_recipes import list_format_recipes, read_format_recipe
 from .tools.redline_tools import compare_docx, redline_docx
-from .tools.legal_search import legal_source_search
 from .tools.search import hosted_search_tools_for_provider
 
 
@@ -229,6 +228,14 @@ _EMPTY_ANSWER_NOTICE = (
     "composing one. Any files generated this turn are saved and listed below; "
     "send the message again and I will answer from the material already gathered."
 )
+
+
+#: Provider events that mean the model has moved on to a tool (a function, a
+#: hosted search): text written before one is commentary. A hosted search is
+#: marked by its live progress events; `hosted_tool_call` is no marker, since
+#: OpenAI reports a response's searches only when the response completes,
+#: after the text that followed them.
+_TOOL_BOUNDARY_EVENTS = frozenset({"tool_call", "tool_progress", "hosted_tool_progress"})
 
 
 def _guard_empty_answer(text: str, stage: str) -> str:
@@ -716,15 +723,9 @@ def _skipped_cite_check_payload(reason: str) -> dict[str, Any]:
 
 
 _CITE_CHECK_LOOKUP_TOOLS = {
-    # PRC primary + fallback
-    "flk_npc_search",
-    # US
-    "courtlistener_search",
-    "ecfr_search",
-    "federal_register_search",
-    "govinfo_search",
-    # EU
-    "eurlex_search",
+    # Official databases of every jurisdiction (research layer)
+    "legal_search",
+    "legal_fetch",
     # Hosted web (Claude / GPT both expose as "web_search" / "web_fetch")
     "web_search",
     "web_fetch",
@@ -748,7 +749,7 @@ def _cite_check_progress_from_tool_call(
         return None
     arguments = tool_call_data.get("arguments") or {}
 
-    # Bare-name + namespaced (``pkulaw_law_search__search_article``) lookup
+    # Bare-name + namespaced (``pkulaw_law_search__search_law_articles``) lookup
     # tools both count as a primary-source fetch.
     bare = name.split("__", 1)[0]
     is_lookup = (
@@ -893,6 +894,13 @@ def _citation_surface_signals(text: str) -> list[str]:
     return [name for name, pattern in _CITATION_SURFACE_PATTERNS if pattern.search(text)]
 
 
+def _is_pack_connector(fn: Any) -> bool:
+    from .connectors import REGISTRY
+
+    name = getattr(fn, "name", "")
+    return any(e.name == name and e.domain_packs for e in REGISTRY)
+
+
 def author_tool_surface(settings: Settings, *, legal: bool = True, workflow: bool = True) -> list[Any]:
     """The author's tools — one surface for every turn.
 
@@ -923,13 +931,21 @@ def author_tool_surface(settings: Settings, *, legal: bool = True, workflow: boo
                 ]
             )
         )
-        tools.extend(visible_connector_tools(jurisdictions, packs))
-        tools.append(legal_source_search)
+        # Primary-law research goes through the one research surface (every
+        # jurisdiction, keyword / full-text / semantic search, provision-level
+        # reading); the per-source connectors it wraps stay for skill
+        # specialists' allow-lists. Pack-gated connectors keep their own tools.
+        from .research.tools import RESEARCH_TOOLS
+
+        tools.extend(RESEARCH_TOOLS)
+        tools.extend(
+            fn for fn in visible_connector_tools(jurisdictions, packs) if _is_pack_connector(fn)
+        )
         if "aviation" in packs:
             tools.append(aviation_source_search)
         # The local corpus (ICAO documents and treaties among it) is reached
-        # only through RAG. PKULaw stays off this surface until its gateway
-        # answers again (capability review 2026-10-07, R-6).
+        # through RAG. PKULaw is reached through the research surface
+        # (source cn.pkulaw), not as raw MCP tools.
         tools.append(retrieve_legal)
         tools.extend([load_skill, read_skill_file])
         from .tools.pack_tools import load_pack, loadable_packs, pack_source_tools
@@ -1448,12 +1464,21 @@ class WorkflowExecutor:
         verification pass can run before the reader sees a single citation.
         Tool calls, sources and phase events still stream either way. The text
         passes through the answer lint (whole lines at a time) on its way out.
+
+        Only the text written after the turn's last tool call is the answer.
+        Whatever the model wrote before a tool call ("I'll search for…") is
+        commentary: it ends at that call and leaves as a ``commentary`` event,
+        which the UI shows in the activity chain and a reload replays there.
+        Both providers write such text, and it used to reach the answer
+        verbatim, repeated once per round.
         """
         chunks: list[str] = []
         stripper = _ToolXmlStripper()
-        linter = AnswerLinter(language=answer_contract.language_code(language))
+        lint_language = answer_contract.language_code(language)
+        linter = AnswerLinter(language=lint_language)
         got_delta = False
         thought: list[str] = []
+        commentary: list[str] = []
 
         def emit_text(clean: str) -> Iterator[StreamEvent]:
             if not clean:
@@ -1461,6 +1486,21 @@ class WorkflowExecutor:
             chunks.append(clean)
             if reveal:
                 yield StreamEvent("delta", {"text": clean})
+
+        def close_segment() -> Iterator[StreamEvent]:
+            # A tool call follows the text written so far, so that text was
+            # commentary on the way to the call, not the answer.
+            nonlocal linter
+            tail = stripper.flush()
+            if tail:
+                yield from emit_text(linter.feed(tail))
+            yield from emit_text(linter.flush())
+            text = "".join(chunks).strip()
+            chunks.clear()
+            linter = AnswerLinter(language=lint_language)
+            if text:
+                commentary.append(text)
+                yield StreamEvent("commentary", {"text": text})
 
         def close_thought() -> None:
             # Reasoning deltas are previews and never stored; one `reasoning`
@@ -1487,6 +1527,8 @@ class WorkflowExecutor:
                 yield ev
                 continue
             close_thought()
+            if ev.kind in _TOOL_BOUNDARY_EVENTS and not ev.data.get("task_id"):
+                yield from close_segment()
             if ev.kind == "delta":
                 got_delta = True
                 clean = stripper.feed(ev.data.get("text", ""))
@@ -1507,7 +1549,15 @@ class WorkflowExecutor:
         yield from emit_text(linter.flush())
         if linter.counts.any():
             log_workflow_event("answer_lint", {"stage": stage, **linter.counts.as_dict()})
-        return _guard_empty_answer("".join(chunks), stage)
+        answer = "".join(chunks)
+        if not answer.strip() and commentary:
+            # The model put its answer before a last tool call and wrote
+            # nothing after it: that segment is the answer after all.
+            answer = commentary[-1]
+            log_workflow_event("answer_from_commentary", {"stage": stage})
+            if reveal:
+                yield StreamEvent("delta", {"text": answer})
+        return _guard_empty_answer(answer, stage)
 
     def _audit_pass(
         self,

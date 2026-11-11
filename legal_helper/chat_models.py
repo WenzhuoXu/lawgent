@@ -13,7 +13,7 @@ def utc_now() -> str:
 
 
 class ChatSettings(BaseModel):
-    provider: Literal["anthropic", "openai"]
+    provider: Literal["anthropic", "openai", "claude_code"]
     model: str
     reasoning_effort: str = "medium"
     # "auto" lets the author size each answer; a chat can pin one.

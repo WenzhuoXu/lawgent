@@ -2,7 +2,7 @@
 name: review-contract
 description: Review a commercial contract against a configurable playbook — flag deviations, generate redlines, and provide business-impact analysis. Covers M&A, services / SOW, license / IP, employment, distribution, supply, JV, settlement, and other commercial agreements. Use for clause-by-clause analysis against standard positions, prioritized redlines, and fallback positions.
 argument-hint: "<contract file or text>"
-allowed_connectors: [ecfr_search, courtlistener_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

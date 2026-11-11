@@ -1,27 +1,24 @@
-"""EU law via EUR-Lex.
+"""EUR-Lex citation resolution and Cellar SPARQL title search.
 
-Search goes through the Publications Office Cellar SPARQL endpoint at
-``https://publications.europa.eu/webapi/rdf/sparql`` and bodies through Cellar
-content negotiation; both are open and unauthenticated.
+Helpers for ``eu.py`` (moved from the retired ``connectors/eu.py``): CELEX
+extraction from citations ("Regulation (EC) No 2027/97", "C-436/21",
+consolidated "02004R0261-20050217"), SPARQL lookups by CELEX and title.
+A module whose name starts with ``_`` is never loaded as a source.
 """
 
-import json
+from __future__ import annotations
+
 import re
 from typing import Any, Optional
 
-import httpx
-from anthropic import beta_tool
-
-from ._body_fetch import fetch_body_text
-
-from .base import SEARCH_TTL, http_get, truncate
+from ...connectors.base import SEARCH_TTL, http_get, truncate
 
 
 _SPARQL_ENDPOINT = "https://publications.europa.eu/webapi/rdf/sparql"
 
 # CELEX expressions like 32016R0679, 32001L0051, 62019CJ0311.
 # Sector digit (1-9), 4-digit year, document-type letter(s), 3-5 digit number.
-_CELEX_RE = re.compile(r"\b([1-9]\d{3,4}[A-Z]{1,2}\d{3,5})\b")
+_CELEX_RE = re.compile(r"\b([0-9]\d{4}[A-Z]{1,2}\d{3,5}(?:-\d{8})?)\b")
 
 # Legislation: "Regulation (EU) 2016/679" / "Regulation (EC) No 1907/2006" /
 # "Regulation 261/2004" / "Directive 2004/82/EC" / "Decision 2008/615/JHA".
@@ -56,17 +53,30 @@ def _expand_year(raw: str) -> int:
     return y
 
 
-def _decode_legis(a: str, b: str) -> Optional[tuple[int, int]]:
-    """Decode a 'X/Y' legislative reference. Returns (year, number) or None.
+def _decode_legis(a: str, b: str, kind: str = "R") -> Optional[tuple[int, int]]:
+    """Decode an 'X/Y' legislative reference into (year, number), or None.
 
-    Pre-2015 style is ``NUMBER/YEAR`` (e.g. 261/2004); post-2015 is
-    ``YEAR/NUMBER`` (e.g. 2016/679). The year-looking number wins.
+    EU numbering until 2014: regulations are NUMBER/YEAR (261/2004, and with a
+    two-digit year before 1999: 2027/97, 95/93); directives and decisions are
+    YEAR/NUMBER (2004/38/EC, 95/46/EC). Since 2015 everything is YEAR/NUMBER
+    (2016/679). A two-digit component is always a year in its slot — reading
+    "2027/97" as year 2027 produced a CELEX that does not exist.
     """
     ai, bi = int(a), int(b)
-    if 1900 <= bi <= 2099 and 1 <= ai <= 99999:
-        return bi, ai
+    if kind == "R":
+        if len(b) == 2:
+            return _expand_year(b), ai
+        if 1900 <= bi <= 2099 and 1 <= ai <= 99999:
+            return bi, ai
+        if 1900 <= ai <= 2099 and 1 <= bi <= 99999:
+            return ai, bi
+        return None
+    if len(a) == 2:
+        return _expand_year(a), bi
     if 1900 <= ai <= 2099 and 1 <= bi <= 99999:
         return ai, bi
+    if 1900 <= bi <= 2099 and 1 <= ai <= 99999:
+        return bi, ai
     return None
 
 
@@ -84,15 +94,15 @@ def _candidate_celex_ids(query: str) -> list[str]:
         out.append(f"{sector}{year:04d}{letter}{number:04d}")
 
     for a, b in _REG_RE.findall(query):
-        decoded = _decode_legis(a, b)
+        decoded = _decode_legis(a, b, "R")
         if decoded:
             _push("3", "R", *decoded)
     for a, b in _DIR_RE.findall(query):
-        decoded = _decode_legis(a, b)
+        decoded = _decode_legis(a, b, "L")
         if decoded:
             _push("3", "L", *decoded)
     for a, b in _DEC_RE.findall(query):
-        decoded = _decode_legis(a, b)
+        decoded = _decode_legis(a, b, "D")
         if decoded:
             _push("3", "D", *decoded)
 
@@ -225,111 +235,3 @@ SELECT DISTINCT ?celex ?title ?date ?eli WHERE {{
 """
     data = _sparql_query(sparql)
     return _format_results(data.get("results", {}).get("bindings", []), per_page)
-
-
-@beta_tool
-def eurlex_search(
-    query: str,
-    document_type: Optional[str] = None,
-    per_page: int = 8,
-) -> str:
-    """Search EUR-Lex: returns CELEX, title, ELI and URL (no body text —
-    ``eurlex_fetch(celex)`` reads a hit). Pass one citation per call, not a
-    sentence: CELEX (``32016R0679``), ``Regulation (EU) 2016/679``,
-    ``Directive 2004/82/EC``, ``C-402/07``, ``T-201/04``, or a short title
-    phrase; extra words push it into the slower title search.
-
-    Args:
-        query: Citation, CELEX, or short title phrase.
-        document_type: Optional EUR-Lex document type filter — ``REG``,
-            ``DIR``, ``DEC``. Omit to search all.
-        per_page: Results per page (1-20).
-    """
-    per_page = max(1, min(int(per_page), 20))
-    results: list[dict[str, Any]] = []
-    errors: list[str] = []
-
-    candidates = _candidate_celex_ids(query)
-    if candidates:
-        try:
-            results = _search_by_celex(candidates, per_page)
-        except httpx.HTTPError as e:
-            errors.append(f"CELEX lookup failed: {e!s}")
-
-    if not results:
-        try:
-            results = _search_by_title(query, document_type, per_page)
-        except httpx.HTTPError as e:
-            errors.append(f"title search failed: {e!s}")
-
-    if not results and errors:
-        return json.dumps(
-            {
-                "error": "; ".join(errors),
-                "source": "EUR-Lex",
-                "query": query,
-            },
-            ensure_ascii=False,
-        )
-
-    return json.dumps(
-        {
-            "source": "EUR-Lex",
-            "query": query,
-            "document_type_filter": document_type or "all",
-            "candidate_celex": candidates,
-            "count": len(results),
-            "results": results,
-        },
-        ensure_ascii=False,
-    )
-
-
-# A CELEX argument to eurlex_fetch, optionally prefixed "CELEX:".
-_CELEX_ARG_RE = re.compile(r"^\s*(?:CELEX[:_]?)?(\d{1}\d{4}[A-Z]{1,2}\d{4})\b", re.IGNORECASE)
-
-
-@beta_tool
-def eurlex_fetch(celex: str, language: str = "eng", max_chars: int = 16000) -> str:
-    """Return the verbatim body of one EU legal act by CELEX id.
-
-    Calls the Cellar content-negotiation endpoint with ``Accept: text/html``
-    and extracts plain text. Use ``language="eng"`` (default), ``"fra"``,
-    ``"deu"`` etc. for the authentic language version you want.
-
-    Args:
-        celex: CELEX id (e.g. ``32004R0261`` for Reg (EC) 261/2004) — the
-            ``celex`` field from an ``eurlex_search`` result.
-        language: ISO-639-2/B three-letter language code (default ``eng``).
-        max_chars: Maximum body characters returned (default 16000).
-    """
-    m = _CELEX_ARG_RE.match(celex or "")
-    if not m:
-        return json.dumps(
-            {"error": f"celex must look like e.g. 32004R0261; got {celex!r}"},
-            ensure_ascii=False,
-        )
-    celex_id = m.group(1).upper()
-    url = f"https://publications.europa.eu/resource/celex/{celex_id}"
-    result = fetch_body_text(
-        url,
-        max_chars=max_chars,
-        accept="text/html",
-        headers={"Accept-Language": language},
-        timeout=httpx.Timeout(60.0, connect=10.0),
-    )
-    out = {
-        "source": "EUR-Lex Cellar",
-        "celex": celex_id,
-        "language": language,
-        "body_text": result.get("body_text") or "",
-        "body_extractor": result.get("extractor"),
-        "body_truncated": result.get("truncated"),
-        "body_source_url": result.get("url"),
-        "url": f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{celex_id}",
-    }
-    if result.get("error"):
-        out["error"] = result["error"]
-    if result.get("note"):
-        out["note"] = result["note"]
-    return json.dumps(out, ensure_ascii=False)

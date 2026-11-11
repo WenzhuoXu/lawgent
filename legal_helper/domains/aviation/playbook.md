@@ -17,19 +17,19 @@ aviation-specific ones behind a single ``source`` discriminator.
 
 | Jurisdiction | Connector | What it returns | Primary use |
 |---|---|---|---|
-| US | `faa_title14_search` | 14 CFR sections via eCFR | Airline operating rules (Part 121), passenger rights (Part 250, 259, 382), drone (Part 107), etc. |
+| US | `legal_search(jurisdiction="US", source="us.ecfr", filters={"title": 14})` + `legal_fetch` | 14 CFR sections via eCFR (current text, by §) | Airline operating rules (Part 121), passenger rights (Part 250, 259, 382), drone (Part 107), etc. |
 | US | `drs_search` | FAA DRS — ADs, ACs, policy, SAFOs (Federal Register-backed) | Airworthiness Directive lookup, AC pinpoints. Each hit carries the FR `html_url` (read it with `fetch_url_to_artifact`; drs.faa.gov serves no readable pages) and a DRS browse link. |
-| US | `federal_register_search` | All FAA rulemaking notices | NPRMs, final rules, enforcement orders. |
-| US | `govinfo_search` | US Code, historic CFR, Public Laws | Statutory backstop (49 USC §§ 40101-46507, §§ 80101-80504). |
-| US | `courtlistener_search` | US case law | Aviation cases, MC99/Warsaw preemption, Cape Town § 1110 priority. |
+| US | `legal_search(jurisdiction="US", source="us.federal_register")` | All FAA rulemaking notices | NPRMs, final rules, enforcement orders. |
+| US | `legal_search(jurisdiction="US", source="us.govinfo")` | US Code, historic CFR, Public Laws | Statutory backstop (49 USC §§ 40101-46507, §§ 80101-80504). |
+| US | `legal_search(jurisdiction="US", kind="case")` | US case law (keyword or semantic) | Aviation cases, MC99/Warsaw preemption, Cape Town § 1110 priority. |
 | EU | `easa_ad_search` / `easa_ad_fetch` | EASA SP Tool — AD/EAD/SIB/SD | EU airworthiness directives. |
 | EU | `easa_ear_index` | Curated index of Easy Access Rules XML | Part-CAT, Part-M/CAMO/145, Part-FCL, Part-21, SERA. |
-| EU | `eurlex_search` | EU regulations / directives / CJEU | Reg (EC) 261/2004 (denied boarding), Reg 1107/2006 (PRM), 2027/97 (MC99), Reg 376/2014 (occurrence reporting). |
+| EU | `legal_search(jurisdiction="EU")` + `legal_fetch` | EU regulations / directives / CJEU, by article; reports amendments and consolidated versions | Reg (EC) 261/2004 (denied boarding), Reg 1107/2006 (PRM), 2027/97 (MC99), Reg 376/2014 (occurrence reporting). |
 | ET | `aviation_source_search(source="ecaa_index")` | Curated Ethiopian civil-aviation legal-framework index | First stop for ET route / operator work: regulator, Civil Aviation Proclamation 616/2008 + 1179/2020, ECAA re-establishment 273/2002, ECAR, ICAO/Cape Town/BASA layer. |
-| ET | `aviation_source_search(source="ethiopia_law_fetch", identifier="616/2008")` | Federal Negarit Gazeta proclamation body (typed transcript or bilingual PDF scan) | Civil Aviation Proclamation 616/2008, amendment 1179/2020, ECAA 273/2002, or any proclamation by number. |
+| ET | `legal_fetch(ref="et.negarit:616/2008", section="Article N")` (or `query=`) | Federal Negarit Gazeta proclamation body (typed transcript, or the gazette scan read by OCR), by article | Civil Aviation Proclamation 616/2008, amendment 1179/2020, ECAA 273/2002, or any proclamation by number. |
 | ET | `aviation_source_search(source="ecaa_fetch", identifier="sectoral/regulation")` | Readable text + document links from `ecaa.gov.et` | ECAA directorate / ECAR / directive pages; follow document_links via `fetch_url_to_artifact`. See `read_document("legal_helper/domains/aviation/references/ethiopia.md")`. |
 | PRC | `aviation_source_search(source="caac_local" / "caac_local_fetch" / "caac_hybrid")` | Local CAAC 法律法规 + 民航规章 / CCAR corpus staged from caac.gov.cn | First stop for CAAC docs: exact title, CCAR part, validity, article, source URL. Use `caac_hybrid` when semantic expansion is useful. |
-| PRC | PKULaw MCP sub-services | CCAR statutes, 司法案例, 案号 normalisation | Primary for PRC statutes; flk_npc as fallback. |
+| PRC | `legal_search(jurisdiction="CN")` + `legal_fetch` | 国家法律法规数据库 official text (法律/行政法规/地方性法规/司法解释) and PKULaw (部门规章, 类案) | Primary for PRC statutes and cases. |
 | All | `retrieve_legal` against ``aviation_treaties`` / ``caac_ccar`` RAG | Treaties; CAAC/CCAR semantic retrieval | Treaty pinpoints and broad CAAC issue search. |
 | All | `retrieve_legal` against ``icao_doc`` RAG | ICAO Annexes 1–19, Doc 9082/9284/9303/9957 | SARPs and implementation guidance. |
 
@@ -106,12 +106,12 @@ connector hits.
      `explicit_expired` or `superseded` unless the question is about
      historical/superseded law. When the primary match is `pdf_stub` and
      no full-text alternate is offered, fall through to
-     `pkulaw_fatiao__get_law_item_content` or fetch the source-page PDF —
+     `pkulaw_fatiao__get_law_article` or fetch the source-page PDF —
      do not cite a CCAR article whose body you have not seen. PKULaw
-     remains primary for non-aviation PRC statutes and cases; flk_npc is
-     the public fallback.
-   - US: `faa_title14_search`, `drs_search` (ADs/ACs), `federal_register_search`.
-   - EU: `easa_ear_index` + `easa_ad_search` + `eurlex_search` for EU regs.
+     remains primary for non-aviation PRC cases; `legal_search` /
+     `legal_fetch` (CN) read the official statute text.
+   - US: `legal_search` (US; `us.ecfr` with title 14), `drs_search` (ADs/ACs).
+   - EU: `easa_ear_index` + `easa_ad_search` + `legal_search` (EU) for EU regs.
 4. **Operator-manual / contract layer**: only via `read_document` on
    user-supplied attachments — never invent a manual provision.
 5. **Web search** as last resort, scoped to authoritative domains

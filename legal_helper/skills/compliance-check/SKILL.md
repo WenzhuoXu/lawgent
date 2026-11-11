@@ -2,7 +2,7 @@
 name: compliance-check
 description: Run a compliance check or standalone legal enquiry on a proposed action, new product/feature, business launch, vendor change, data flow, incident, or regulated activity. Surfaces applicable statutes, regulations, agency guidance, required approvals/filings, reporting duties, and risk areas. Use when launching a new product or service, when modifying a regulated process, when handling regulated data, when a vendor change touches controlled data or sanctions, or when the user asks what legal requirements apply to a scenario.
 argument-hint: "<action or initiative to check>"
-allowed_connectors: [ecfr_search, federal_register_search, govinfo_search, eurlex_search, "pkulaw_*", flk_npc_search, ethiopia_law_search, ethiopia_law_fetch]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 
@@ -50,10 +50,10 @@ If a fact is missing, state the assumption inline and proceed; do not block.
    following the source hierarchy in
    `/playbook/general_playbook.md#0-jurisdiction--source-hierarchy`.
    Default to PRC first; add US/EU only when relevant.
-2. **Research authoritative sources** via connectors when available
-   (`flk_npc_search` for PRC, `ecfr_search` / `federal_register_search` /
-   `govinfo_search` for US, `eurlex_search` for EU). Fall back to hosted
-   web search; quote primary sources with pinpoints.
+2. **Research authoritative sources** with `legal_search` / `legal_fetch`
+   in each jurisdiction concerned (official databases; `legal_sources`
+   lists them). Fall back to hosted web search; quote primary sources with
+   pinpoints.
 3. **Required approvals / filings**: surface as one Findings bullet per
    approval, with authority + trigger + window.
 4. **Reporting duties**: one bullet per authority (regulator / data

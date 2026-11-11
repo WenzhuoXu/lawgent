@@ -2,7 +2,7 @@
 name: meeting-briefing
 description: Prepare a negotiation / meeting briefing for a legal interaction with a counterparty or authority. Use when preparing for a term-sheet call, M&A negotiation, vendor SOW review, regulator inspection or LOI response meeting, customer kickoff, or a multi-party closing dry-run.
 argument-hint: "<meeting topic, counterparty, and any prior documents>"
-allowed_connectors: [ecfr_search, courtlistener_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

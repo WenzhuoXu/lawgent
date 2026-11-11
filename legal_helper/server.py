@@ -14,6 +14,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
@@ -329,9 +330,12 @@ def _chat_generated_inventory(store: ChatStore, chat_id: str) -> list[dict[str, 
         artifacts = _list_visible_artifacts(store, chat_id)
     except Exception:  # noqa: BLE001 — the inventory is advisory
         return out
+    listed: set[str] = set()
     for artifact in sorted(artifacts, key=lambda a: a.created_at, reverse=True):
-        if artifact.origin != "generated":
+        # A rewritten file is registered once per turn that wrote it.
+        if artifact.origin != "generated" or artifact.path in listed:
             continue
+        listed.add(artifact.path)
         out.append(
             {
                 "path": artifact.path,
@@ -444,6 +448,8 @@ def _settings_for_chat(chat_settings: Optional[ChatSettings], *, chat_id: Option
         model = base.resolve_model_for_provider(chat_settings.model, chat_settings.provider)
         if chat_settings.provider == "openai":
             updates["openai_model"] = model
+        elif chat_settings.provider == "claude_code":
+            updates["claude_code_model"] = model
         else:
             updates["anthropic_model"] = model
         # The effort dial is shared by both providers (anthropic_provider reads
@@ -571,13 +577,7 @@ def _mark_run_cancelled(store: ChatStore, run_id: str, message: str = "Cancelled
     return payload
 
 
-def _scan_new_artifacts(
-    store: ChatStore,
-    chat_id: str,
-    seen_paths: set[str],
-    artifact_dir: Path,
-    message_id: Optional[str] = None,
-):
+def _deliverable_files(artifact_dir: Path):
     for p in sorted(artifact_dir.rglob("*")):
         if not p.is_file():
             continue
@@ -586,9 +586,50 @@ def _scan_new_artifacts(
         rel_parts = p.relative_to(artifact_dir).parts
         if any(part.startswith(("_", ".")) for part in rel_parts):
             continue
+        yield p
+
+
+def _file_stamp(p: Path) -> Optional[tuple[int, int]]:
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def _deliverable_snapshot(artifact_dir: Path) -> dict[str, Optional[tuple[int, int]]]:
+    """Each deliverable's (mtime, size) at the start of a turn."""
+    if not artifact_dir.is_dir():
+        return {}
+    return {str(p.resolve()): _file_stamp(p) for p in _deliverable_files(artifact_dir)}
+
+
+def _scan_new_artifacts(
+    store: ChatStore,
+    chat_id: str,
+    seen_paths: set[str],
+    artifact_dir: Path,
+    message_id: Optional[str] = None,
+    before: Optional[dict[str, Optional[tuple[int, int]]]] = None,
+    named_in: str = "",
+):
+    """Register this turn's deliverables under its message.
+
+    A file never registered is new. With `before` (the folder at the turn's
+    start), a registered file the turn rewrote is registered again: a revision
+    written over a delivered workbook had no card on the turn that made it,
+    and the only card left sat on the earlier answer. A delivered file the
+    answer (`named_in`) names by its full file name is attached again too: an
+    answer that said "文件：….docx" for a file from an earlier turn, or gave
+    its server path, left the user nothing to click.
+    """
+    for p in _deliverable_files(artifact_dir):
         resolved = str(p.resolve())
         if resolved in seen_paths:
-            continue
+            rewritten = before is not None and before.get(resolved) != _file_stamp(p)
+            named = bool(named_in) and (p.name in named_in or quote(p.name) in named_in)
+            if not (rewritten or named):
+                continue
         seen_paths.add(resolved)
         artifact = store.add_artifact(
             chat_id,
@@ -691,8 +732,11 @@ def runtime_options() -> dict[str, Any]:
     settings = current_settings()
     return {
         "provider": settings.provider,
-        "providers": ["openai", "anthropic"],
+        "providers": ["claude_code", "openai", "anthropic"],
         "models": {
+            "claude_code": _dedupe(
+                [*settings.high_effort_models_for_provider("claude_code"), settings.claude_code_fast_model]
+            ),
             # High-effort models first, then the fast/cheap tier so the UI can
             # offer a lower-cost option (also handy for cheap smoke testing).
             "openai": _dedupe(
@@ -726,10 +770,17 @@ def _default_context_window() -> int:
 @app.get("/api/usage")
 def usage_summary(month: Optional[str] = None) -> dict[str, Any]:
     """Monthly cost-center summary (tokens, cached tokens, estimated cost)."""
+    from .claude_code.runtime import plan_usage
     from .usage import month_summary
 
     settings = current_settings()
-    return month_summary(month, state_dir=settings.state_dir)
+    summary = month_summary(month, state_dir=settings.state_dir)
+    # The claude.ai plan's limits as Claude Code's `/usage` reports them — the
+    # usage that counts on a flat-rate plan. Read at most once a minute (each
+    # claude_code turn also refreshes it); tokens and dollars above are only
+    # the API-price equivalent.
+    summary["subscription"] = plan_usage(settings)
+    return summary
 
 
 async def _save_chat_upload(chat_id: str, file: UploadFile) -> dict[str, str]:
@@ -1154,6 +1205,7 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
         run_settings = _settings_for_chat(settings_model, chat_id=chat_id)
         active_project_id = _project_store().project_id_for_chat(chat_id)
         seen_paths = store.existing_artifact_paths(chat_id)
+        deliverables_before = _deliverable_snapshot(run_settings.outputs_dir)
         last_persisted_at = 0.0
         try:
             with override_current_settings(run_settings), active_project(active_project_id), usage_run_context(
@@ -1167,7 +1219,12 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                     run_finished = True
                     return
 
-                executor = WorkflowExecutor(settings=run_settings)
+                if run_settings.provider == "claude_code":
+                    from .claude_code import ClaudeCodeExecutor
+
+                    executor = ClaudeCodeExecutor(settings=run_settings)
+                else:
+                    executor = WorkflowExecutor(settings=run_settings)
                 # Lookback is a pathological-load backstop only; the real bound is
                 # the token budget in `_build_context_block`, which scales with the
                 # serving model's window. A hard 12-message cap on top of that
@@ -1206,6 +1263,7 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                         "reasoning_delta",
                         "tool_progress",
                         "hosted_tool_progress",
+                        "claude_code_status",
                     }:
                         text = ev.data.get("text", "")
                         if ev.kind == "delta":
@@ -1268,6 +1326,14 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                                 "usage": usage or None,
                                 "duration_ms": duration_ms,
                                 "run_status": "complete",
+                                # A claude_code turn: the session the next
+                                # turn resumes, and what it would have cost
+                                # on the API.
+                                **{
+                                    key: ev.data[key]
+                                    for key in ("cc_session_id", "api_equivalent_usd", "num_turns")
+                                    if ev.data.get(key) is not None
+                                },
                             },
                         )
                         for artifact in _scan_new_artifacts(
@@ -1276,6 +1342,8 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                             seen_paths,
                             run_settings.outputs_dir,
                             assistant_msg.id,
+                            before=deliverables_before,
+                            named_in=assistant_text,
                         ):
                             emit("artifact", artifact)
                         store.update_run(run.id, status="complete", finished=True)
@@ -1336,6 +1404,13 @@ def _stream_chat_turn(chat_id: str, req: ChatStreamRequest) -> StreamingResponse
                                 workflow_event_sink_var.reset(sink_token)
 
                         _submit_chat_housekeeping(chat_id, housekeeping)
+                    elif ev.kind == "commentary":
+                        # The text streamed so far preceded a tool call: it is
+                        # the chain's, not the answer's. Kept as an event, so
+                        # a reload shows it where it was written.
+                        assistant_text = ""
+                        store.add_event(chat_id, "commentary", ev.data)
+                        emit("commentary", ev.data)
                     elif ev.kind == "citation_audit":
                         store.add_event(chat_id, "citation_audit", ev.data)
                         emit("citation_audit", ev.data)

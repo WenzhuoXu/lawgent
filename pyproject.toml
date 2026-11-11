@@ -11,6 +11,7 @@ authors = [{ name = "Lawgent contributors" }]
 license = { text = "MIT" }
 dependencies = [
     "anthropic>=0.101",
+    "claude-agent-sdk==0.2.180",
     "openai>=2.36",
     "pydantic>=2",
     "python-docx>=1.2",
@@ -59,6 +60,7 @@ include = ["legal_helper*"]
 legal_helper = [
     "skills/**/*.md",
     "documents/review_fonts.conf",
+    "research/sources/_certs/*.pem",
     "playbook/format_recipes/*.md",
     "playbook/*.md",
     "webui/*.html",

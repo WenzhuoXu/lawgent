@@ -2,7 +2,7 @@
 name: legal-response
 description: Draft a careful response to a regulator, authority, or counterparty communication — agency inquiry, enforcement letter, formal investigation notice, data-subject access request, or counterparty legal demand. Use for monitor letters, regulator findings, on-the-record requests, DSARs, official complaints, and internal incident escalations. Produces the analysis behind a draft reply.
 argument-hint: "<incoming communication topic or attachment>"
-allowed_connectors: [ecfr_search, federal_register_search, govinfo_search, eurlex_search, "pkulaw_*", flk_npc_search, ethiopia_law_search, ethiopia_law_fetch]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

@@ -193,7 +193,7 @@ _CONNECTOR_LABELS = {
     "pkulaw_case_search": "PKULaw",
     "pkulaw_case_list": "PKULaw",
     "pkulaw_nl_search": "PKULaw",
-    "flk_npc_search": "flk.npc.gov.cn",
+    "cn.flk": "flk.npc.gov.cn",
     "web": "web fetch",
 }
 

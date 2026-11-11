@@ -49,8 +49,8 @@ that Y"). These all need Mode-2 verification.
 
 ### Phase 2 — Mode-1 (does the cite exist?)
 
-For each case cite, search the available legal-research connector
-(`courtlistener_search`, `pkulaw_case_search`, EU `eurlex_search`). If
+For each case cite, search the court's jurisdiction with `legal_search`
+(`kind="case"`; CN also `pkulaw_case_list`). If
 not found, mark **FABRICATED**. Do not assume the search failed; modern
 connectors do not lose real cases. (When the connector itself is offline,
 mark **COULD NOT CHECK** — not "confirmed.")
@@ -87,12 +87,12 @@ When you cannot confirm, tag `[retrieved but verify support]`.
 For US: KeyCite / Shepardize equivalent — flag overruled, abrogated,
 distinguished, vacated.
 
-For PRC: pull `status` field from `flk_npc_search` (有效 / 已修改 /
-已废止 / 尚未生效). A 法律 in the draft whose status is `已废止` is a
-CRITICAL finding.
+For PRC: the `status` of the 国家法律法规数据库 record (`legal_search` /
+`legal_fetch`, source `cn.flk`: 有效 / 已修改 / 已废止 / 尚未生效). A 法律 in
+the draft whose status is `已废止` is a CRITICAL finding.
 
-For EU: pull EUR-Lex "in force" / "no longer in force" metadata; many
-directives in the EU corpus are superseded.
+For EU: `legal_fetch` of the act reports `in_force`, `amended_by` and
+`latest_consolidated`; many directives in the EU corpus are superseded.
 
 ### Phase 5 — Provenance audit
 

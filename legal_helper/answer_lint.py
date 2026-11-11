@@ -20,18 +20,19 @@ from .answer_contract import SOURCES_HEADING, STATUS
 
 _URL_RE = re.compile(r"https?://[^\s<>()\"'\]]+[^\s<>()\"'\].,;:!?。，；：！？）]")
 # A markdown link: [label](target). Targets may be URLs or local paths — or
-# empty, or a word, when the model had no URL to give.
-_MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\(([^)\s]*)\)")
+# empty, or a word, when the model had no URL to give. A path to a chat's
+# file may contain spaces: a deck or document is named after its title.
+_MD_LINK_RE = re.compile(
+    r"\[([^\]\n]+)\]\(\s*((?:sandbox:|file://)?/[^)\n]*?chat_(?:artifacts|uploads)/[^)\n]+?|[^)\s]*)\s*\)"
+)
 # A citation chip: a markdown link wrapped in parentheses, as hosted web
 # search emits them — `([domain](url))`.
 _CHIP_RE = re.compile(r"\(\[[^\]\n]+\]\(([^)\s]+)\)\)")
-_UPLOAD_RE = re.compile(
-    r"(?:file://)?(?:[^\s()\[\]]*?/)?(?:outputs/)?chat_uploads/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)/([^\s()\[\]]+)"
-)
-_ARTIFACT_RE = re.compile(
-    r"(?:file://)?(?:[^\s()\[\]]*?/)?(?:outputs/)?chat_artifacts/([A-Za-z0-9_-]+)/([^\s()\[\]]+)"
-)
+# Matched against a whole link target, so a file name may hold spaces.
+_UPLOAD_RE = re.compile(r"chat_uploads/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)/([^()\[\]\n]+)$")
+_ARTIFACT_RE = re.compile(r"chat_artifacts/([A-Za-z0-9_-]+)/([^()\[\]\n]+)$")
 _HEADING_RE = re.compile(r"^\s*#{1,6}\s")
+_EN_SOURCES_HEADING_RE = re.compile(r"^(\s*#{1,6}\s*)Sources\s*$", re.IGNORECASE)
 # A sources-list item and the separator before its status word.
 _ITEM_RE = re.compile(r"^(\s*(?:\d+[.)、]|[-*•])\s+)(.+)$")
 _STATUS_SPLIT_RE = re.compile(r"^(.*[^\s—–])\s*(?:[—–]+|\s-{1,2}\s)\s*(\S.*)$")
@@ -85,11 +86,11 @@ def resolve_local_link(target: str) -> Optional[str]:
     m = _UPLOAD_RE.search(target)
     if m:
         chat_id, upload_id, name = m.groups()
-        return f"/api/chats/{chat_id}/uploads/{upload_id}/{quote(name)}"
+        return f"/api/chats/{chat_id}/uploads/{upload_id}/{quote(name.strip())}"
     m = _ARTIFACT_RE.search(target)
     if m:
         chat_id, rest = m.groups()
-        parts = [part for part in rest.split("/") if part]
+        parts = [part.strip() for part in rest.split("/") if part.strip()]
         # The route serves a chat's listed files by name. Working files — a
         # procedure's workspace, review renders — sit under "_" directories
         # and are never listed, so a link to one would be dead.
@@ -150,6 +151,10 @@ class AnswerLinter:
         if _SOURCES_HEADING_RE.match(line):
             self.counts.sources_sections += 1
             self._in_sources = True
+            english = _EN_SOURCES_HEADING_RE.match(line)
+            if self.language == "zh" and english:
+                self.counts.token_leaks += 1
+                line = f"{english.group(1)}{SOURCES_HEADING['zh']}"
         elif _HEADING_RE.match(line):
             self._in_sources = False
         if not self._in_sources:
@@ -202,6 +207,13 @@ class AnswerLinter:
         url = link_url or (urls[0] if urls else "")
         if url:
             name = f"[{name}]({url})"
+        if status and self.language == "zh":
+            # The status set is per language; an English word in a Chinese
+            # answer reads as a leak and the interface cannot colour it.
+            for key, word in STATUS["en"].items():
+                if word in status:
+                    self.counts.token_leaks += 1
+                    status = status.replace(word, STATUS["zh"][key])
         rebuilt = f"{marker}{name} — {status}" if status else f"{marker}{name}"
         if rebuilt != line:
             self.counts.sources_lines_normalized += 1

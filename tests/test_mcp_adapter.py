@@ -8,7 +8,7 @@ from legal_helper.mcp import filter_mcps, load_registry, mcp_tool_to_function_sc
 def test_registry_loads_from_mcp_json() -> None:
     specs = load_registry()
     names = {s.name for s in specs}
-    # PKULaw is split across 9 sub-services that share the apikey header;
+    # PKULaw is split across 9 sub-services that share one Bearer token;
     # at least one must be registered, plus the EU + in-tree CAAC MCPs.
     assert any(n.startswith("pkulaw_") for n in names), f"no pkulaw_* in {names}"
     assert "eurlex" in names
@@ -44,6 +44,10 @@ def test_env_var_expansion_inside_string() -> None:
         assert _expand_env("${LH_TEST_TOKEN}") == "abc-123"
         assert _expand_env("plain string") == "plain string"
         assert _expand_env("${LH_NONEXISTENT_VAR}") == ""
+        # Claude Code's default syntax, which the same .mcp.json uses.
+        assert _expand_env("Bearer ${LH_TEST_TOKEN:-}") == "Bearer abc-123"
+        assert _expand_env("Bearer ${LH_NONEXISTENT_VAR:-}") == "Bearer "
+        assert _expand_env("${LH_NONEXISTENT_VAR:-x/y}") == "x/y"
     finally:
         os.environ.pop("LH_TEST_TOKEN", None)
 

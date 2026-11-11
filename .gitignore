@@ -3,7 +3,10 @@
 .env.*
 !.env.example
 legal_helper/api_key
+legal_helper/api_key.*
 *.pem
+# public CA intermediates a research source needs
+!legal_helper/research/sources/_certs/*.pem
 *.key
 
 # --- Local runtime state (chat history, sessions, vectors, usage ledger) ---

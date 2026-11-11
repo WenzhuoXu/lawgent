@@ -73,11 +73,11 @@ def test_parent_addendum_inlines_active_pack_playbook_and_sources():
     addendum = _build_parent_addendum(_settings(["aviation"]))
     assert "`aviation` pack playbook" in addendum
     assert "`aviation` pack — research sources" in addendum
-    assert "faa_title14_search" in addendum
+    assert "drs_search" in addendum
 
     no_pack = _build_parent_addendum(_settings([]))
     assert "pack playbook" not in no_pack
-    assert "faa_title14_search" not in no_pack
+    assert "drs_search" not in no_pack
 
 
 def test_pack_playbook_section_index_numbered_and_compact():

@@ -1,7 +1,8 @@
 /**
  * Renders an assistant message's ordered `parts`: the activity chain (the
- * author's thinking, with the tool calls each step made under it and any
- * sub-agent as a step of its own), then the answer; the citation audit and
+ * author's thinking and the text it wrote before each tool call, with the
+ * calls each step made under it and any sub-agent as a step of its own), then
+ * the answer — the text after the commentary; the citation audit and
  * artifacts pin below the answer.
  */
 
@@ -17,16 +18,35 @@ import {
   type ToolPart,
 } from "@/components/parts/ActivityChain";
 import { ProcedureCard } from "@/components/parts/ProcedureCard";
+import {
+  CompactionNote,
+  PlanUsageNotice,
+  RateLimitNotice,
+  SessionNotice,
+  TodoList,
+} from "@/components/parts/ClaudeCodeParts";
 import { WorkflowCard } from "@/components/parts/WorkflowCard";
 import { SourcesList, splitSources, parseSourcesTable } from "@/components/parts/SourcesList";
 import { rewriteSandboxHref, artifactOrigin } from "@/lib/artifacts";
-import type { MessagePart } from "@/lib/foldChunks";
-import type { AuditData, CiteCheckData, PhaseData, SpecialistTask, WorkflowData } from "@/lib/dataParts";
+import { commentaryFlags, type MessagePart } from "@/lib/foldChunks";
+import type {
+  AuditData,
+  CiteCheckData,
+  CompactionData,
+  PhaseData,
+  PlanUsageData,
+  RateLimitData,
+  SessionData,
+  SpecialistTask,
+  TodosData,
+  WorkflowData,
+} from "@/lib/dataParts";
 
 type DataPart = Extract<MessagePart, { type: `data-${string}` }>;
 
-/** Tools whose work is a sub-agent: each is a step of the chain, not a row. */
-const PROCEDURE_TOOLS = new Set(["create_deck", "run_procedure"]);
+/** Tools whose work is a sub-agent: each is a step of the chain, not a row.
+ * `Agent` (`Task` on older CLIs) is Claude Code's sub-agent. */
+const PROCEDURE_TOOLS = new Set(["create_deck", "run_procedure", "Agent", "Task"]);
 
 export function RenderMessageParts({
   parts,
@@ -61,6 +81,21 @@ export function RenderMessageParts({
     | { durationMs?: number }
     | undefined;
   const toolParts = parts.filter((p) => p.type.startsWith("tool-")) as ToolPart[];
+  // Claude Code's own states (provider claude_code).
+  const todos = (parts.find((p) => p.type === "data-todos") as DataPart | undefined)?.data as TodosData | undefined;
+  const rateLimit = (parts.find((p) => p.type === "data-rateLimit") as DataPart | undefined)?.data as
+    | RateLimitData
+    | undefined;
+  const planUsage = (parts.find((p) => p.type === "data-planUsage") as DataPart | undefined)?.data as
+    | PlanUsageData
+    | undefined;
+  const session = (parts.find((p) => p.type === "data-session") as DataPart | undefined)?.data as
+    | SessionData
+    | undefined;
+  const compactions = parts
+    .filter((p) => p.type === "data-compaction")
+    .map((p) => (p as DataPart).data as CompactionData);
+  const commentary = commentaryFlags(parts);
 
   // The chain: each reasoning section opens a step, and the plain tool calls
   // that follow it hang under that step; a sub-agent call is a step itself.
@@ -112,6 +147,12 @@ export function RenderMessageParts({
     } else if (p.type === "text") {
       const text = (p as Extract<MessagePart, { type: "text" }>).text;
       if (!text) continue;
+      if (commentary[i]) {
+        // Written before a tool call: commentary on the way to it, a step of
+        // the chain with the calls that followed under it.
+        steps.push({ key: `cmt-${i}`, kind: "thought", body: text, tools: [] });
+        continue;
+      }
       const { body: prose, sources } = splitSources(text);
       const sourceRows = sources ? parseSourcesTable(sources) : null;
       // Answers cite inline with full links, so the body renders as-is; the
@@ -141,6 +182,12 @@ export function RenderMessageParts({
         toolCount={toolParts.length}
         taskCount={agentTasks.length}
       />
+
+      {session ? <SessionNotice data={session} /> : null}
+      {todos?.todos?.length ? <TodoList todos={todos.todos} streaming={isStreaming} /> : null}
+      {compactions.map((c, i) => (
+        <CompactionNote key={`compaction-${i}`} data={c} />
+      ))}
 
       {body}
 
@@ -175,6 +222,9 @@ export function RenderMessageParts({
           })}
         </div>
       ) : null}
+
+      {rateLimit ? <RateLimitNotice data={rateLimit} /> : null}
+      {planUsage ? <PlanUsageNotice data={planUsage} /> : null}
     </div>
   );
 }
@@ -185,6 +235,8 @@ const PHASE_LABEL: Record<PhaseData["phase"], string> = {
   workflow: "多智能体工作流 / Running workflow",
   drafting: "生成文件 / Producing the file",
   auditing: "核验引证 / Verifying citations",
+  compacting: "压缩上下文 / Compacting context",
+  retrying: "重试请求 / Retrying the request",
 };
 
 function StatusLine({ phase }: { phase: PhaseData }) {

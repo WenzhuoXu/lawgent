@@ -93,7 +93,7 @@ def validate_prc(cite: PrcCitation) -> tuple[PrcStatus, str | None]:
 
     Structural sanity only — authority confirmation (是否现行有效 / does the
     pinpoint actually support the proposition) requires a round-trip via
-    ``pkulaw_fatiao.get_law_item_content``. See
+    ``pkulaw_fatiao.get_law_article``. See
     ``legal_helper/citations/groundedness.py``.
 
     Returns ``(status, reason)`` where status is three-valued: an unknown

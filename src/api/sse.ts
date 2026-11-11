@@ -24,6 +24,19 @@
  *    never stored; the `reasoning` event logged where a segment ends carries
  *    its whole text, which closes the streamed segment live and recreates it
  *    on reload.
+ *  - Provider `claude_code` (the turn runs inside Claude Code) uses the same
+ *    events, plus its own states: `claude_code_session` (model, login, tools),
+ *    `todo_list` (its plan), `claude_code_status` (compacting, retrying),
+ *    `rate_limit` (the window Claude Code reports while it runs), `plan_usage`
+ *    (the plan's limits after the turn, as `/usage` shows them). Its sub-agents are the
+ *    `Agent` tool: their calls nest under it exactly like a specialist's.
+ *  - Answer text is segmented the same way. Text the model wrote before a tool
+ *    call is commentary: the server ends it with a `commentary` event, which
+ *    closes the streamed text part live (the next delta opens a new one) and
+ *    recreates it on reload, each time with a `data-commentary` marker. The
+ *    first N text parts of a turn, N the markers, are commentary; the rest is
+ *    the answer (`answerText` in lib/foldChunks). The renderer shows commentary
+ *    in the chain.
  */
 
 import { normalizeEvent } from "./events";
@@ -52,6 +65,10 @@ export type TranslatorState = {
   sawStart: boolean;
   textId: string | null;
   textOpen: boolean;
+  /** text segment counter: a `commentary` event ends one */
+  textSeq: number;
+  /** text streamed into the open segment, not yet ended by `commentary` */
+  textStreamed: boolean;
   reasoningSeq: number;
   reasoningOpen: boolean;
   /** text streamed into the open (or just-closed) segment, not yet acknowledged
@@ -72,6 +89,8 @@ export type TranslatorState = {
   /** specialist snapshots by `${partId}:${taskId}` */
   tasks: Map<string, SpecialistTask>;
   workflows: Map<string, WorkflowData>;
+  /** Claude Code's last reported status (requesting / compacting / retrying) */
+  ccStatus: string | null;
 };
 
 export function createTranslatorState(): TranslatorState {
@@ -80,6 +99,8 @@ export function createTranslatorState(): TranslatorState {
     sawStart: false,
     textId: null,
     textOpen: false,
+    textSeq: 0,
+    textStreamed: false,
     reasoningSeq: 0,
     reasoningOpen: false,
     reasoningStreamed: false,
@@ -92,6 +113,7 @@ export function createTranslatorState(): TranslatorState {
     lastOpened: new Map(),
     tasks: new Map(),
     workflows: new Map(),
+    ccStatus: null,
   };
 }
 
@@ -208,9 +230,15 @@ function subToolChunks(
   });
 }
 
-/** Pop the oldest open tool id for a key (FIFO). */
-function closeTool(state: TranslatorState, key: string): string | undefined {
-  return state.openToolIds.get(key)?.shift();
+/** Close the open tool part a finished call belongs to: by its call id when
+ * the event carries one (parallel calls of one tool can finish out of order),
+ * else the oldest open part for the key (FIFO). */
+function closeTool(state: TranslatorState, key: string, callId?: unknown): string | undefined {
+  const open = state.openToolIds.get(key);
+  if (!open?.length) return undefined;
+  const byCall = typeof callId === "string" ? state.partByCallId.get(callId) : undefined;
+  const at = byCall ? open.indexOf(byCall) : -1;
+  return at >= 0 ? open.splice(at, 1)[0] : open.shift();
 }
 
 /**
@@ -233,7 +261,7 @@ export function sseEventToChunks(
       out.push({ type: "start", messageId: state.assistantId ?? messageId });
     }
   };
-  const textId = () => (state.textId ??= `txt-${state.assistantId ?? "run"}`);
+  const textId = () => `${(state.textId ??= `txt-${state.assistantId ?? "run"}`)}-${state.textSeq}`;
   const reasoningId = () => `rsn-${state.assistantId ?? "run"}-${state.reasoningSeq}`;
   const openReasoning = () => {
     if (state.reasoningOpen) return;
@@ -277,6 +305,37 @@ export function sseEventToChunks(
         if (state.sawPhase) out.push({ type: "data-phase", id: "phase", data: null });
       }
       out.push({ type: "text-delta", id: textId(), delta: text });
+      state.textStreamed = true;
+      return out;
+    }
+
+    case "commentary": {
+      if (p.task_id) return out;
+      // Each marker ends one text segment: the first N text parts of the turn
+      // are commentary, whether or not their tool part has arrived yet.
+      const marker: UIMessageChunk = {
+        type: "data-commentary",
+        id: `cmt-${state.assistantId ?? "run"}-${state.textSeq}`,
+        data: { segment: state.textSeq },
+      };
+      if (state.textStreamed) {
+        // Live: the segment already streamed; a tool call follows it.
+        closeText();
+        out.push(marker);
+        state.textStreamed = false;
+        state.textSeq += 1;
+        return out;
+      }
+      const text = ((p.text as string) ?? "").trim();
+      if (!text) return out;
+      ensureStart();
+      closeReasoning();
+      closeText();
+      out.push({ type: "text-start", id: textId() });
+      out.push({ type: "text-delta", id: textId(), delta: text });
+      out.push({ type: "text-end", id: textId() });
+      out.push(marker);
+      state.textSeq += 1;
       return out;
     }
 
@@ -476,7 +535,7 @@ export function sseEventToChunks(
       if (p.task_id) {
         return subToolChunks(state, p, name, looksLikeError(p.output_preview) ? "error" : "complete");
       }
-      const id = closeTool(state, toolKey(ev.agent, name));
+      const id = closeTool(state, toolKey(ev.agent, name), p.call_id);
       if (!id) return out;
       const preview = p.output_preview;
       if (looksLikeError(preview)) {
@@ -491,7 +550,7 @@ export function sseEventToChunks(
       const name = p.tool_name as string;
       if (!name) return out;
       if (p.task_id) return subToolChunks(state, p, name, "error");
-      const id = closeTool(state, toolKey(ev.agent, name));
+      const id = closeTool(state, toolKey(ev.agent, name), p.call_id);
       if (!id) return out;
       out.push({
         type: "tool-output-error",
@@ -685,8 +744,88 @@ export function sseEventToChunks(
           reason: p.reason,
           lookback: p.lookback,
           transcriptMessages: p.transcript_messages,
+          trigger: p.trigger,
+          preTokens: p.pre_tokens,
         },
       });
+      return out;
+    }
+
+    // --- Claude Code's own states (provider claude_code) ---------------------
+    case "claude_code_session": {
+      ensureStart();
+      out.push({
+        type: "data-session",
+        id: "session",
+        data: {
+          sessionId: p.session_id,
+          model: p.model,
+          auth: p.auth,
+          version: p.version,
+          toolCount: p.tool_count,
+          mcpServers: p.mcp_servers,
+        },
+      });
+      return out;
+    }
+    case "todo_list": {
+      ensureStart();
+      closeReasoning();
+      out.push({ type: "data-todos", id: "todos", data: { todos: Array.isArray(p.todos) ? p.todos : [] } });
+      return out;
+    }
+    case "rate_limit": {
+      out.push({
+        type: "data-rateLimit",
+        id: "rateLimit",
+        data: {
+          status: p.status,
+          rateLimitType: p.rate_limit_type,
+          utilization: p.utilization,
+          resetsAt: p.resets_at,
+        },
+      });
+      return out;
+    }
+    case "plan_usage": {
+      const limits = Array.isArray(p.limits) ? (p.limits as Array<Record<string, unknown>>) : [];
+      out.push({
+        type: "data-planUsage",
+        id: "planUsage",
+        data: {
+          subscriptionType: p.subscription_type,
+          limits: limits.map((l) => ({
+            kind: l.kind as string,
+            group: l.group as string | null | undefined,
+            percent: l.percent as number | null | undefined,
+            resetsAt: l.resets_at as string | null | undefined,
+            severity: l.severity as string | undefined,
+            isActive: l.is_active as boolean | undefined,
+          })),
+        },
+      });
+      return out;
+    }
+    case "claude_code_status": {
+      const status = (p.status as string | undefined) ?? "requesting";
+      const was = state.ccStatus;
+      state.ccStatus = status;
+      if (status === "compacting" || status === "retrying") {
+        ensureStart();
+        state.sawPhase = true;
+        const attempt = p.attempt as number | undefined;
+        const max = p.max_retries as number | undefined;
+        out.push({
+          type: "data-phase",
+          id: "phase",
+          data: {
+            phase: status,
+            detail: status === "retrying" && attempt ? `${attempt}${max ? `/${max}` : ""}` : undefined,
+          },
+        });
+      } else if (was === "compacting" || was === "retrying") {
+        out.push({ type: "data-phase", id: "phase", data: { phase: "thinking" } });
+      }
       return out;
     }
 

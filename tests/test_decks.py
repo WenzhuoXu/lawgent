@@ -348,7 +348,7 @@ def test_create_deck_is_mutating_and_kept_from_auditors_and_from_ppt_master_itse
 
 def test_the_tool_description_says_it_is_the_way_to_make_slides():
     description = decks.create_deck.to_dict()["description"]
-    for phrase in ("THE way", "汇报材料", "课件", "single slide", "does not see this conversation"):
+    for phrase in ("only way", "汇报材料", "课件", "one slide", "does not see this chat"):
         assert phrase in description, phrase
 
 

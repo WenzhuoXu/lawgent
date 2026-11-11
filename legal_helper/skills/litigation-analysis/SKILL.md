@@ -2,7 +2,7 @@
 name: litigation-analysis
 description: Analyze a litigation or arbitration matter — map every claim and defense to its legal elements with supporting facts and verified authority (案情分析 / 争议焦点归纳), build an evidence chronology, and run the 诉讼时效 limitation check. Use when the user supplies case facts, pleadings, or a dispute file and wants element-by-element strength assessment, a timeline, an authority list, or a limitation-period answer. For drafting the resulting 起诉状 / 答辩状 use /draft-agreement; for replying to a counterparty or regulator use /legal-response.
 argument-hint: "<case facts / pleadings / dispute file> [--side 原告|被告|claimant|respondent] [--focus elements|chronology|limitation|authorities]"
-allowed_connectors: [pkulaw_case_search, pkulaw_case_list, pkulaw_anhao, "pkulaw_*", courtlistener_search, flk_npc_search]
+allowed_connectors: [pkulaw_case_search, pkulaw_case_list, pkulaw_anhao, "pkulaw_*"]
 rag_collections: [general]
 ---
 
@@ -25,17 +25,19 @@ The analysis header (matter · side · elements mapped / unsupported · chronolo
 ## Authority-verification contract (binding)
 
 - Every PRC case cited is verified live: `pkulaw_case_search` →
-  `search_case` for fact-pattern / legal-issue lookups, `pkulaw_case_list`
-  → `get_case_list` for keyword / title scans. Record 案号, court, date,
+  `search_cases` for fact-pattern / legal-issue lookups, `pkulaw_case_list`
+  → `search_cases_by_keyword` for keyword / title scans. Record 案号, court, date,
   weight label (general playbook §0: 应当参照 / 参考 / persuasive), and treatment
   (followed / distinguished / superseded).
-- Every 案号 is normalized through `pkulaw_anhao` → `anhao_recognition`
+- Every 案号 is normalized through `pkulaw_anhao` → `recognize_case_numbers`
   before it enters the bundle; `citations/prc.py` regex is the offline
   fallback only.
 - Statutory elements and limitation articles are re-verified via
-  `pkulaw_fatiao` / `pkulaw_citation_validator`; `flk_npc_search` is a
-  status-only fallback. US comparative authority goes through
-  `courtlistener_search` with the same treatment check.
+  `legal_fetch` of the statute (`legal_search` jurisdiction CN: the national
+  database's official text, PKULaw for 部门规章 and 类案), or
+  `pkulaw_citation_validator` where the specialist holds it. Comparative
+  authority goes through `legal_search` in that jurisdiction with the same
+  treatment check.
 - An unverifiable authority is dropped or flagged `unverified — do not
   cite`, never propped up. The automatic `/cite-check` gate runs on
   the final answer; never bypass it.

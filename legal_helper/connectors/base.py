@@ -31,7 +31,9 @@ TIMEOUT = httpx.Timeout(15.0, connect=8.0)
 RETRY_ATTEMPTS = 3
 _BACKOFF_BASE = 0.5  # seconds; grows 0.5 → 1.0 → 2.0 (+ jitter)
 _BACKOFF_CAP = 8.0
-_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+# 520-524: a CDN in front of the origin (Cloudflare, EdgeOne) reporting the
+# origin slow or unreachable — PKULaw's gateway answers 524 intermittently.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 520, 521, 522, 523, 524})
 
 SEARCH_TTL = 15 * 60  # idempotent search lookups
 BODY_TTL = 24 * 60 * 60  # immutable document bodies

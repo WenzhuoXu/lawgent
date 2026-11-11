@@ -15,7 +15,7 @@ import {
   sseEventToChunks,
   type UIMessageChunk,
 } from "@/api/sse";
-import { foldChunksToParts, type MessagePart } from "@/lib/foldChunks";
+import { commentaryFlags, foldChunksToParts, type MessagePart } from "@/lib/foldChunks";
 import type { LegalMessageMetadata } from "@/lib/dataParts";
 import { attachmentPartsFromMetadata } from "@/lib/attachments";
 
@@ -126,14 +126,15 @@ export function eventsToUIMessages(
     const parts = foldChunksToParts(chunks);
 
     // The persisted final answer text is authoritative — deltas are not stored
-    // individually, so replayed events yield no text part. Inject it.
-    if (msg.content && !parts.some((p) => p.type === "text")) {
-      parts.push({ type: "text", text: msg.content });
-    } else if (msg.content) {
-      const textPart = parts.find((p) => p.type === "text") as
+    // individually, so replay yields only the commentary segments (text written
+    // before a tool call). The answer is the text part after them.
+    if (msg.content) {
+      const flags = commentaryFlags(parts);
+      const trailing = parts.find((p, i) => p.type === "text" && !flags[i]) as
         | Extract<MessagePart, { type: "text" }>
         | undefined;
-      if (textPart && !textPart.text) textPart.text = msg.content;
+      if (!trailing) parts.push({ type: "text", text: msg.content });
+      else if (!trailing.text) trailing.text = msg.content;
     }
 
     // Attach artifacts belonging to this message.

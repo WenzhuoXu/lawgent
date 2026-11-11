@@ -1,12 +1,13 @@
 /**
- * A `create_deck` or `run_procedure` call: the procedure's sub-agent at work
+ * A `create_deck` or `run_procedure` call, or Claude Code's `Agent` tool: the
+ * sub-agent at work
  * inside one card. It reads "running" until the tool itself returns (the
  * export found, opened and linted), never earlier, and shows pages authored
  * against the target, the latest step, and every call the sub-agent made.
  */
 
 import { useState } from "react";
-import { ChevronRight, FileCog, Presentation } from "lucide-react";
+import { Bot, ChevronRight, FileCog, Presentation } from "lucide-react";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { StateIcon, toolName, type ToolPart } from "@/components/parts/ActivityChain";
 import { displayToolName } from "@/lib/toolLabels";
@@ -32,13 +33,18 @@ export function ProcedureCard({
   const [open, setOpen] = useState(false);
   const name = toolName(part);
   const deck = name === "create_deck";
-  const input = (part.input ?? {}) as { title?: string; skill?: string };
+  const subagent = name === "Agent" || name === "Task";
+  const input = (part.input ?? {}) as { title?: string; skill?: string; description?: string; subagent_type?: string };
   const running = part.state === "input-available";
   const status = outputField(part.output, "status");
   const failed = part.state === "output-error" || (status !== undefined && status !== "ok");
   const state = running ? "running" : failed ? "error" : "complete";
-  const label = deck ? "制作演示文稿" : `文书流程 · ${input.skill ?? task?.skillName ?? ""}`;
-  const title = input.title || task?.title;
+  const label = deck
+    ? "制作演示文稿"
+    : subagent
+      ? `子智能体 · ${input.subagent_type ?? task?.skillName ?? "general-purpose"}`
+      : `文书流程 · ${input.skill ?? task?.skillName ?? ""}`;
+  const title = input.title || input.description || task?.title;
 
   const bits: string[] = [];
   if (task?.current) bits.push(task.total ? `第 ${task.current}/${task.total} 页` : `已写 ${task.current} 页`);
@@ -64,6 +70,8 @@ export function ProcedureCard({
       >
         {deck ? (
           <Presentation className="size-4 shrink-0 text-primary" />
+        ) : subagent ? (
+          <Bot className="size-4 shrink-0 text-primary" />
         ) : (
           <FileCog className="size-4 shrink-0 text-primary" />
         )}

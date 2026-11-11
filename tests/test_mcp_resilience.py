@@ -1,5 +1,5 @@
 """MCP boundary resilience: sync-client retries, uniform errors, the
-ccar_aviation disabled-endpoint notice, and the PKULaw health probe."""
+ccar_aviation server's local-corpus routing, and the PKULaw health probe."""
 
 from __future__ import annotations
 
@@ -106,23 +106,43 @@ def test_http_list_tools_retries_then_soft_fails(fake_http):
     assert sync_client.http_list_tools(_SPEC) == []  # soft-fail, never raises
 
 
-def test_ccar_mcp_returns_disabled_notice():
-    for tool in ("search_ccar", "fetch_ccar"):
-        payload = json.loads(dispatch(tool, {"query": "CCAR-145"}))
-        assert payload["error"] == "ccar endpoint disabled"
-        assert payload["tool"] == tool
-        assert "pkulaw" in payload["detail"]
+def test_ccar_mcp_reads_the_local_corpus(monkeypatch):
+    from legal_helper.connectors import caac_local
+
+    monkeypatch.setattr(
+        caac_local.caac_local_search, "call", lambda args: json.dumps({"search": args})
+    )
+    monkeypatch.setattr(
+        caac_local.caac_local_fetch, "call", lambda args: json.dumps({"fetch": args})
+    )
+    payload = json.loads(dispatch("search_ccar", {"query": "CCAR-145", "per_page": 3}))
+    assert payload["search"] == {"query": "CCAR-145", "per_page": 3}
+    # A legacy caac.gov.cn URL resolves to the page stem the corpus is keyed by.
+    payload = json.loads(
+        dispatch(
+            "fetch_ccar",
+            {"url": "https://www.caac.gov.cn/XXGK/XXGK/MHGZ/202103/t20210315_206814.html"},
+        )
+    )
+    assert payload["fetch"] == {"identifier": "t20210315_206814"}
+    assert "error" in json.loads(dispatch("fetch_ccar", {}))
     assert "error" in json.loads(dispatch("nope", {}))
 
 
 def test_ccar_mcp_faa_title14_still_dispatches(monkeypatch):
-    from legal_helper.connectors import aviation
+    from legal_helper.research.base import Hit
+    from legal_helper.research.sources import us
 
-    monkeypatch.setattr(
-        aviation.faa_title14_search, "call", lambda args: json.dumps({"ok": args})
-    )
+    seen = {}
+
+    def fake_search(self, query, *, kind="any", mode="keyword", limit=10, filters=None):
+        seen.update(query=query, filters=filters)
+        return [Hit(ref="us.ecfr:14/121.583", title="14 CFR § 121.583", source="us.ecfr")]
+
+    monkeypatch.setattr(us.EcfrSource, "search", fake_search)
     payload = json.loads(dispatch("faa_title14", {"query": "121.583"}))
-    assert payload["ok"]["query"] == "121.583"
+    assert seen == {"query": "121.583", "filters": {"title": 14}}
+    assert payload["results"][0]["ref"] == "us.ecfr:14/121.583"
 
 
 def test_pkulaw_health_reports_missing_token(monkeypatch):
@@ -146,7 +166,7 @@ def test_pkulaw_health_probes_gateway(monkeypatch):
     monkeypatch.setattr(health, "http_list_tools", lambda spec: [])
     out = health.pkulaw_health()
     assert out["reachable"] is False
-    assert "flk_npc_search" in out["note"]
+    assert "legal_fetch" in out["note"]
 
 
 def test_tools_list_fallback_not_cached_forever(monkeypatch):
@@ -207,7 +227,7 @@ def test_discovery_probes_servers_in_parallel_and_keeps_registry_order(monkeypat
 
     from legal_helper.tools import mcp_tools as mt
 
-    names = ["pkulaw_law_search", "pkulaw_fatiao", "courtlistener_mcp", "govinfo_mcp"]
+    names = ["pkulaw_law_search", "pkulaw_fatiao", "pkulaw_case_search", "pkulaw_case_list"]
     specs = [McpServerSpec(name=n, transport="http", url=f"https://{n}.invalid/mcp") for n in names]
     monkeypatch.setattr(mt, "visible_mcp_specs", lambda j, p: specs)
     mt._cached_tools_list.cache_clear()
@@ -227,8 +247,8 @@ def test_discovery_probes_servers_in_parallel_and_keeps_registry_order(monkeypat
         mt._cached_tools_list.cache_clear()
     servers = [t.name.split("__", 1)[0] for t in tools]
     # Registry order, each server's tools contiguous; the exploding server has none.
-    assert list(dict.fromkeys(servers)) == ["pkulaw_law_search", "courtlistener_mcp", "govinfo_mcp"]
+    assert list(dict.fromkeys(servers)) == ["pkulaw_law_search", "pkulaw_case_search", "pkulaw_case_list"]
     assert servers == sorted(servers, key=names.index)
     names_out = {t.name for t in tools}
-    for live in ("pkulaw_law_search__pkulaw_law_search_tool", "courtlistener_mcp__courtlistener_mcp_tool", "govinfo_mcp__govinfo_mcp_tool"):
+    for live in ("pkulaw_law_search__pkulaw_law_search_tool", "pkulaw_case_search__pkulaw_case_search_tool", "pkulaw_case_list__pkulaw_case_list_tool"):
         assert live in names_out

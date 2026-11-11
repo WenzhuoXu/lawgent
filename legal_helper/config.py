@@ -23,6 +23,10 @@ ANTHROPIC_HIGH_EFFORT_MODELS = ("claude-opus-5-5",)
 # bare "gpt-6" or "gpt-6.1" alias, so always spell out the variant. Every retired
 # model stays priced in usage.py so historical ledger months still replay.
 OPENAI_HIGH_EFFORT_MODELS = ("gpt-6.1-sol",)
+# Claude Code (the Agent SDK driving the `claude` CLI on the user's claude.ai
+# subscription) serves the same Claude models; its fast tier is listed through
+# ``claude_code_fast_model``.
+CLAUDE_CODE_HIGH_EFFORT_MODELS = ("claude-opus-5-5",)
 
 # Why a model stopped being offered, for the log line when a stored selection is
 # migrated off it. Retirement must be enforced at *load*, not only at selection:
@@ -142,7 +146,7 @@ CitationStyle = Literal["gb_t_7714", "bluebook", "oscola"]
 
 
 class Settings(BaseModel):
-    provider: Literal["anthropic", "openai"] = "openai"
+    provider: Literal["anthropic", "openai", "claude_code"] = "openai"
 
     # Jurisdiction & domain layer
     default_jurisdiction: JurisdictionCode = "CN"
@@ -154,6 +158,12 @@ class Settings(BaseModel):
     anthropic_api_key: Optional[str] = None
     anthropic_model: str = "claude-opus-5-5"
     anthropic_fast_model: str = "claude-sonnet-5"
+
+    # provider "claude_code": the turn runs inside Claude Code (see
+    # legal_helper/claude_code/), billed to the claude.ai login of the `claude`
+    # CLI rather than to an API key.
+    claude_code_model: str = "claude-opus-5-5"
+    claude_code_fast_model: str = "claude-sonnet-5-5"
 
     openai_api_key: Optional[str] = None
     openai_model: str = "gpt-6.1-sol"
@@ -246,12 +256,16 @@ class Settings(BaseModel):
     def model_for_provider(self, fast: bool = False) -> str:
         if self.provider == "anthropic":
             return self.anthropic_fast_model if fast else self.anthropic_model
+        if self.provider == "claude_code":
+            return self.claude_code_fast_model if fast else self.claude_code_model
         return self.openai_fast_model if fast else self.openai_model
 
     def high_effort_models_for_provider(self, provider: Optional[str] = None) -> list[str]:
         selected = provider or self.provider
         if selected == "anthropic":
             return list(ANTHROPIC_HIGH_EFFORT_MODELS)
+        if selected == "claude_code":
+            return list(CLAUDE_CODE_HIGH_EFFORT_MODELS)
         return list(OPENAI_HIGH_EFFORT_MODELS)
 
     def offered_models_for_provider(self, provider: Optional[str] = None) -> list[str]:
@@ -267,6 +281,10 @@ class Settings(BaseModel):
         if selected == "anthropic":
             return _dedupe(
                 [*ANTHROPIC_HIGH_EFFORT_MODELS, self.anthropic_model, self.anthropic_fast_model]
+            )
+        if selected == "claude_code":
+            return _dedupe(
+                [*CLAUDE_CODE_HIGH_EFFORT_MODELS, self.claude_code_model, self.claude_code_fast_model]
             )
         return _dedupe([*OPENAI_HIGH_EFFORT_MODELS, self.openai_model, self.openai_fast_model])
 
@@ -286,6 +304,8 @@ class Settings(BaseModel):
             return candidate
         if selected == "anthropic":
             return self.anthropic_model
+        if selected == "claude_code":
+            return self.claude_code_model
         return self.openai_model
 
     def effective_max_concurrent_agents(self) -> int:
@@ -320,7 +340,7 @@ def load_settings(*, refresh: bool = False) -> Settings:
     api_key_values = _read_dotenv_values(api_key_path)
 
     # Make every key in the api_key file visible to downstream tools (e.g.
-    # govinfo_search, courtlistener_search) via os.getenv, without overriding
+    # the GovInfo and CourtListener research sources) via os.getenv, without overriding
     # values already present in the real process environment.
     for _k, _v in api_key_values.items():
         os.environ.setdefault(_k, _v)
@@ -334,7 +354,7 @@ def load_settings(*, refresh: bool = False) -> Settings:
         cfg = yaml.safe_load(cfg_path.read_text()) or {}
 
     provider = os.getenv("MODEL_PROVIDER", cfg.get("provider", "openai")).lower()
-    if provider not in {"anthropic", "openai"}:
+    if provider not in {"anthropic", "openai", "claude_code"}:
         provider = "openai"
 
     s = Settings(
@@ -343,6 +363,10 @@ def load_settings(*, refresh: bool = False) -> Settings:
         anthropic_model=os.getenv("ANTHROPIC_MODEL", cfg.get("anthropic_model", "claude-opus-5-5")),
         anthropic_fast_model=os.getenv(
             "ANTHROPIC_FAST_MODEL", cfg.get("anthropic_fast_model", "claude-sonnet-5")
+        ),
+        claude_code_model=os.getenv("CLAUDE_CODE_MODEL", cfg.get("claude_code_model", "claude-opus-5-5")),
+        claude_code_fast_model=os.getenv(
+            "CLAUDE_CODE_FAST_MODEL", cfg.get("claude_code_fast_model", "claude-sonnet-5-5")
         ),
         openai_api_key=_api_key_value("OPENAI_API_KEY"),
         openai_model=os.getenv("OPENAI_MODEL", cfg.get("openai_model", "gpt-6.1-sol")),

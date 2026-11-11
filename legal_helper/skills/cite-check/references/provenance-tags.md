@@ -17,23 +17,28 @@ not a vote of trust, it is a record of what happened in this session.
   sub-services (`pkulaw_law_search`, `pkulaw_fatiao`, `pkulaw_case_search`,
   `pkulaw_case_list`, `pkulaw_anhao`, `pkulaw_law_recognition`,
   `pkulaw_citation_validator`, `pkulaw_doc_link`, `pkulaw_nl_search`).
-- `[flk.npc.gov.cn]` — for any cite retrieved via `flk_npc_search`
-  against the 国家法律法规数据库.
+- `[flk.npc.gov.cn]` — for any cite read from the 国家法律法规数据库
+  (`legal_fetch`, source `cn.flk`).
 
 ### US
 
-- `[CourtListener]` — federal opinions / dockets via the free
-  CourtListener API (default US case-law connector in this repo).
+- `[CourtListener]` — federal and state opinions via `legal_search` /
+  `legal_fetch` (source `us.courtlistener`).
 - `[Westlaw]` / `[Lexis]` / `[PACER]` — when those connectors are
   available.
-- `[eCFR]` — for current CFR text via `ecfr_search`.
-- `[FederalRegister]` — for proposed/final rules via `federal_register_search`.
-- `[GovInfo]` — for USC / public laws via `govinfo_search`.
+- `[eCFR]` — for current CFR text (source `us.ecfr`).
+- `[FederalRegister]` — for proposed/final rules (source `us.federal_register`).
+- `[GovInfo]` — for USC / public laws (source `us.govinfo`).
 - `[USPTO]` — for IP filings.
 
 ### EU
 
-- `[EUR-Lex]` — for any cite retrieved via `eurlex_search`.
+- `[EUR-Lex]` — for any cite read from EUR-Lex / Cellar (source `eu.eurlex`).
+
+### Every other jurisdiction
+
+- `[<database>]` — the `name` of the `legal_fetch` source that returned the
+  text (e.g. `[legislation.gov.uk]`, `[e-Gov 法令]`); `legal_sources` lists them.
 
 ### Other
 

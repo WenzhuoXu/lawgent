@@ -52,16 +52,16 @@ def test_connectors_filter_by_pack() -> None:
     multi_aviation = {e.name for e in filter_for(["CN", "US", "EU", "ICAO"], ["aviation"])}
     multi_generic = {e.name for e in filter_for(["CN", "US", "EU", "ICAO"], [])}
 
-    assert "flk_npc_search" in cn_only
+    # Statute databases are the research layer's; the registry holds only
+    # pack connectors, none of which leak in without the pack.
+    assert not cn_only
     # Aviation pack flips on the aviation-tagged connectors that match the
     # active jurisdiction set; CAAC rules come from the local corpus connector.
     assert "caac_local_search" in multi_aviation
     assert "caac_local_fetch" in multi_aviation
-    assert "faa_title14_search" in multi_aviation
     assert "drs_search" in multi_aviation
     assert "easa_ad_search" in multi_aviation
     # Without the pack, aviation-tagged connectors must not leak in.
-    assert "faa_title14_search" not in multi_generic
     assert "caac_local_search" not in multi_generic
     assert "drs_search" not in multi_generic
     assert "easa_ad_search" not in multi_generic

@@ -29,12 +29,12 @@ def test_extract_progress_known_total():
 def test_fetch_progress_increments_with_lookup_tool():
     state = {}
     a = _cite_check_progress_from_tool_call(
-        {"name": "courtlistener_search", "arguments": {"query": "Smith v. Jones"}},
+        {"name": "legal_search", "arguments": {"query": "Smith v. Jones"}},
         state=state,
         total_claims=4,
     )
     b = _cite_check_progress_from_tool_call(
-        {"name": "ecfr_search", "arguments": {"query": "14 CFR 121"}},
+        {"name": "legal_fetch", "arguments": {"query": "14 CFR 121"}},
         state=state,
         total_claims=4,
     )

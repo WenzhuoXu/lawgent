@@ -1,6 +1,7 @@
 /** Shared REST/domain types for the Legal Helper backend. */
 
-export type ProviderId = "anthropic" | "openai";
+/** `claude_code`: the turn runs inside Claude Code on the claude.ai subscription. */
+export type ProviderId = "anthropic" | "openai" | "claude_code";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type AnswerLength = "auto" | "brief" | "focused" | "full";
 
@@ -60,6 +61,38 @@ export type UsageByModel = {
   cache_write_tokens: number;
   requests: number;
   estimated_cost_usd: number;
+  /** Claude Code turns: billed to the subscription; this is the API list price. */
+  subscription_equivalent_usd?: number;
+};
+
+/** One limit window of the claude.ai plan (what Claude Code's `/usage` shows). */
+export type PlanLimit = {
+  /** e.g. "session" (the 5-hour window) or a weekly window */
+  kind: string;
+  group?: string | null;
+  /** percent of the window used, 0–100 */
+  percent?: number | null;
+  /** ISO time the window resets */
+  resets_at?: string | null;
+  severity?: string;
+  is_active?: boolean;
+  scope?: string | null;
+};
+
+/** The claude.ai plan's usage, read from Claude Code (provider claude_code). */
+export type PlanUsage = {
+  source: "claude_code";
+  subscription_type?: string | null;
+  available?: boolean;
+  limits: PlanLimit[];
+  extra_usage?: {
+    enabled?: boolean;
+    utilization?: number | null;
+    used_credits?: number | null;
+    monthly_limit?: number | null;
+    currency?: string | null;
+  };
+  fetched_at?: string;
 };
 
 export type UsageSummary = {
@@ -67,6 +100,9 @@ export type UsageSummary = {
   months?: string[];
   totals: UsageTotals;
   estimated_cost_usd: number;
+  subscription_equivalent_usd?: number;
+  /** the plan's limits; null when Claude Code could not be asked */
+  subscription?: PlanUsage | null;
   by_model: UsageByModel[];
   note?: string;
 };

@@ -2,7 +2,7 @@
 name: tabular-review
 description: Review a set of documents as a grid — one row per document, one column per review question — with a mandatory pinpoint citation for every substantive cell. Use for portfolio / batch review across many documents (合同批量审查, 多文档尽调, data-room screen, contract portfolio comparison, NDA screening at scale, policy-pack comparison) when the user supplies several documents plus questions or a column preset and wants an .xlsx review grid with a findings summary. For a single-document deep review use /review-contract instead.
 argument-hint: "<document set (files or directory)> [--columns <preset | question list>]"
-allowed_connectors: [ecfr_search, courtlistener_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

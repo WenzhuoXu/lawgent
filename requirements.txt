@@ -1,4 +1,7 @@
 anthropic>=0.101
+# Pinned: it bundles the Claude Code CLI that runs every claude_code turn.
+# Upgrade with scripts/upgrade_agent_sdk.md.
+claude-agent-sdk==0.2.180
 openai>=2.36
 pydantic>=2
 python-docx>=1.2

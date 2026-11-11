@@ -2,7 +2,7 @@
 name: triage-nda
 description: Rapidly triage an incoming NDA and classify it GREEN (standard approval), YELLOW (counsel review), or RED (full legal review). Use when a new NDA arrives from sales, BD, procurement, or M&A; when screening for embedded non-solicits, non-competes, or missing carveouts; when checking jurisdiction-specific carveouts (state secrets, regulator disclosure, mandatory reporting); or when deciding whether an NDA can be signed under standard delegation.
 argument-hint: "<NDA file or text>"
-allowed_connectors: ["pkulaw_*", flk_npc_search, eurlex_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 

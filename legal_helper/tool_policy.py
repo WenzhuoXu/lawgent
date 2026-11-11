@@ -86,6 +86,10 @@ READ_ONLY_SKILLS = frozenset({"cite-check"})
 # `create_deck` and `run_workflow` (whole sub-agents) and every authoring tool.
 CONCURRENT_SAFE_TOOLS = frozenset(
     {
+        # Legal research: HTTP to official databases, plus the shared reader.
+        "legal_sources",
+        "legal_search",
+        "legal_fetch",
         # Document reads and inspections: pure-Python parsers over one file.
         "read_document",
         "inspect_docx",
@@ -112,7 +116,6 @@ CONCURRENT_SAFE_TOOLS = frozenset(
         "list_skill_dir",
         "project_brief_read",
         # Public-source lookup that dispatches to the connectors below.
-        "legal_source_search",
     }
 )
 
@@ -148,8 +151,6 @@ READ_ONLY_MCP_SERVERS = frozenset(
         "pkulaw_citation_validator",
         "pkulaw_doc_link",
         "pkulaw_nl_search",
-        "courtlistener_mcp",
-        "govinfo_mcp",
     }
 )
 

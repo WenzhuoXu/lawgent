@@ -56,9 +56,9 @@ load the whole file when a single question is at issue.
 
 ## 4. PRC legal-basis and mandatory-content checks
 
-Verify every pinpoint through `pkulaw_fatiao` (`get_law_item_content`) or
-`pkulaw_citation_validator` before it enters the draft; `flk_npc_search`
-confirms existence/status only. Article numbers below are drafting
+Verify every pinpoint against the official text before it enters the draft:
+`legal_fetch` of the statute (`legal_search` jurisdiction CN) with
+`section="第N条"`, or `pkulaw_fatiao` / `pkulaw_citation_validator` where held. Article numbers below are drafting
 anchors — re-verify against the current text every run, since amendments
 renumber articles.
 

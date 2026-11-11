@@ -2,7 +2,7 @@
 name: draft-agreement
 description: Draft a new agreement or PRC litigation document from deal terms — bilingual PRC-first contracts (NDA, services, license, employment and other commercial agreements) built from the clause library, plus PRC 文书生成 (民事起诉状 / 答辩状 skeletons per Civil Procedure Law formalities). Use when the user supplies a term sheet, deal points, or case facts and wants a complete first draft (起草合同 / 合同起草 / 文书生成 / draft an NDA). For reviewing an existing contract use /review-contract instead.
 argument-hint: "<term sheet / deal terms / case facts> [--type nda|services|license|employment|起诉状|答辩状] [--side <party>] [--language zh|en|bilingual]"
-allowed_connectors: [ecfr_search, courtlistener_search, eurlex_search, "pkulaw_*", flk_npc_search]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 
@@ -30,8 +30,8 @@ The draft header block — `path` (absolute .docx under outputs/), `type`, `lang
   regulation + pinpoint (第N条 / art. / §), recorded in the draft's
   `Drafting Notes` annex and rolled up into the bundle `Sources`.
 - PRC statutory pinpoints are re-verified before the draft is emitted —
-  `pkulaw_fatiao` / `pkulaw_citation_validator` first, `flk_npc_search`
-  fallback. Unverifiable → `pinpoint unavailable` inline, and the clause
+  `legal_fetch` of the official statute text (`legal_search` jurisdiction
+  CN), or `pkulaw_citation_validator` where held. Unverifiable → `pinpoint unavailable` inline, and the clause
   is softened, never propped up by an invented article number.
 - Clause ids reuse the `/review-contract` clause buckets, so a
   draft → review round-trip shares vocabulary.

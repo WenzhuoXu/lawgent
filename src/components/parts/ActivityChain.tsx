@@ -66,11 +66,16 @@ export function thoughtSections(text: string): { title?: string; body: string }[
 function argDetail(input: unknown): string | undefined {
   if (!input || typeof input !== "object") return undefined;
   const a = input as Record<string, unknown>;
-  for (const key of ["query", "q", "keyword", "title", "name", "url", "path", "section", "article", "source"]) {
+  // `file_path`, `pattern`, `command`, `skill` and `description` are Claude
+  // Code's own tools' arguments (Read/Write/Edit, Glob/Grep, Bash, Skill).
+  for (const key of [
+    "query", "q", "keyword", "title", "name", "url", "path", "file_path", "pattern",
+    "skill", "description", "command", "section", "article", "source",
+  ]) {
     const v = a[key];
     if (typeof v === "string" && v.trim()) {
       const s = v.trim();
-      return key === "path" ? s.split("/").pop() : s.slice(0, 120);
+      return key === "path" || key === "file_path" ? s.split("/").pop() : s.slice(0, 120);
     }
   }
   return undefined;
@@ -78,10 +83,17 @@ function argDetail(input: unknown): string | undefined {
 
 function ToolGlyph({ name }: { name: string }) {
   const cls = "size-3 shrink-0 text-content-faint";
-  if (name.startsWith("web_") || name === "web_search_call") return <Globe className={cls} />;
-  if (name.startsWith("tool_search")) return <Search className={cls} />;
+  if (name.startsWith("web_") || name === "web_search_call" || name === "WebSearch" || name === "WebFetch") {
+    return <Globe className={cls} />;
+  }
+  if (name.startsWith("tool_search") || name === "ToolSearch" || name === "Glob" || name === "Grep") {
+    return <Search className={cls} />;
+  }
   if (isSourceRetrievalTool(name)) return <Scale className={cls} />;
-  if (name.startsWith("read_") || name.startsWith("load_") || name.startsWith("inspect_")) {
+  if (
+    name.startsWith("read_") || name.startsWith("load_") || name.startsWith("inspect_") ||
+    name === "Read" || name === "Skill"
+  ) {
     return <FileText className={cls} />;
   }
   return <Wrench className={cls} />;

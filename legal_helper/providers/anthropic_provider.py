@@ -6,6 +6,7 @@ import copy
 import json
 import time
 from typing import Any, Iterable, Iterator, Optional
+from urllib.parse import urlparse
 
 import httpx
 from anthropic import Anthropic
@@ -561,6 +562,27 @@ def _has_sources(text: str) -> bool:
     return any(marker in text for marker in ("Sources", "资料来源", "来源与核验说明"))
 
 
+def _citation_chips(citations: list[Any]) -> str:
+    """Inline links for a text block's web citations, as `([domain](url))`.
+
+    Claude attaches a web-search citation to the text block it supports, as a
+    separate `citations_delta`; the text deltas carry none of it, so without
+    this every cited claim reached the answer unlinked. OpenAI's search
+    answers carry the same chip shape in their text, which the answer lint
+    already collapses and moves onto the sources lines.
+    """
+    seen: list[str] = []
+    for cite in citations:
+        url = getattr(cite, "url", None) or (cite.get("url") if isinstance(cite, dict) else None)
+        if url and url not in seen:
+            seen.append(url)
+    chips = []
+    for url in seen:
+        host = urlparse(url).netloc.removeprefix("www.") or url
+        chips.append(f"([{host}]({url}))")
+    return (" " + " ".join(chips)) if chips else ""
+
+
 def _hosted_query(block: Any) -> tuple[Optional[str], Optional[str]]:
     payload = getattr(block, "input", None) or {}
     if not isinstance(payload, dict):
@@ -914,6 +936,8 @@ class AnthropicProvider:
             # model turn. The stream itself yields content_block_* events.
             for stream in runner:
                 progress = ToolProgressThrottle()
+                # Web citations per text block index, linked when the block ends.
+                block_citations: dict[Any, list[Any]] = {}
                 for ev in stream:
                     ev_type = getattr(ev, "type", None) or (ev.get("type") if isinstance(ev, dict) else None)
                     delta = getattr(ev, "delta", None)
@@ -938,6 +962,11 @@ class AnthropicProvider:
                         if pev is not None:
                             yield pev
                         continue
+                    if delta is not None and getattr(delta, "type", "") == "citations_delta":
+                        cite = getattr(delta, "citation", None)
+                        if cite is not None:
+                            block_citations.setdefault(getattr(ev, "index", None), []).append(cite)
+                        continue
                     # signature_delta (thinking block signatures) carry no user text.
 
                     if ev_type == "content_block_start":
@@ -960,6 +989,12 @@ class AnthropicProvider:
                         progress.close(getattr(ev, "index", None))
                         block = getattr(ev, "content_block", None)
                         btype = getattr(block, "type", "")
+                        cited = block_citations.pop(getattr(ev, "index", None), None)
+                        if btype == "text" and cited:
+                            chips = _citation_chips(cited)
+                            if chips:
+                                final_text_chunks.append(chips)
+                                yield StreamEvent("delta", {"text": chips})
                         if btype == "tool_use":
                             record = ToolCallRecord(
                                 name=getattr(block, "name", ""),

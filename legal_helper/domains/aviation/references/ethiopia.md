@@ -15,9 +15,9 @@ this file is the Ethiopia overlay for aviation work only.
 | Layer | Instrument | Connector |
 |---|---|---|
 | Regulator | Ethiopian Civil Aviation Authority (ECAA), under the Ministry of Transport and Logistics | `ecaa_index`, `ecaa_fetch` |
-| Primary statute | **Civil Aviation Proclamation No. 616/2008** — safety/security/economic oversight, ECAA powers, air operator certification, registration, licensing, airspace | `ethiopia_law_fetch('616/2008')` |
-| Amendment | **Civil Aviation (Amendment) Proclamation No. 1179/2020** — definitions, sanctions, enforcement | `ethiopia_law_fetch('1179/2020')` |
-| Institutional | **ECAA Re-establishment Proclamation No. 273/2002** — objectives, organs, powers | `ethiopia_law_fetch('273/2002')` |
+| Primary statute | **Civil Aviation Proclamation No. 616/2008** — safety/security/economic oversight, ECAA powers, air operator certification, registration, licensing, airspace | `legal_fetch(ref='et.negarit:616/2008')` |
+| Amendment | **Civil Aviation (Amendment) Proclamation No. 1179/2020** — definitions, sanctions, enforcement | `legal_fetch(ref='et.negarit:1179/2020')` |
+| Institutional | **ECAA Re-establishment Proclamation No. 273/2002** — objectives, organs, powers | `legal_fetch(ref='et.negarit:273/2002')` |
 | Implementing rules | Ethiopian Civil Aviation Regulations / Rules (ECAR) — personnel licensing, operations, airworthiness, air navigation, security | `ecaa_fetch('sectoral/regulation')` then follow PDF document_links |
 | Treaty layer | ICAO Convention on International Civil Aviation (Chicago 1944) — Ethiopia is an original contracting state (1947); Annexes 1–19 implemented via ECAR | `retrieve_legal(collection='aviation_treaties' / 'icao_doc', ...)` |
 | Finance/lease | Cape Town Convention + Aircraft Protocol (IDERA) — Ethiopia is a contracting state | `retrieve_legal(collection='aviation_treaties', query='Cape Town Aircraft Protocol IDERA')` |
@@ -55,11 +55,12 @@ this file is the Ethiopia overlay for aviation work only.
 
 ## 4. Source caveats
 
-- `ethiopia_law_fetch` returns a clean typed English transcript only for the
-  subset of proclamations metaappz has re-typed (e.g. 3/1995). For 616/2008,
-  1179/2020 and 273/2002 it falls back to the bilingual Amharic+English gazette
-  **scan**, where English clause text is interleaved with Ge'ez — locate the
-  English article heading for the pinpoint, and prefer `ecaa_fetch` /
-  `web_fetch` on an official ECAA PDF when one is available.
+- `legal_fetch(ref="et.negarit:<num>/<year>")` returns the typed English
+  transcript where metaappz has re-typed one (e.g. 3/1995), and otherwise the
+  gazette scan read by OCR (English column; 616/2008, 1179/2020 and 273/2002
+  are scans). Read one article with `section="Article 28"`, or search inside
+  with `query=`. OCR can misread a digit: check a pinpoint you rely on against
+  the gazette PDF (`metadata.pdf`), and prefer an official ECAA PDF
+  (`ecaa_fetch`) when one exists.
 - The ECAA site (`ecaa.gov.et`) is the authoritative regulator surface; treat
   the metaappz mirror as a convenience and flag any conflict for counsel.

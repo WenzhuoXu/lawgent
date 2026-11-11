@@ -57,8 +57,8 @@ def pkulaw_health(probe_network: bool = True) -> dict[str, Any]:
     if not tools:
         out["note"] = (
             f"tools/list against {spec.name} returned nothing — token may be "
-            "expired or the gateway is down; flk_npc_search remains the "
-            "public fallback (search/status only, no body text)."
+            "expired or the gateway is down; statute text still comes from "
+            "国家法律法规数据库 through legal_fetch (research source cn.flk)."
         )
     return out
 

@@ -1,10 +1,14 @@
-"""In-process connector layer.
+"""In-process connectors of the domain packs.
 
-Each connector is a ``@beta_tool``-decorated function with a JSON-Schema
-description that both the Anthropic and OpenAI providers can register as a
-plain function tool. ``REGISTRY`` collects them with their jurisdiction +
-domain-pack metadata so ``tools/connectors_tools.py`` can filter them per
-invocation.
+Primary law of every jurisdiction is reached through the research layer
+(``legal_helper/research``: ``legal_sources`` / ``legal_search`` /
+``legal_fetch``). What remains here are the aviation pack's regulator
+sources, which are not statute databases: the staged CAAC corpus, FAA DRS
+(ADs / ACs), EASA safety publications and Easy Access Rules, and the
+Ethiopian CAA. Each is a ``@beta_tool`` function; ``REGISTRY`` carries its
+jurisdiction and pack so ``tools/connectors_tools.py`` can gate it.
+``base.py`` is the shared HTTP plumbing (retries, TTL cache) the research
+sources use too.
 """
 
 from __future__ import annotations
@@ -12,22 +16,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .aviation import faa_title14_search
 from .caac_local import caac_local_fetch, caac_local_search
 from .easa_safety import easa_ad_fetch, easa_ad_search, easa_ear_index
-from .ethiopia import ecaa_fetch, ecaa_index, ethiopia_law_fetch, ethiopia_law_search
-from .eu import eurlex_fetch, eurlex_search
+from .ethiopia import ecaa_fetch, ecaa_index
 from .faa_drs import drs_search
-from .prc import flk_npc_fetch, flk_npc_search
-from .us_courts import courtlistener_fetch, courtlistener_search
-from .us_federal import (
-    ecfr_fetch,
-    ecfr_search,
-    federal_register_fetch,
-    federal_register_search,
-    govinfo_fetch,
-    govinfo_search,
-)
 
 
 @dataclass(frozen=True)
@@ -39,21 +31,6 @@ class ConnectorEntry:
 
 
 REGISTRY: tuple[ConnectorEntry, ...] = (
-    ConnectorEntry("ecfr_search", ecfr_search, ("US",)),
-    ConnectorEntry("ecfr_fetch", ecfr_fetch, ("US",)),
-    ConnectorEntry("federal_register_search", federal_register_search, ("US",)),
-    ConnectorEntry("federal_register_fetch", federal_register_fetch, ("US",)),
-    ConnectorEntry("govinfo_search", govinfo_search, ("US",)),
-    ConnectorEntry("govinfo_fetch", govinfo_fetch, ("US",)),
-    ConnectorEntry("courtlistener_search", courtlistener_search, ("US",)),
-    ConnectorEntry("courtlistener_fetch", courtlistener_fetch, ("US",)),
-    ConnectorEntry("eurlex_search", eurlex_search, ("EU",)),
-    ConnectorEntry("eurlex_fetch", eurlex_fetch, ("EU",)),
-    ConnectorEntry("flk_npc_search", flk_npc_search, ("CN",)),
-    ConnectorEntry("flk_npc_fetch", flk_npc_fetch, ("CN",)),
-    ConnectorEntry("ethiopia_law_search", ethiopia_law_search, ("ET",)),
-    ConnectorEntry("ethiopia_law_fetch", ethiopia_law_fetch, ("ET",)),
-    ConnectorEntry("faa_title14_search", faa_title14_search, ("US", "ICAO"), ("aviation",)),
     ConnectorEntry("caac_local_search", caac_local_search, ("CN", "ICAO"), ("aviation",)),
     ConnectorEntry("caac_local_fetch", caac_local_fetch, ("CN", "ICAO"), ("aviation",)),
     ConnectorEntry("drs_search", drs_search, ("US",), ("aviation",)),
@@ -88,25 +65,10 @@ __all__ = [
     "filter_for",
     "caac_local_fetch",
     "caac_local_search",
-    "courtlistener_fetch",
-    "courtlistener_search",
     "drs_search",
     "easa_ad_fetch",
     "easa_ad_search",
     "easa_ear_index",
     "ecaa_fetch",
     "ecaa_index",
-    "ecfr_fetch",
-    "ecfr_search",
-    "ethiopia_law_fetch",
-    "ethiopia_law_search",
-    "eurlex_fetch",
-    "eurlex_search",
-    "faa_title14_search",
-    "federal_register_fetch",
-    "federal_register_search",
-    "flk_npc_fetch",
-    "flk_npc_search",
-    "govinfo_fetch",
-    "govinfo_search",
 ]

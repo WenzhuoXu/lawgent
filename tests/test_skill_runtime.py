@@ -263,7 +263,7 @@ def test_an_external_skill_gets_the_production_toolset(monkeypatch, proc_skill):
     }
     assert {"write_text_file", "run_skill_script", "list_skill_dir"} <= names
     # No legal research surface: a deck procedure has no use for statute search.
-    assert "legal_source_search" not in names
+    assert "legal_search" not in names
     assert "retrieve_legal" not in names
 
 

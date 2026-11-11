@@ -63,14 +63,14 @@ passenger-rights cites, fan out as follows (parallel where independent):
 2. **ICAO Annex / Doc cites** → `retrieve_legal(collection="icao_doc")`.
 3. **AD numbers** → `drs_search(query=<AD#>, doc_types=["AD"])` for FAA;
    `easa_ad_fetch(ad_number=<num>)` for EASA.
-4. **CFR cites** → `faa_title14_search` or `ecfr_search`.
-5. **EU regs** → `eurlex_search(document_type="REG")`.
+4. **CFR cites** → `legal_fetch(ref="us.ecfr:14/<section>")` (or `legal_search(jurisdiction="US", source="us.ecfr", filters={"title": 14})`).
+5. **EU regs** → `legal_search(jurisdiction="EU", query=<citation>)` → `legal_fetch(ref, section="Article N")`; check `amended_by`.
 6. **CCAR / CAAC 法律法规 cites** →
    `aviation_source_search(source="caac_local_fetch", identifier=<title or CCAR part>, article=<article>)`.
    Pin the draft's article number to the returned `article_text`. If
    `article_text` is empty, check the result's `alternates` for a revision
    that contains the article; if still missing or the entry is flagged
-   `pdf_stub`, cross-check `pkulaw_fatiao__get_law_item_content` and treat
+   `pdf_stub`, cross-check `pkulaw_fatiao__get_law_article` and treat
    that as authoritative. Flag any cite whose body could not be produced
    from either source as `needs human verification`.
 

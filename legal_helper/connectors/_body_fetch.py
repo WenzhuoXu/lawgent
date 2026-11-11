@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 import re
+import warnings
 from typing import Any
 
 import httpx
@@ -32,10 +33,14 @@ _HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 def _html_to_text(html: str, *, xml: bool = False) -> str:
     try:
-        from bs4 import BeautifulSoup
+        from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
     except ImportError:
         return " ".join(_HTML_TAG_RE.sub(" ", html).split())
-    soup = BeautifulSoup(html, "lxml-xml" if xml else "lxml")
+    # XHTML (every CJEU judgment in Cellar) opens with an XML declaration;
+    # the HTML parser reads it correctly but warns on each fetch.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+        soup = BeautifulSoup(html, "lxml-xml" if xml else "lxml")
     for tag in soup(["script", "style", "noscript", "header", "footer", "nav"]):
         tag.decompose()
     return " ".join(soup.get_text(separator=" ").split())

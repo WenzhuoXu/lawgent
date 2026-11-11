@@ -55,7 +55,7 @@ def test_nothing_is_cleared_below_the_ceiling():
 def test_old_results_are_saved_and_stubbed_past_the_ceiling():
     ctx = _ctx()
     history = [{"role": "user", "content": "go"}, _fco("a"), _fco("b"), _fco("c")]
-    names = {"a": "legal_source_search", "b": "read_document", "c": "inspect_xlsx"}
+    names = {"a": "legal_search", "b": "read_document", "c": "inspect_xlsx"}
     ctx.before_openai_request(history, names)  # first request: establishes the tail
     ctx.observe(9_500, 400)
     history.append(_fco("d"))  # the round the model has not read yet
@@ -65,7 +65,7 @@ def test_old_results_are_saved_and_stubbed_past_the_ceiling():
     cleared = [i for i in history[1:4] if i["output"] != _BIG]
     assert cleared, "nothing was cleared past the ceiling"
     stub = cleared[0]["output"]
-    assert "read_document" in stub and "legal_source_search" in stub
+    assert "read_document" in stub and "legal_search" in stub
     path = stub.split("saved at ", 1)[1].split(" — ", 1)[0]
     with open(path, encoding="utf-8") as fh:
         assert fh.read() == _BIG  # lossless: the evidence is on disk
@@ -94,7 +94,7 @@ def test_clearing_aims_well_below_the_ceiling_so_it_is_rare():
 def test_deliverables_are_cleared_only_after_ordinary_evidence():
     ctx = _ctx()
     history = [_fco("memo"), _fco("ev1"), _fco("ev2")]
-    names = {"memo": "cite_check_report_tool", "ev1": "legal_source_search", "ev2": "read_document"}
+    names = {"memo": "cite_check_report_tool", "ev1": "legal_search", "ev2": "read_document"}
     ctx.before_openai_request(history, names)
     ctx.observe(9_900, 200)
     history.append(_fco("tail", "x"))
@@ -170,11 +170,11 @@ def test_clearing_notes_stay_silent_until_the_trigger_is_in_sight():
     # Far below half the trigger: nothing saved, nothing said.
     assert notes.notes_for([("read_document", _BIG, 0, None)]) == []
     ctx.observe(49_000, 500)
-    lines = notes.notes_for([("legal_source_search", _BIG, 0, None), ("inspect_xlsx", "small", 0, None)])
+    lines = notes.notes_for([("legal_search", _BIG, 0, None), ("inspect_xlsx", "small", 0, None)])
     # One catch-up note for the earlier result, one for the sizeable new one;
     # the small result is not worth clearing and gets none.
     assert len(lines) == 2
-    assert "read_document" in lines[0] and "legal_source_search" in lines[1]
+    assert "read_document" in lines[0] and "legal_search" in lines[1]
     path = lines[0].split("saved at ", 1)[1].split(". If it", 1)[0]
     with open(path, encoding="utf-8") as fh:
         assert fh.read() == _BIG  # lossless: the evidence is on disk before any clearing

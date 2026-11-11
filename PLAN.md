@@ -69,7 +69,7 @@ usable interface to:
    (playbook · method list · pack list · tool-search groups · workflow guidance)
      always loaded: read_document · load_skill · read_skill_file · load_pack ·
                     run_workflow · project memory · hosted web search
-     tool search:   connectors · legal_source_search · retrieve_legal ·
+     tool search:   legal_search · legal_fetch · retrieve_legal ·
                     document tools · create_deck → ppt-master · pack sources
                               │
                               ├── run_workflow(objective, tasks ≤ 3)

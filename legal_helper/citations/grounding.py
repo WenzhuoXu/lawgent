@@ -129,67 +129,66 @@ def _in_force_status(status_text: str | None) -> str | None:
 
 
 def _pkulaw_fetch_statute(law_name: str, article: str) -> dict[str, Any]:
-    """Resolve (law title, 条号) via the ``pkulaw_fatiao`` MCP (primary PRC path)."""
+    """Resolve (law title, 条号) through PKULaw's article service — the
+    research layer's ``cn.pkulaw`` source, so there is one PKULaw client."""
     try:
-        from ..mcp.registry import load_registry
-        from ..mcp.sync_client import http_call_tool
+        from ..research.sources.cn import PkulawSource
 
-        spec = next((s for s in load_registry() if s.name == "pkulaw_fatiao"), None)
+        src = PkulawSource()
+        src.require_keys()
+        doc = src.fetch(f"article/{law_name}|{article}")
     except Exception as exc:  # noqa: BLE001 — fetch failures are reported, not raised
-        return {"body_text": "", "error": f"MCP registry unavailable: {exc}",
+        return {"body_text": "", "error": f"{type(exc).__name__}: {exc}"[:500],
                 "connector": "pkulaw_fatiao"}
-    if spec is None:
-        return {"body_text": "", "error": "pkulaw_fatiao MCP not configured in .mcp.json",
-                "connector": "pkulaw_fatiao"}
-    raw = http_call_tool(
-        spec, "get_law_item_content", {"law_name": law_name, "article_number": article}
-    )
-    body, error, status = raw or "", None, None
-    try:
-        obj = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        obj = None  # plain-text 条文 body
-    if isinstance(obj, dict):
-        if obj.get("error"):
-            body, error = "", str(obj["error"])
-        else:
-            body = str(
-                obj.get("content") or obj.get("text") or obj.get("body_text")
-                or json.dumps(obj, ensure_ascii=False)
-            )
-            status = str(obj.get("timeliness") or obj.get("效力") or obj.get("status") or "") or None
-    # PKULaw prepends 效力 metadata to the article text; scan the head as a
-    # fallback when no structured field came back.
+    status = doc.metadata.get("status")
     return {
-        "body_text": body,
-        "error": error,
+        "body_text": doc.text,
+        "error": None,
         "extractor": "pkulaw_fatiao",
         "connector": "pkulaw_fatiao",
-        "in_force_status": _in_force_status(status or body[:400]),
+        "in_force_status": _in_force_status(status or doc.text[:400]),
     }
 
 
-def _flk_status_fallback(law_name: str) -> dict[str, Any] | None:
-    """flk.npc.gov.cn fallback — status metadata only, never body text."""
+def _flk_fetch_statute(law_name: str, article: str) -> dict[str, Any]:
+    """The article's official text from 国家法律法规数据库 (the database's own
+    Word file), preferring the version in force; status from the same record."""
     try:
-        from ..connectors.prc import flk_npc_search
+        from ..research.sections import find_section, detect_sections
+        from ..research.sources.cn import FlkSource
 
-        data = json.loads(flk_npc_search.call({"query": law_name, "per_page": 3}))
-    except Exception:  # noqa: BLE001
-        return None
-    for row in data.get("results") or []:
-        title = row.get("title") or ""
-        if law_name in title or title in law_name:
-            return row
-    return None
+        src = FlkSource()
+        hits = src.search(law_name, limit=5)
+        named = [h for h in hits if law_name in h.title or h.title in law_name] or hits
+        if not named:
+            return {"body_text": "", "error": f"flk.npc.gov.cn has no statute titled {law_name!r}", "connector": "cn.flk"}
+        best = next((h for h in named if (h.status or "") == "有效"), named[0])
+        doc = src.fetch(best.ref.split(":", 1)[1])
+        found = find_section(detect_sections(doc.text), article)
+        if not found:
+            return {
+                "body_text": "", "connector": "cn.flk",
+                "error": f"《{doc.title}》 ({best.status}) has no {article}",
+                "in_force_status": _in_force_status(best.status),
+            }
+        sec = found[0]
+        return {
+            "body_text": doc.text[sec.start:sec.end].strip(),
+            "error": None,
+            "extractor": "cn.flk",
+            "connector": "cn.flk",
+            "in_force_status": _in_force_status(best.status),
+        }
+    except Exception as exc:  # noqa: BLE001 — grounding reports, never raises
+        return {"body_text": "", "error": f"flk.npc.gov.cn lookup failed: {exc!s}"[:300], "connector": "cn.flk"}
 
 
 def prc_aware_fetch(ref: str) -> dict[str, Any]:
     """Resolve a citation ref to source body text.
 
     http(s) URLs go through the web body-fetch; 《法律名》第N条 refs resolve
-    via ``pkulaw_fatiao`` (the primary PRC path per CLAUDE.md) with
-    ``flk_npc_search`` as the status-only fallback. Other structured refs
+    via ``pkulaw_fatiao``, then the official text of 国家法律法规数据库
+    (``research`` source ``cn.flk``). Other structured refs
     (案号, 法释…) return an explicit error so they surface as
     ``could_not_check`` — never a silent pass.
     """
@@ -210,15 +209,11 @@ def prc_aware_fetch(ref: str) -> dict[str, Any]:
     law_name, article = parsed
     result = _pkulaw_fetch_statute(law_name, article)
     if not result.get("body_text"):
-        row = _flk_status_fallback(law_name)
-        if row:
-            result["in_force_status"] = (
-                _in_force_status(str(row.get("status") or "")) or result.get("in_force_status")
-            )
-            result["error"] = (
-                (result.get("error") or "pkulaw_fatiao returned no body")
-                + f"; flk.npc.gov.cn status for 《{row.get('title') or law_name}》: {row.get('status')}"
-            )
+        official = _flk_fetch_statute(law_name, article)
+        if official.get("body_text"):
+            return official
+        result["error"] = "; ".join(e for e in (result.get("error"), official.get("error")) if e) or None
+        result["in_force_status"] = official.get("in_force_status") or result.get("in_force_status")
     return result
 
 

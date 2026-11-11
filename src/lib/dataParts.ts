@@ -98,6 +98,49 @@ export type CompactionData = {
   reason?: string;
   lookback?: number;
   transcriptMessages?: number;
+  /** Claude Code's own compaction: "auto" or "manual", and the context size before */
+  trigger?: string;
+  preTokens?: number;
+};
+
+/** Claude Code's plan for the turn (its TodoWrite list), latest state. */
+export type TodoItem = {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | string;
+  activeForm?: string;
+};
+export type TodosData = { todos: TodoItem[] };
+
+/** The claude.ai subscription's usage window during the turn. */
+export type RateLimitData = {
+  status: "allowed" | "allowed_warning" | "rejected" | string;
+  rateLimitType?: string | null;
+  utilization?: number | null;
+  resetsAt?: number | null;
+};
+
+/** The plan's limits after the turn (Claude Code's `/usage`). */
+export type PlanUsageData = {
+  subscriptionType?: string | null;
+  limits: {
+    kind: string;
+    group?: string | null;
+    percent?: number | null;
+    resetsAt?: string | null;
+    severity?: string;
+    isActive?: boolean;
+  }[];
+};
+
+/** The Claude Code session that served the turn. */
+export type SessionData = {
+  sessionId?: string;
+  model?: string;
+  /** "subscription" (the claude.ai login) or where an API key came from */
+  auth?: string;
+  version?: string;
+  toolCount?: number;
+  mcpServers?: { name: string; status: string }[];
 };
 
 export type MemoryData = { summary?: string };
@@ -135,7 +178,9 @@ export type PhaseId =
   | "gathering"
   | "workflow"
   | "drafting"
-  | "auditing";
+  | "auditing"
+  | "compacting"
+  | "retrying";
 
 export type PhaseData = { phase: PhaseId; detail?: string };
 
@@ -152,6 +197,10 @@ export type LegalDataParts = {
   degraded: DegradedData;
   phase: PhaseData;
   usage: UsageData;
+  todos: TodosData;
+  rateLimit: RateLimitData;
+  planUsage: PlanUsageData;
+  session: SessionData;
 };
 
 /** Metadata carried on assistant messages (duration, run id, provider). */

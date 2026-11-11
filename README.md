@@ -12,8 +12,8 @@ redline, workbook, or deck.
 <br/>
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
-![Providers](https://img.shields.io/badge/providers-Anthropic%20Claude%20%7C%20OpenAI%20GPT-6E56CF)
-![Jurisdictions](https://img.shields.io/badge/jurisdictions-CN%20·%20US%20·%20EU%20·%20UK%20·%20HK%20·%20ET%20·%20ICAO-0EA5A4)
+![Engines](https://img.shields.io/badge/engines-Claude%20Code%20(Agent%20SDK)%20%7C%20Anthropic%20API%20%7C%20OpenAI%20API-6E56CF)
+![Sources](https://img.shields.io/badge/official%20sources-37%20in%2022%20jurisdictions-0EA5A4)
 ![RAG](https://img.shields.io/badge/RAG-bge--m3%20%2B%20Qdrant%20(local)-F59E0B)
 ![License](https://img.shields.io/badge/license-MIT-64748B)
 
@@ -33,8 +33,105 @@ redline, workbook, or deck.
 
 ---
 
+## What's new (November 2026)
+
+Two changes, and a change of direction.
+
+### 1. Legal sources: a rebuilt research layer, 37 official databases in 22 jurisdictions
+
+The per-database connectors (`flk_npc_*`, `eurlex_*`, `ecfr_*`, `federal_register_*`,
+`govinfo_*`, `courtlistener_*`, `ethiopia_law_*`, `legal_source_search`, and the
+CourtListener / GovInfo MCP servers) are gone. In their place are three tools that reach every
+jurisdiction the same way:
+
+- `legal_sources(jurisdiction)` lists the official databases, what each covers, its search
+  modes and whether it needs a key;
+- `legal_search(jurisdiction, query, kind, mode)` finds legislation or cases by keyword,
+  full text, or meaning (native semantic search where the database has it, otherwise its hits
+  re-ranked by the local bge reranker);
+- `legal_fetch(ref, section, query)` reads one document: its outline, one provision by its own
+  label (第128条, Article 9, s 58, 제3조, Điều 5, มาตรา 7/1, [45] for a judgment paragraph), a
+  range of provisions, or the passages that answer a question.
+
+Each database is one small adapter (`legal_helper/research/sources/<code>.py`). Provisions,
+ranges, in-document search, caching, OCR for scans and the tool surface are shared, so adding a
+jurisdiction is typically a few hundred lines. A database that cannot be reached says so rather than
+returning "nothing found", and `serve` probes every source live at startup (search, fetch, one
+provision). At the last probe (2026-11-09), 35 of 37 passed.
+
+| Jurisdiction | Official sources (`source id`) | Holds | Search |
+|---|---|---|---|
+| 🇨🇳 **China (PRC)** | 北大法宝 PKULaw (`cn.pkulaw`, key) · 国家法律法规数据库 (`cn.flk`) | 法律 to 部门规章 and 地方, every version and status, official Word text; 司法案例 | semantic, keyword, full text |
+| 🇭🇰 **Hong Kong** | e-Legislation, DoJ open data (`hk.elegislation`) | every Ordinance and subsidiary instrument, en / 繁 (both authentic) / 简 | keyword |
+| 🇲🇴 **Macau** | 印務局 公報 / 搜法易 (`mo.legis`) · 澳門法院 (`mo.court`) | legislation with in-force state; TUI / TSI / TJB / TA judgments, zh / pt | full text |
+| 🇹🇼 **Taiwan** | 全國法規資料庫 (`tw.moj`) | ~1,350 laws and ~10,450 regulations, zh / en | keyword, full text |
+| 🇺🇸 **United States** | eCFR (`us.ecfr`) · Federal Register (`us.federal_register`) · GovInfo (`us.govinfo`, key) · U.S. Code, OLRC (`us.uscode`) · CourtListener (`us.courtlistener`) | the current CFR, rules and notices, the U.S. Code, Public Laws; federal and state opinions | full text; semantic for cases |
+| 🇺🇸 **California** | California Codes, Legislature PUBINFO (`us_ca.codes`) | all 29 codes and the Constitution, weekly release | citation, keyword |
+| 🇪🇺 **European Union** | EUR-Lex / Cellar (`eu.eurlex`) · InfoCuria (`eu.curia`) | treaties, regulations, directives, consolidated versions, in-force and amendments; CJEU / General Court judgments and AG opinions | keyword, full text |
+| 🇬🇧 **United Kingdom** | legislation.gov.uk (`gb.legislation`) | revised Acts, SIs, devolved and retained EU law, point in time, unapplied effects | keyword, full text |
+| 🇫🇷 **France** | Légifrance (`fr.legifrance`, key) · Judilibre (`fr.judilibre`, key) | codes, lois, décrets, JO, Conseil d'État / constitutionnel; Cour de cassation and appeal courts | full text |
+| 🇳🇱 **Netherlands** | wetten.overheid.nl (`nl.wetten`) · Rechtspraak.nl (`nl.rechtspraak`) | consolidated national regulations; judgments and AG conclusions | keyword, full text |
+| 🇯🇵 **Japan** | e-Gov 法令 API v2 (`jp.egov`) · Japanese Law Translation (`jp.jlt`, secondary) | current 法律・政令・省令 with revision history; unofficial English | keyword, full text |
+| 🇰🇷 **Korea** | 국가법령정보센터 law.go.kr (`kr.law_web`) | statutes with every version, 판례, unofficial English | keyword, full text |
+| 🇸🇬 **Singapore** | eLitigation (`sg.elitigation`) | Court of Appeal, High Court and SICC judgments | full text |
+| 🇲🇾 **Malaysia** | eJudgment (`my.ejudgment`) | Federal Court, Court of Appeal, High Court grounds of judgment | keyword (catchwords) |
+| 🇵🇭 **Philippines** | Supreme Court E-Library (`ph.elibrary`) · LawPhil (`ph.lawphil`) | Supreme Court decisions since 1901; Republic Acts and decrees as enacted | full text, keyword |
+| 🇹🇭 **Thailand** | Office of the Council of State (`th.ocs`) | Acts, Codes, decrees, section-level text, every version | keyword, full text |
+| 🇻🇳 **Vietnam** | Công báo (`vn.congbao`) · vbpl.vn (`vn.vbpl`) | Official Gazette incl. consolidated texts; MoJ database with in-force status | keyword, full text |
+| 🇮🇩 **Indonesia** | JDIH Setneg (`idn.jdih`) | Undang-Undang to Inpres, with status and amendment links | keyword |
+| 🇰🇭 **Cambodia** | Open Development Cambodia (`kh.odc`, curated, not official) | laws, royal decrees, sub-decrees, prakas | keyword |
+| 🇦🇺 **Australia** | Federal Register of Legislation (`au.frl`) · Victorian Legislation (`au.vic`, search and versions only) | Commonwealth Acts and instruments with in-force status | keyword, full text |
+| 🇨🇦 **Canada** | Justice Laws (`ca.justice`) · Lexum (`ca.lexum`) | consolidated federal Acts and regulations, en / fr; SCC, FCA and FC decisions | keyword, full text |
+| 🇶🇦 **Qatar** | Al Meezan, Ministry of Justice (`qa.almeezan`) | laws, decrees, resolutions with per-article status; Court of Cassation rulings, ar / en | keyword, full text |
+| 🇪🇹 **Ethiopia** | Federal Negarit Gazeta (`et.negarit`) | federal proclamations; scans read by OCR | keyword |
+
+"Key" marks a source that needs a free or subscribed credential (see
+[API keys](#api-keys-and-what-unlocks-what)); without it the source reports `needs key`
+instead of an empty result. Deliberately left out: UK case law (the Open Justice Licence bars
+computational analysis), Malaysian legislation and BC Laws (robots rules or signed links), and
+the Taiwan and Vietnam court sites (unreachable from the test host). The aviation pack keeps its
+own regulator tools (CAAC, FAA DRS, EASA, ECAA) on top of this layer.
+
+### 2. A second channel: Claude Code, with Lawgent as a legal plugin
+
+A chat can now run on **Claude Code** instead of this repository's own agent loop. Provider
+`claude_code` (the default in `config.yaml`) drives the `claude` CLI through the
+[Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-python), signed in with a
+claude.ai subscription, and Claude Code's own loop answers the turn. Lawgent plugs in as:
+
+- **an in-process MCP server `legal`**: the research layer, PKULaw, the local corpus, Office
+  documents, diagrams, deadline arithmetic, packs and project memory, the tools Claude Code has
+  no equivalent for;
+- **a generated plugin `legal`**: every legal method, plus ppt-master and the GB/T 9704 公文
+  procedure, as Claude Code skills;
+- **the playbook and answer contract** as the system prompt, and two sub-agents:
+  `legal-specialist` (a research bundle under the specialist contract) and `deck-builder`
+  (ppt-master).
+
+Claude Code supplies the rest: web search and fetch, file tools, Bash, planning, sub-agents,
+tool search, context compaction and session resume. Each chat resumes its own Claude Code
+session; the web UI shows the same chain of reasoning, tool calls, sub-agents and plan card,
+and the usage panel shows the plan's limits above the list-price equivalent. Nothing from the host's
+own Claude Code setup reaches a legal answer: settings sources are empty, the MCP config is
+strict, tools are allowlisted, and credentials are scrubbed from the CLI's environment. The SDK
+is pinned (it bundles the CLI) and upgraded by a checked procedure
+(`scripts/upgrade_agent_sdk.md`).
+
+### Direction from here
+
+The point of the second channel is to stop maintaining a general-purpose agent harness by hand.
+Context management, compaction, tool search, sub-agent orchestration and provider quirks are
+what Claude Code already does and keeps up to date. From here on, expect most work to land on
+the **legal** side: more official sources and jurisdictions, legal methods and domain packs,
+citation grounding, and Word / PDF / deck output. The `anthropic` and `openai` providers still
+run this repository's own author loop on API keys and stay selectable per chat, but that loop
+is now in maintenance, and the rest of this README describes it where it says "the harness".
+
+---
+
 ## Table of contents
 
+- [What's new (November 2026)](#whats-new-november-2026)
 - [What it is](#what-it-is)
 - [What it looks like](#what-it-looks-like)
 - [Architecture](#architecture)
@@ -61,9 +158,10 @@ article numbers, and knows one legal system. This repository is the other thing 
 **harness** around the model that makes legal output checkable. Three commitments shape it:
 
 **1. Primary sources, not recollection.** Statutes, regulations, and judgments are fetched
-live from the databases that publish them — 国家法律法规数据库, PKULaw, eCFR, the Federal
-Register, GovInfo, CourtListener, EUR-Lex, ECAA — or read from a locally ingested corpus
-(the CAAC rules, ICAO documents). Where no connector exists, the official gazette, regulator
+live from the databases that publish them — 37 official sources in 22 jurisdictions, from
+国家法律法规数据库 and PKULaw to EUR-Lex, eCFR and e-Gov
+([the table](#1-legal-sources-a-rebuilt-research-layer-37-official-databases-in-22-jurisdictions))
+— or read from a locally ingested corpus (the CAAC rules, ICAO documents). Where no connector exists, the official gazette, regulator
 or court site is searched. The rule is to cite only what was read.
 
 **2. Every claim carries a pinpoint, and pinpoints are audited, not trusted.** An answer that
@@ -80,7 +178,8 @@ hierarchy it follows change with the jurisdiction; the answer's language follows
 PRC law is the default frame: the playbook ranks legislation in 立法法 order, weight-labels
 every case and cites the version in force on the date of the facts
 ([details](#multi-nation-one-harness-many-legal-systems)). US and EU are first-class
-comparative systems; ET has its own law connectors, and ICAO ships with the aviation pack.
+comparative systems, and twenty more jurisdictions have their own official sources; ICAO
+ships with the aviation pack.
 
 Around them sit durable project memory for matters that outlive a chat and a per-turn cost
 ledger. The document layer reads what a practice receives (legacy Word and WPS files,
@@ -144,7 +243,7 @@ flowchart TB
 
     subgraph G["Deferred tools — found by the provider's native tool search"]
         direction LR
-        CN["CN<br/>flk.npc.gov.cn<br/>PKULaw"] ~~~ US["US<br/>eCFR · FR<br/>GovInfo · CourtListener"] ~~~ EU["EU<br/>EUR-Lex"] ~~~ ET["ET<br/>Negarit Gazeta<br/>mirror"] ~~~ AV["Aviation pack<br/>CAAC · FAA<br/>EASA · ECAA"] ~~~ RAG["Local RAG<br/>bge-m3 + Qdrant<br/>+ rerank"] ~~~ DOC["Documents<br/>Word · PDF · XLSX<br/>decks · deadlines"]
+        RS["Research layer<br/>legal_sources · legal_search · legal_fetch<br/>37 official sources · 22 jurisdictions"] ~~~ AV["Aviation pack<br/>CAAC · FAA<br/>EASA · ECAA"] ~~~ RAG["Local RAG<br/>bge-m3 + Qdrant<br/>+ rerank"] ~~~ DOC["Documents<br/>Word · PDF · XLSX<br/>decks · deadlines"]
     end
 
     A --> QC["Citation audit before reveal<br/>extract → validate → round-trip quotes → repair"]
@@ -169,6 +268,16 @@ Claude-only or GPT-only branch. Only the operational tools are loaded on every r
 rest wait behind each provider's native tool search ([the tool surface](#the-tool-surface)).
 Detail: [runtime internals](#runtime-internals).
 
+**Two engines behind one UI.** The diagram above is the `anthropic` / `openai` path: this
+repository's own author loop on API keys. With provider `claude_code`
+(`legal_helper/claude_code/`), the turn runs inside Claude Code instead: its built-in tools
+and loop, the legal tools as the in-process MCP server `legal`, the methods and procedures as
+skills of the `legal` plugin, and `Agent` sub-agents in place of `run_workflow` and
+`create_deck` ([what's new](#2-a-second-channel-claude-code-with-lawgent-as-a-legal-plugin)).
+`ClaudeCodeExecutor.stream` emits the same event stream as the author loop, so the server, the
+web UI, the run record and the chat history do not care which engine answered, and a chat can
+switch engines mid-matter.
+
 ---
 
 ## Quickstart
@@ -183,7 +292,10 @@ conda install -n llm graphviz  # `dot` draws diagram pictures; `serve` warns if 
 # Optional: LibreOffice (`soffice` on PATH) for Office previews, .doc/.rtf/.odt/.wps and
 # compare_docx; ppt-master for decks (see External procedural skills).
 
-# 2. Keys — at least one provider key
+# 2. An engine. Either a claude.ai login for the Claude Code channel (the default
+#    `provider: claude_code`; the pinned claude-agent-sdk bundles the CLI) …
+claude auth login
+#    … or an API key, with `provider: anthropic` / `openai` in config.yaml
 cp .env.example .env           # ANTHROPIC_API_KEY / OPENAI_API_KEY / PKULAW_API_TOKEN / …
 
 # 3. Ask it something
@@ -202,18 +314,19 @@ python -m legal_helper run --jurisdiction US --task "Does 14 CFR 121 permit this
 python -m legal_helper run --domain-pack aviation \
     --task "Review this dry-lease against the playbook" \
     --input examples/aviation/sample_aircraft_lease.md
-MODEL_PROVIDER=openai python -m legal_helper chat   # or anthropic; nothing else changes
+MODEL_PROVIDER=openai python -m legal_helper chat   # or anthropic / claude_code; nothing else changes
 ```
 
 ### API keys and what unlocks what
 
 | Variable | Unlocks | Required? |
 |---|---|---|
-| `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` | Claude or GPT provider, with its hosted web search and fetch | at least one |
-| `PKULAW_API_TOKEN` | The nine PKULaw MCP sub-services (primary PRC lookup) | optional — falls back to flk.npc.gov.cn: a statute's status and versions, not its text |
-| `GOVINFO_API_KEY` | GovInfo, directly and through GPO's GovInfo MCP | optional — the GovInfo tools fail without it |
+| claude.ai login (`claude auth login`) | The `claude_code` engine, on the subscription's plan limits; it expires and must be renewed | one engine is required: this … |
+| `ANTHROPIC_API_KEY` · `OPENAI_API_KEY` | The `anthropic` / `openai` engine, with its hosted web search and fetch | … or one of these |
+| `PKULAW_API_TOKEN` | Source `cn.pkulaw` and the nine PKULaw MCP sub-services, sent as `Authorization: Bearer` (mcp.pkulaw.com → 控制台 → 应用管理) | optional — `cn.flk` still serves official statute text, versions and status, but no 部门规章 and no cases |
+| `GOVINFO_API_KEY` | Source `us.govinfo` (api.data.gov key) | optional — the source reports `needs key` |
+| `PISTE_CLIENT_ID` · `PISTE_CLIENT_SECRET` | Sources `fr.legifrance` and `fr.judilibre` (a free PISTE app) | optional — the sources report `needs key` |
 | `COURTLISTENER_API_TOKEN` | Higher CourtListener rate limits | optional |
-| `COURTLISTENER_MCP_TOKEN` | CourtListener's official MCP server (`verify_citations`), a secondary US path; an OAuth bearer, not the REST token | optional |
 
 Keys come from the environment or from `.env` / `legal_helper/api_key`, both gitignored.
 
@@ -221,20 +334,26 @@ Keys come from the environment or from `.env` / `legal_helper/api_key`, both git
 
 ## Multi-nation: one harness, many legal systems
 
-Jurisdiction is a runtime filter, not a prompt hint. `filter_for(jurisdictions, packs)` in
-`legal_helper/connectors/__init__.py` decides which connectors an agent can see, and the MCP
-registry is filtered the same way. The set is the run's default plus its secondary
-(comparative) jurisdictions — from `config.yaml`, a project or `--jurisdiction` — plus those
-an active pack declares. Without CN, PKULaw and flk.npc.gov.cn stay hidden.
+Every jurisdiction's official databases are reached through the same three research tools,
+`legal_sources` / `legal_search` / `legal_fetch`, with the jurisdiction as an argument; the
+sources and what each holds are in the
+[table above](#1-legal-sources-a-rebuilt-research-layer-37-official-databases-in-22-jurisdictions).
+A national query reaches the sub-national sources too (US → California) and the other way
+round, because both bodies of law apply there. The prompt names each jurisdiction's databases,
+so the model does not assume a country is uncovered and fall back to web pages.
 
-| Jurisdiction | Primary-source stack | Tools the agent gets |
+The run's default and secondary (comparative) jurisdictions — from `config.yaml`, a project or
+`--jurisdiction` — still decide which pack connectors and MCP servers an agent can see
+(`filter_for(jurisdictions, packs)` in `legal_helper/connectors/__init__.py`). On top of the
+research layer, a domain pack adds its own regulators:
+
+| Pack | Layer | Tools |
 |---|---|---|
-| 🇨🇳 **CN** (default) | PKULaw (statutes, 司法案例, 检察文书, 律所文章), 国家法律法规数据库 | `pkulaw_*` (9 MCP sub-services), `flk_npc_search/fetch`; aviation pack: `caac_local_search/fetch` |
-| 🇺🇸 **US** | eCFR, Federal Register, GovInfo, CourtListener | `ecfr_search/fetch`, `federal_register_search/fetch`, `govinfo_search/fetch`, `courtlistener_search/fetch`; aviation pack: `faa_title14_search`, `drs_search` |
-| 🇪🇺 **EU** | EUR-Lex (CELEX + SPARQL), EASA | `eurlex_search/fetch`; aviation pack: `easa_ad_search/fetch`, `easa_ear_index` |
-| 🇪🇹 **ET** | Federal Negarit Gazeta mirror, ECAA | `ethiopia_law_search/fetch`; aviation pack: `ecaa_index/fetch` |
-| ✈️ **ICAO** | Chicago Convention + annexes, ICAO docs, Cape Town / IDERA | local RAG collections `icao_doc`, `aviation_treaties` |
-| 🇬🇧 **UK** / 🇭🇰 **HK** | No dedicated connector yet; hosted web search + fetch | `web_search`, `web_fetch`, `fetch_url_to_artifact` |
+| ✈️ **aviation** · CN | CAAC rules (CCAR) from the staged local corpus | `caac_local_search/fetch`, RAG collection `caac_ccar` |
+| ✈️ **aviation** · US | FAA Dynamic Regulatory System (ADs, ACs) | `drs_search` |
+| ✈️ **aviation** · EU | EASA airworthiness directives, Easy Access Rules | `easa_ad_search/fetch`, `easa_ear_index` |
+| ✈️ **aviation** · ET | Ethiopian Civil Aviation Authority | `ecaa_index/fetch` |
+| ✈️ **aviation** · ICAO | Chicago Convention + annexes, ICAO docs, Cape Town / IDERA | RAG collections `icao_doc`, `aviation_treaties` |
 
 **Comparative work is the normal case.** The author holds every configured jurisdiction's
 connectors, so a short comparison is answered in its own loop; for a market-entry memo whose
@@ -407,9 +526,9 @@ reaches the export step.
 
 ## The tool surface
 
-82 in-process function tools (59 harness tools and 23 primary-source connectors), plus the
-tools of the HTTP MCP servers (the nine PKULaw services, and CourtListener's and GovInfo's
-official servers) and the hosted web search / fetch pair. They are assembled per turn from who
+In-process function tools (the harness's own tools, the three research tools over every
+official source, and the aviation pack's regulator connectors), plus the tools of the nine
+PKULaw HTTP MCP services and the hosted web search / fetch pair. They are assembled per turn from who
 is calling (author, specialist or procedure sub-agent), a specialist's method, the
 jurisdictions and the packs. `run_workflow`, `create_deck` and `run_procedure` are the only
 tools that start a sub-agent; a workflow task is a legal method or general work, never a
@@ -432,16 +551,11 @@ path, and a new model must pass the same probe.
 
 | Tool | Purpose |
 |---|---|
-| `legal_source_search` | One entry point over eCFR, Federal Register, GovInfo, CourtListener, EUR-Lex and 国家法律法规数据库, chosen by `source` |
-| `ecfr_search` · `ecfr_fetch` | US Code of Federal Regulations, current and historical |
-| `federal_register_search` · `federal_register_fetch` | Rules, proposed rules, notices |
-| `govinfo_search` · `govinfo_fetch` | US Code, CFR, bills, committee and CRS material |
-| `courtlistener_search` · `courtlistener_fetch` | US case law and dockets |
-| `eurlex_search` · `eurlex_fetch` | EU law by CELEX / title / SPARQL |
-| `flk_npc_search` · `flk_npc_fetch` | 国家法律法规数据库 (free PRC fallback) |
-| `pkulaw_*` (9 MCP services) | PRC statutes by 条号, semantic statute and case search, 案号 recognition, 法条 traceback, citation validation, doc linking, NL search |
-| `ethiopia_law_search/fetch` · `ecaa_index/fetch` | Ethiopian proclamations and ECAA regulations |
-| `aviation_source_search` · `faa_title14_search` · `drs_search` · `easa_ad_*` · `easa_ear_index` · `caac_local_*` | Aviation regulators (pack-gated); `aviation_source_search` is one entry point over CAAC, FAA DRS, EASA and Ethiopian sources |
+| `legal_sources` | The official databases each jurisdiction has, their coverage, modes and keys |
+| `legal_search` | Legislation and cases in one jurisdiction: keyword, full text, or semantic |
+| `legal_fetch` | A document's official text: outline, one provision by its label (第128条, Article 9, s 58), a range, or the passages answering a query |
+| `pkulaw_*` (9 MCP services, specialists) | 案号 recognition, 法条 traceback, citation validation, doc linking, NL search |
+| `aviation_source_search` · `drs_search` · `easa_ad_*` · `easa_ear_index` · `caac_local_*` · `ecaa_index/fetch` | Aviation regulators (pack-gated); `aviation_source_search` is one entry point over CAAC, FAA DRS, EASA and ECAA |
 | `retrieve_legal` | Local RAG over ingested corpora |
 | `web_search` · `web_fetch` · `fetch_url_to_artifact` | Hosted search, hosted fetch, and pinned-to-disk fetch |
 
@@ -631,7 +745,7 @@ with an explicit breakpoint.
 
 **Calls that can overlap, do.** When one response asks for several lookups, both providers
 run the ones declared safe side by side (`providers/tool_exec.py`): every connector, the
-read-only PKULaw, CourtListener and GovInfo MCP services, document reads and inspections.
+research tools, the read-only PKULaw MCP services, document reads and inspections.
 Overlap is declared per tool in `tool_policy.py`, never inferred: page renders change nothing
 but share PDFium, which is not thread-safe, so they queue, and an undeclared call runs alone,
 in its place; results return in the order asked. A remote MCP gateway that fails twice
@@ -794,7 +908,9 @@ Projects (memory for a matter that spans chats) are reached through `/api/projec
 `config.yaml` holds runtime defaults; `.env` and the process environment override it.
 
 ```yaml
-provider: openai                  # anthropic | openai
+provider: claude_code             # claude_code | anthropic | openai
+claude_code_model: claude-opus-5-5         # the chat model Claude Code runs
+claude_code_fast_model: claude-sonnet-5-5  # titles and the rolling summary on that login
 
 default_jurisdiction: CN          # CN | US | EU | UK | HK | ET | ICAO
 secondary_jurisdictions: [US, EU] # comparative systems
@@ -849,8 +965,11 @@ Environment-only switches include:
 | `LEGAL_HELPER_RAG_RERANK` | `1` | `0` turns off the local cross-encoder rerank |
 
 `.mcp.json` is the MCP registry: the nine PKULaw sub-services (remote HTTP), EUR-Lex (stdio)
-and the in-tree `ccar_aviation` server, gated by jurisdiction and active packs. US sources
-are direct-API connectors in `legal_helper/connectors/`; nothing to install.
+and the in-tree `ccar_aviation` server, gated by jurisdiction and active packs. Every
+jurisdiction's official databases are research-layer adapters in
+`legal_helper/research/sources/`; nothing to install. The PKULaw entries carry
+`"headersHelper": "python3 scripts/mcp_headers.py"`, so a Claude Code session in this
+repository, which cannot see the key file, gets the same bearer token.
 
 stdio entries name commands bare (`python`, `npx`): `registry.resolve_command()` runs `python`
 as the harness's own interpreter and finds the rest on `PATH`, then in the conda bin
@@ -875,6 +994,17 @@ legal_helper/
 ├── answer_lint.py      # deterministic answer clean-up as it streams
 ├── agent.py            # specialist sub-agents; external-skill host contract
 ├── providers/          # Anthropic + OpenAI behind one protocol
+├── claude_code/        # provider claude_code: the turn runs inside Claude Code (Agent SDK)
+│   ├── executor.py       # one turn → the same event stream the UI reads; session resume
+│   ├── tools.py          # the in-process MCP server `legal`
+│   ├── runtime.py        # the generated `legal` plugin, scrubbed CLI env, plan usage
+│   └── prompt.py         # system prompt and the legal-specialist / deck-builder sub-agents
+├── research/           # legal_sources · legal_search · legal_fetch over every official source
+│   ├── sources/          # one adapter per database (cn, eu, us, jp, kr, …)
+│   ├── sections.py       # find a provision by its own label, in any language
+│   ├── semantic.py       # keyword / semantic ranking, local rerank
+│   ├── store.py          # fetched-document cache
+│   └── health.py         # the live probe `serve` runs at startup
 ├── server.py           # FastAPI + SSE; chat, project and usage API
 ├── cli.py              # run · chat · serve · project
 ├── config.py           # settings, role table, jurisdictions, citation styles
@@ -889,7 +1019,7 @@ legal_helper/
 ├── skills/             # 15 in-tree skills; __init__.py discovers skill_roots()
 ├── domains/aviation/   # the aviation pack
 ├── playbook/           # PRC-first defaults + format recipes
-├── connectors/         # in-process connectors (CN/US/EU/ET/aviation)
+├── connectors/         # the aviation pack's regulator tools; shared HTTP plumbing
 ├── mcp/                # MCP registry, adapter, client, health breaker, in-tree server
 ├── citations/          # extract · validate · round-trip · ground · provenance
 ├── rag/                # chunker · embeddings · store · hybrid retrieve · rerank
@@ -933,6 +1063,9 @@ python -m pytest -q tests/test_dates.py             # compute_period: 调休, ho
 python -m pytest -q tests/test_author_loop.py       # one author stream per turn; methods on demand
 python -m pytest -q tests/test_verified_synthesis.py  # audit-then-reveal, repair
 python -m pytest -q tests/test_decks.py             # create_deck against a faked ppt-master run
+python -m pytest -q tests/test_research_sections.py tests/test_research_cn.py tests/test_research_eu.py  # provisions by label; CN / EU adapters
+python -m pytest -q tests/test_claude_code_contract.py  # the claude_code engine against the pinned SDK, offline
+python -m legal_helper.research.health CN EU US      # live probe of those jurisdictions' sources
 python -m pytest -q tests/test_document_quality.py  # the output lint
 python -m pytest -q tests/test_docx_prc_output.py   # A4, 第 X 页 共 Y 页, list restarts, GB/T 9704
 python -m pytest -q tests/test_docx_redline.py      # redline_docx: accept/reject round trip
@@ -958,10 +1091,22 @@ Current limitations, in full:
 
 - **Aviation is the only populated domain pack.** The pack mechanism is general; the content
   is not yet.
-- **UK and HK have no dedicated connectors.** They run on hosted web search plus grounding.
-- **PKULaw is not on the author's surface yet.** The author holds no MCP tools, so a turn it
-  answers alone looks PRC law up through flk.npc.gov.cn and hosted web search; `run_workflow`
-  specialists and the citation audit hold PKULaw.
+- **The `anthropic` / `openai` author loop is in maintenance.** New work goes to the legal
+  side and the `claude_code` engine ([direction](#direction-from-here)); the API-key loop
+  keeps working and stays selectable, but expect few changes there.
+- **The `claude_code` engine needs a claude.ai login, which expires.** After it does, every
+  `claude_code` turn fails until `claude auth login` is run again; turns count against the
+  plan's limits, not an API bill. The SDK is pinned because it bundles the CLI; upgrade it with
+  `scripts/upgrade_agent_sdk.md`.
+- **Not every jurisdiction has every kind of source.** No UK case law (licence), no Malaysian
+  legislation, Victoria search-only, Cambodia from a curated non-official library, Ethiopia
+  from a gazette mirror. At the 2026-11-09 probe, Malaysia's eJudgment and the Philippine
+  Supreme Court E-Library were unreachable; `python -m legal_helper.research.health` re-runs
+  it, and `serve` logs it at startup.
+- **PKULaw's gateway renames tools without notice.** An unknown tool raises
+  `SourceUnavailable` naming what the service lists, so a rename shows in the probe rather than
+  as empty results. One of the nine sub-services (`assistant/mcp-pkulaw-search`) refuses the
+  current console token.
 - **There is no live CAAC search and no FAA DRS fetch.** The CAAC search endpoint moved behind
   a JS-rendered form and drs.faa.gov serves only a JavaScript shell to a non-browser client, so
   CAAC rules come from the staged local corpus (`caac_local_*` and RAG), and a `drs_search` hit

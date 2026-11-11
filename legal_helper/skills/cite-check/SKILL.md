@@ -2,7 +2,7 @@
 name: cite-check
 description: Round-trip every citation and quoted phrase in a draft against its primary source. Flags fabricated cites (Mode 1) AND cites that exist but don't support the claimed proposition (Mode 2 — the "misgrounded citation" failure mode behind ~all reported AI-citation sanctions). Produces a severity-tiered verification-report.md.
 argument-hint: "<draft file or pasted text> [--stakes filed|internal]"
-allowed_connectors: [courtlistener_search, ecfr_search, federal_register_search, govinfo_search, flk_npc_search, eurlex_search, "pkulaw_*"]
+allowed_connectors: ["pkulaw_*"]
 rag_collections: [general]
 ---
 
@@ -79,21 +79,17 @@ attorney.
 
 ## Lookup priority by citation type
 
-PKULaw MCP is **primary** for PRC; `flk_npc_*` is the free-public fallback.
-MCP tools surface as `<server>__<tool>` (e.g. `pkulaw_law_search__search_article`).
+Official texts of every jurisdiction come from `legal_search` / `legal_fetch`
+(`legal_sources` lists them); PKULaw MCP tools surface as `<server>__<tool>`.
 
 | Citation type | Primary | Backup |
 |---|---|---|
-| 案号 (judgment case number) | `pkulaw_anhao__anhao_recognition` → `pkulaw_case_list__get_case_list` | `citations/prc.py` regex |
-| 法释 (SPC interpretation) | `pkulaw_law_search__search_article` | `flk_npc_search` (level=judicial_interpretation) |
-| 法律 / 行政法规 pinpoint (《X》第N条) | `pkulaw_fatiao__get_law_item_content` (title + 条号) | `flk_npc_search` (metadata only — no body fetch) |
-| 部门规章 / 通告 | `pkulaw_law_search__search_article` | `flk_npc_search` (level=rule) |
-| 国函 / 国办发 | `pkulaw_law_search__search_article` | `flk_npc_search` |
-| 法条 batch normalize in a draft | `pkulaw_law_recognition__law_recognition` | `citations/prc.py` regex |
-| Citation chain validation | `pkulaw_citation_validator__adjust_provisions` | manual review |
-| Broad NL question (PRC) | `pkulaw_nl_search__ai_pkulaw_search` | `flk_npc_search` + hosted web |
-| US case (e.g. 410 U.S. 113) | `courtlistener_search` (then fetch opinion body) | eyecite-corrected form |
-| US statute (USC / CFR) | `govinfo_search` / `ecfr_search` | `federal_register_search` |
-| EU regulation / directive | `eurlex_search` | hosted `web_search` |
+| 案号 (judgment case number) | `pkulaw_anhao__recognize_case_numbers` → `pkulaw_case_list__search_cases_by_keyword` | `legal_search` CN `kind="case"`; `citations/prc.py` regex |
+| 法律 / 行政法规 / 司法解释 pinpoint (《X》第N条) | `pkulaw_fatiao__get_law_article` (title + 条号) | `legal_fetch` of the 国家法律法规数据库 text (`section="第N条"`): official text, status, versions |
+| 部门规章 / 通告 / 国函 / 国办发 | `pkulaw_law_search__search_law_articles` | `legal_search` CN (source `cn.pkulaw`) + hosted web |
+| 法条 batch normalize in a draft | `pkulaw_law_recognition__recognize_law_citations` | `citations/prc.py` regex |
+| Citation chain validation | `pkulaw_citation_validator__verify_law_citations` | manual review |
+| Broad NL question (PRC) | `pkulaw_nl_search__ai_pkulaw_search` | `legal_search` CN `mode="semantic"` + hosted web |
+| Any other jurisdiction: statute, regulation, case | `legal_search` in that jurisdiction → `legal_fetch(ref, section=…)` | hosted `web_search` of the official site |
 
 Domain packs layer extra sources via `domains/<pack>/overlays/cite-check.md`.

@@ -12,7 +12,8 @@ import httpx
 import pytest
 
 from legal_helper.connectors import base
-from legal_helper.connectors import us_federal
+from legal_helper.research.base import SourceUnavailable
+from legal_helper.research.sources import _usfed
 
 
 class FakeResponse:
@@ -116,20 +117,19 @@ def test_non_json_200_raises_connector_error_caught_as_httperror(fake_http):
         base.http_get("https://x.test/api", {}, cache_ttl=0)
 
 
-def test_search_connector_returns_uniform_error_dict_on_non_json(fake_http):
-    """A 200 with an HTML body must yield {"error": ...}, not a crash."""
+def test_search_reports_unavailable_on_non_json(fake_http):
+    """A 200 with an HTML body is "could not look", never an empty result."""
     client, _ = fake_http
     client.script = [FakeResponse(200, payload=None, text="<html>maintenance</html>")]
-    payload = json.loads(us_federal.ecfr_search.call({"query": "manifest"}))
-    assert "error" in payload
-    assert "non-JSON" in payload["error"]
+    with pytest.raises(SourceUnavailable, match="non-JSON"):
+        _usfed.search_ecfr("manifest")
 
 
-def test_search_connector_returns_uniform_error_dict_on_exhausted_5xx(fake_http):
+def test_search_reports_unavailable_on_exhausted_5xx(fake_http):
     client, _ = fake_http
     client.script = [FakeResponse(502)] * base.RETRY_ATTEMPTS
-    payload = json.loads(us_federal.ecfr_search.call({"query": "manifest"}))
-    assert "error" in payload and payload["query"] == "manifest"
+    with pytest.raises(SourceUnavailable):
+        _usfed.search_ecfr("manifest")
 
 
 def test_http_get_ttl_cache_hits_within_ttl(fake_http):
@@ -167,7 +167,7 @@ def test_cache_key_is_stable_sha256():
 
 
 def test_ecfr_issue_date_uses_ttl_and_never_caches_failures(monkeypatch):
-    us_federal._ISSUE_DATE_CACHE.clear()
+    _usfed._ISSUE_DATE_CACHE.clear()
     calls = {"n": 0}
     titles_payload = {"titles": [{"number": 14, "latest_issue_date": "2026-07-01"}]}
 
@@ -175,20 +175,19 @@ def test_ecfr_issue_date_uses_ttl_and_never_caches_failures(monkeypatch):
         calls["n"] += 1
         raise httpx.ConnectError("down")
 
-    monkeypatch.setattr(us_federal, "request_with_retry", failing)
-    assert us_federal._ecfr_latest_issue_date(14) == (None, None)
+    monkeypatch.setattr(_usfed, "request_with_retry", failing)
+    assert _usfed.ecfr_latest_issue_date(14) is None
     assert calls["n"] == 1
 
     def ok(method, url, **kwargs):
         calls["n"] += 1
         return FakeResponse(200, payload=titles_payload)
 
-    monkeypatch.setattr(us_federal, "request_with_retry", ok)
-    date, resolved_at = us_federal._ecfr_latest_issue_date(14)
-    assert date == "2026-07-01" and resolved_at
+    monkeypatch.setattr(_usfed, "request_with_retry", ok)
+    assert _usfed.ecfr_latest_issue_date(14) == "2026-07-01"
     assert calls["n"] == 2  # the earlier failure was not negatively cached
 
-    monkeypatch.setattr(us_federal, "request_with_retry", failing)
-    assert us_federal._ecfr_latest_issue_date(14) == (date, resolved_at)
+    monkeypatch.setattr(_usfed, "request_with_retry", failing)
+    assert _usfed.ecfr_latest_issue_date(14) == "2026-07-01"
     assert calls["n"] == 2  # served from the 24h TTL cache
-    us_federal._ISSUE_DATE_CACHE.clear()
+    _usfed._ISSUE_DATE_CACHE.clear()

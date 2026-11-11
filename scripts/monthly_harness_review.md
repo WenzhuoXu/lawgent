@@ -37,6 +37,15 @@ skills/, domains/, providers/, server.py. Identify concrete gaps (with
 file:line evidence) in accuracy, capability, and efficiency. Also re-run
 `pytest -q` (inside `conda run -n llm`) and note any newly failing guardrails.
 
+**Claude Agent SDK (the `claude_code` engine).** Run
+`python scripts/agent_sdk_changes.py --out docs/sdk_upgrades/<date>_<from>_to_<to>.md`
+and `python scripts/agent_sdk_check.py` (no model call). Read the whole
+change list and sort each item that touches this setup into fixes we need,
+capabilities we could use, and behaviour changes to verify; report the
+login's `loginExpiresAt`. Recommend an upgrade (with that note) rather than
+doing it: the switch follows `scripts/upgrade_agent_sdk.md`, restarts the
+server and may need the user's plan quota for smoke turns.
+
 ## 3. Cost-center check
 
 Read `state/usage/usage-<current-month>.jsonl` (and the prior month's file)

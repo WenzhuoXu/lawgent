@@ -15,7 +15,6 @@ from legal_helper.tools import (
     inspect_pptx,
     inspect_xlsx,
     inspect_xlsx_range,
-    legal_source_search,
     read_document,
     render_pptx_slides,
     skill_tools,
@@ -73,8 +72,10 @@ def test_tool_input_schemas_have_required_fields():
     schema = read_document.input_schema
     assert set(schema["required"]) >= {"path"}
 
-    schema = legal_source_search.input_schema
-    assert set(schema["required"]) >= {"source", "query"}
+    from legal_helper.research.tools import legal_fetch, legal_search
+
+    assert set(legal_search.input_schema["required"]) >= {"jurisdiction", "query"}
+    assert set(legal_fetch.input_schema["required"]) >= {"ref"}
 
 
 def test_aviation_dispatcher_exposes_caac_sources():
@@ -503,7 +504,7 @@ def test_author_and_skill_tool_lists():
     # SKILL.md and the playbook are inlined; only the references tail is fetched.
     assert {"list_skill_references", "read_skill_reference", "compute_period"} <= rc_names
     assert not ({"list_skill_sections", "read_skill_section", "read_playbook_section"} & rc_names)
-    assert "legal_source_search" in rc_names
+    assert {"legal_sources", "legal_search", "legal_fetch"} <= rc_names
     assert {
         "read_document",
         "write_docx",
@@ -544,7 +545,7 @@ def test_author_and_skill_tool_lists():
 
     rb_tools = skill_tools_for_task("brief")
     rb_names = {getattr(t, "name", None) for t in rb_tools}
-    assert "legal_source_search" in rb_names
+    assert {"legal_sources", "legal_search", "legal_fetch"} <= rb_names
     assert {
         "read_document",
         "write_docx",
@@ -567,7 +568,7 @@ def test_author_and_skill_tool_lists():
 def test_pkulaw_surfaces_as_primary_prc_source(monkeypatch):
     """PKULaw MCP must surface in every skill that lists ``pkulaw_*`` in its
     allow-list — even without a live ``tools/list`` probe (no token, no
-    network). Per user contract: PKULaw is primary, flk_npc is fallback.
+    network). Statute text comes from the research tools beside it.
     """
     # Force the live probe to fail so we exercise the static manifest path.
     from legal_helper.tools import mcp_tools as mt
@@ -581,46 +582,39 @@ def test_pkulaw_surfaces_as_primary_prc_source(monkeypatch):
         active_packs=[],
     )
     names = {getattr(t, "name", None) for t in tools}
-    # PKULaw must appear ahead of (or alongside) flk_npc — primary source.
-    assert "flk_npc_search" in names
+    assert {"legal_search", "legal_fetch"} <= names
     pkulaw_tools = {n for n in names if isinstance(n, str) and n.startswith("pkulaw_")}
     # Every documented PKULaw sub-service must be reachable.
     expected = {
-        "pkulaw_law_search__search_article",
-        "pkulaw_law_search__get_article",
-        "pkulaw_fatiao__get_law_item_content",
-        "pkulaw_case_search__search_case",
-        "pkulaw_case_list__get_case_list",
-        "pkulaw_anhao__anhao_recognition",
-        "pkulaw_law_recognition__law_recognition",
-        "pkulaw_citation_validator__adjust_provisions",
-        "pkulaw_doc_link__get_linked_content",
+        "pkulaw_law_search__search_law_articles",
+        "pkulaw_law_search__search_laws",
+        "pkulaw_fatiao__get_law_article",
+        "pkulaw_fatiao__get_law_articles_by_range",
+        "pkulaw_case_search__search_cases",
+        "pkulaw_case_list__search_cases_by_keyword",
+        "pkulaw_anhao__recognize_case_numbers",
+        "pkulaw_law_recognition__recognize_law_citations",
+        "pkulaw_citation_validator__verify_law_citations",
+        "pkulaw_doc_link__add_law_links",
         "pkulaw_nl_search__ai_pkulaw_search",
     }
     missing = expected - pkulaw_tools
     assert not missing, f"PKULaw tools missing from cite-check surface: {missing}"
 
 
-def test_allowed_connectors_frontmatter_filters_connector_surface():
-    """`allowed_connectors` in SKILL.md frontmatter must narrow the connector
-    function-tool list. signature-request declares
-    `[ecfr_search, eurlex_search, flk_npc_search]`, so even with all
-    jurisdictions on it should not see CourtListener or Federal Register.
-    """
-    tools = skill_tools_for_task(
-        "signature-request",
-        jurisdictions=["CN", "US", "EU"],
-        active_packs=[],
-    )
+def test_allowed_connectors_frontmatter_filters_connector_surface(tmp_path, monkeypatch):
+    """`allowed_connectors` in SKILL.md frontmatter narrows the pack connectors
+    a specialist holds; the research tools come with any connector access."""
+    from legal_helper import tools as tools_mod
+
+    monkeypatch.setattr(tools_mod, "_skill_allowed_connectors", lambda name: {"caac_local_search"})
+    tools = skill_tools_for_task("signature-request", jurisdictions=["CN", "US", "EU"], active_packs=["aviation"])
     names = {getattr(t, "name", None) for t in tools}
-    # In allow-list
-    assert "ecfr_search" in names
-    assert "eurlex_search" in names
-    assert "flk_npc_search" in names
-    # Not in allow-list — must be filtered out even though jurisdictions
-    # would otherwise make them visible.
-    assert "courtlistener_search" not in names
-    assert "federal_register_search" not in names
+    assert "caac_local_search" in names
+    assert {"legal_search", "legal_fetch"} <= names
+    # Not in the allow-list — filtered out although the pack makes them visible.
+    assert "caac_local_fetch" not in names
+    assert "drs_search" not in names
 
 
 def test_skill_reference_tools_read_the_current_agents_references():

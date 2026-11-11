@@ -285,14 +285,14 @@ def test_independent_calls_of_one_response_run_side_by_side_in_order():
     barrier = threading.Barrier(2, timeout=5)
 
     @beta_tool
-    def flk_npc_search(query: str) -> str:
+    def legal_search(query: str) -> str:
         "Search flk."
         barrier.wait()  # only a concurrent execution gets past this
         return f"hits for {query}"
 
     provider = _provider_for("gpt-6.1-sol")
     first = _resp(
-        [_fc_item("c1", "flk_npc_search", {"query": "民法典"}), _fc_item("c2", "flk_npc_search", {"query": "合同法"})],
+        [_fc_item("c1", "legal_search", {"query": "民法典"}), _fc_item("c2", "legal_search", {"query": "合同法"})],
         response_id="r1",
         usage=SimpleNamespace(input_tokens=1_000, output_tokens=10, total_tokens=1_010),
     )
@@ -302,7 +302,7 @@ def test_independent_calls_of_one_response_run_side_by_side_in_order():
     token = ls.workflow_event_sink_var.set(lambda rec: events.append((rec.get("event_type"), rec.get("data", {}))))
     try:
         with patcher:
-            result = provider.tool_runner("s", [{"role": "user", "content": "q"}], [flk_npc_search], max_iterations=0)
+            result = provider.tool_runner("s", [{"role": "user", "content": "q"}], [legal_search], max_iterations=0)
     finally:
         ls.workflow_event_sink_var.reset(token)
 

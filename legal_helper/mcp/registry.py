@@ -12,7 +12,9 @@ from pathlib import Path
 from typing import Any, Iterable, Literal, Optional
 
 
-_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+# ``${VAR}`` and ``${VAR:-default}`` — the syntax Claude Code expands in the
+# same file, so one ``.mcp.json`` serves both.
+_ENV_VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 # CLAUDE.md pins every toolchain to the ``llm`` conda env. A stdio MCP spec
 # naming a bare ``python`` / ``npx`` resolves against the *launching* process's
@@ -87,8 +89,9 @@ class McpServerSpec:
 
 
 def _expand_env(value: str) -> str:
-    """Replace every ``${VAR}`` substring with its env value (or empty)."""
-    return _ENV_VAR_RE.sub(lambda m: os.getenv(m.group(1), ""), value)
+    """Replace every ``${VAR}`` / ``${VAR:-default}`` with its env value,
+    else the default, else empty."""
+    return _ENV_VAR_RE.sub(lambda m: os.getenv(m.group(1)) or (m.group(2) or ""), value)
 
 
 def _expand_env_dict(d: dict[str, str] | None) -> dict[str, str]:
@@ -125,10 +128,6 @@ def load_registry(path: Path | None = None) -> list[McpServerSpec]:
             if not isinstance(obj, dict):
                 continue
             out.append(_spec_from_obj(name, obj))
-    from .first_party import first_party_specs  # local import — avoids cycle
-
-    declared = {s.name for s in out}
-    out.extend(s for s in first_party_specs() if s.name not in declared)
     return out
 
 
