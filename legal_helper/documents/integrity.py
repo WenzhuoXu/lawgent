@@ -15,10 +15,12 @@ Two layers:
   finds broken references inside the edited file (an orphaned comment, a
   footnote nobody references). Only findings that are new relative to the
   source are reported, so a pre-existing defect is not blamed on the edit.
-- **In-tree counts** for what that package does not count — bookmarks,
-  fields, section breaks, endnote references, VML pictures — and, when it is
-  not installed, for everything: comment anchors, tracked changes, footnote
-  references, hyperlinks, images, tables.
+  Since 0.10 it also reports lost bookmarks (``FID015``), fields
+  (``FID016``), endnote references and section breaks (``FID001``).
+- **In-tree counts** for what that package does not count (comment ranges,
+  tracked moves, VML pictures) and, when it is not installed, for
+  everything: comment anchors, tracked changes, footnote and endnote
+  references, bookmarks, fields, section breaks, hyperlinks, images, tables.
 
 Losses only: an edit that *adds* tracked changes or comments is doing its job.
 """
@@ -38,17 +40,17 @@ _COUNTED: tuple[tuple[str, str, str, Optional[str], str, bool], ...] = (
     ("comment_anchors", "comment anchors", f"{_W}commentReference", f"{_W}id", "error", True),
     ("comment_ranges", "comment ranges", f"{_W}commentRangeStart", f"{_W}id", "error", False),
     ("footnote_refs", "footnote references", f"{_W}footnoteReference", f"{_W}id", "error", True),
-    ("endnote_refs", "endnote references", f"{_W}endnoteReference", f"{_W}id", "error", False),
+    ("endnote_refs", "endnote references", f"{_W}endnoteReference", f"{_W}id", "error", True),
     ("insertions", "tracked insertions", f"{_W}ins", f"{_W}id", "error", True),
     ("deletions", "tracked deletions", f"{_W}del", f"{_W}id", "error", True),
     ("moves", "tracked moves", f"{_W}moveFrom", f"{_W}id", "error", False),
-    ("bookmarks", "bookmarks", f"{_W}bookmarkStart", f"{_W}name", "warning", False),
+    ("bookmarks", "bookmarks", f"{_W}bookmarkStart", f"{_W}name", "warning", True),
     ("hyperlinks", "hyperlinks", f"{_W}hyperlink", None, "warning", True),
-    ("simple_fields", "fields (simple)", f"{_W}fldSimple", f"{_W}instr", "warning", False),
-    ("complex_fields", "fields", f"{_W}fldChar", None, "warning", False),
+    ("simple_fields", "fields (simple)", f"{_W}fldSimple", f"{_W}instr", "warning", True),
+    ("complex_fields", "fields", f"{_W}fldChar", None, "warning", True),
     ("drawings", "images and charts", f"{_W}drawing", None, "error", True),
     ("vml_pictures", "VML pictures", f"{_W}pict", None, "error", False),
-    ("section_breaks", "section breaks", f"{_W}sectPr", None, "error", False),
+    ("section_breaks", "section breaks", f"{_W}sectPr", None, "error", True),
     ("tables", "tables", f"{_W}tbl", None, "error", True),
     ("content_controls", "content controls", f"{_W}sdt", None, "error", True),
 )
@@ -91,12 +93,15 @@ def _inventory(path: Path) -> dict[str, Counter]:
 
 # In-tree expectation keys -> the ooxml-integrity element tags (FID001) they
 # cover, so a loss the caller asked for is reported as expected there too.
+# Bookmarks and fields have findings of their own (FID015, FID016).
 _EXPECTED_TAGS = {
     "hyperlinks": {"hyperlink"},
     "drawings": {"drawing"},
     "tables": {"tbl", "tblHeader"},
     "comment_anchors": {"commentReference"},
     "footnote_refs": {"footnoteReference"},
+    "endnote_refs": {"endnoteReference"},
+    "section_breaks": {"sectPr"},
     "content_controls": {"sdt"},
     "styles": {"pStyle", "rStyle", "numPr"},
 }
@@ -115,8 +120,11 @@ def _external_findings(source: Path, output: Path, expected: set[str]) -> Option
             if sev not in {"error", "warn", "warning"}:
                 continue
             extra = getattr(f, "extra", None) or {}
-            is_expected = (f.code == "FID001" and extra.get("tag") in expected_tags) or (
-                f.code == "FID003" and "text" in expected
+            is_expected = (
+                (f.code == "FID001" and extra.get("tag") in expected_tags)
+                or (f.code == "FID003" and "text" in expected)
+                or (f.code == "FID015" and "bookmarks" in expected)
+                or (f.code == "FID016" and bool(expected & {"simple_fields", "complex_fields"}))
             )
             finding = {
                 "check": f.code,
