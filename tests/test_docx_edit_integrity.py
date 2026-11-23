@@ -12,6 +12,7 @@ Repros from review item D-4 ("Edit tools corrupt text silently") and D-9:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -173,8 +174,8 @@ def test_integrity_reports_what_a_lossy_edit_lost(tmp_path):
     assert clean["status"] == "ok" and not clean["findings"]
 
 
-def test_in_tree_counts_cover_bookmarks_fields_and_sections(tmp_path):
-    """Constructs ooxml-integrity does not count are counted here."""
+def _stripped_marks(tmp_path: Path) -> tuple[Path, Path]:
+    """A bookmark, a field and a section break, and the same file without them."""
     body = (
         p("", runs='<w:bookmarkStart w:id="5" w:name="Clause2"/>' + r("Bookmarked") + '<w:bookmarkEnd w:id="5"/>')
         + p("", runs='<w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple>')
@@ -187,10 +188,34 @@ def test_in_tree_counts_cover_bookmarks_fields_and_sections(tmp_path):
         para._p.getparent().remove(para._p)
     stripped = tmp_path / "stripped.docx"
     doc.save(str(stripped))
-    findings = {f["check"]: f for f in compare_docx_integrity(src, stripped)["findings"]}
+    return src, stripped
+
+
+def test_in_tree_counts_cover_bookmarks_fields_and_sections(tmp_path, monkeypatch):
+    """Without ooxml-integrity the in-tree counts report what an edit lost."""
+    monkeypatch.setitem(sys.modules, "ooxml_integrity", None)
+    src, stripped = _stripped_marks(tmp_path)
+    report = compare_docx_integrity(src, stripped)
+    assert report["checker"] == "in-tree counts"
+    findings = {f["check"]: f for f in report["findings"]}
     assert findings["bookmarks"]["lost"] == ["Clause2"]
     assert "simple_fields" in findings
     assert findings["section_breaks"]["severity"] == "error"
+
+
+def test_checker_reports_bookmarks_fields_and_sections_once(tmp_path):
+    """ooxml-integrity reports them itself (FID015, FID016, FID001), so the
+    in-tree counts do not report them a second time, and a loss the caller
+    asked for is expected there too."""
+    src, stripped = _stripped_marks(tmp_path)
+    report = compare_docx_integrity(src, stripped)
+    checks = [f["check"] for f in report["findings"]]
+    assert {"FID015", "FID016", "FID001"} <= set(checks)
+    assert not {"bookmarks", "simple_fields", "section_breaks"} & set(checks)
+    asked = compare_docx_integrity(
+        src, stripped, expected_losses=["bookmarks", "simple_fields", "section_breaks", "text"]
+    )
+    assert asked["status"] == "ok", asked["findings"]
 
 
 def test_inserted_ordered_list_starts_at_one(tmp_path):

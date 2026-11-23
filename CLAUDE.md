@@ -322,7 +322,7 @@ because it costs nothing.
   every body paragraph under the 0-based index `reshape_docx` ops take.
 - **Every DOCX edit returns `integrity`** (`documents/integrity.py`):
   ooxml-integrity (MIT) `compare` + new `check` findings, plus in-tree counts
-  of bookmarks, fields, section breaks and endnote references. Losses only.
+  of comment ranges, tracked moves and VML pictures. Losses only.
 - **Tracked changes out:** `redline_docx` (anchored by text, clause label or
   paragraph index; tabs survive run splits; `w:trackRevisions` set; enforced
   protection other than tracked-changes refused; every miss returns a
